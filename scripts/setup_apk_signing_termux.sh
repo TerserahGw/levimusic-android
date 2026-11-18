@@ -14,7 +14,7 @@ if ! command -v keytool >/dev/null 2>&1; then
   exit 1
 fi
 if ! command -v openssl >/dev/null 2>&1; then
-  echo "Install OpenSSL: pkg install openssl"
+  echo "Install the OpenSSL CLI: pkg install -y openssl-tool"
   exit 1
 fi
 gh auth status >/dev/null || { echo "Run gh auth login first."; exit 1; }
