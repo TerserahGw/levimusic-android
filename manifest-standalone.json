@@ -1,8 +1,8 @@
 {
   "type": "preload-native",
-  "name": "LeviMusic Standalone (Audius + WebView Experiment)",
+  "name": "LeviMusic Standalone - ChruPipe (self-hosted)",
   "author": "ReaAurelis",
-  "version": "1.2.0-rc",
+  "version": "1.2.1",
   "entry": "liblevimusic_standalone.so",
   "minecraft_versions": []
 }

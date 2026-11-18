@@ -197,14 +197,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.2.0-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.2.1-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.2.0-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.2.1-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -214,6 +214,17 @@ jobs:
           echo "standalone=$standalone_release" >> "$GITHUB_OUTPUT"
           echo "file=$release_file" >> "$GITHUB_OUTPUT"
 
+      - name: Build experimental 3D lyrics behavior pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check world_lyrics_3d/scripts/main.js
+          (cd world_lyrics_3d && zip -q -r "../build/LeviMusic-WorldLyrics3D-${VERSION}.mcpack" manifest.json scripts)
+          unzip -t "build/LeviMusic-WorldLyrics3D-${VERSION}.mcpack"
+          unzip -p "build/LeviMusic-WorldLyrics3D-${VERSION}.mcpack" manifest.json | python3 -m json.tool >/dev/null
+
       - name: Upload artifact for every successful build
         uses: actions/upload-artifact@v4
         with:
@@ -221,6 +232,7 @@ jobs:
           path: |
             ${{ steps.package.outputs.file }}
             ${{ steps.package.outputs.standalone }}
+            build/LeviMusic-WorldLyrics3D-${{ steps.version.outputs.version }}.mcpack
           if-no-files-found: error
 
       - name: Require permanent APK signing before publishing
@@ -277,12 +289,12 @@ jobs:
               *(changes),
               "",
               "## Instalasi",
-              "Download APK Bridge + mod LeviPack, OR install the standalone Audius-only LeviPack. Do not install two mod variants at the same time.",
+              "Full mod: Bridge APK + LeviPack. Standalone: ChruPipe API client (requires self-hosted server). Optional world-lyrics 3D addon is manual script-event demo; not auto-synced. Never load both native variants.",
               "",
               "## Catatan kompatibilitas",
               "- Status **Release Candidate (RC), belum diverifikasi di perangkat Minecraft Android**; berhasil dikompilasi tidak menjamin playback bekerja pada semua perangkat.",
-              "- Music search uses unofficial NewPipeExtractor YouTube access; provider restrictions apply, not guaranteed unlimited or official Spotify.",
-              "- Lirik dari LRCLIB atau file LRC yang diimpor; lirik tidak dibuat otomatis jika tidak ada data.",
+              "- Full mod uses Bridge's unofficial YouTube extractor. Standalone requests self-hosted ChruPipe API; no Audius. Service restrictions apply; unlimited access is not guaranteed.",
+              "- Optional world-lyrics 3D pack uses TextPrimitive Beta API with visibleTo limited to one player. Requires manual ScriptEvent input; native syncing is not integrated.",
               "",
           ])
           Path("release-notes.md").write_text(notes, encoding="utf-8")
@@ -298,10 +310,11 @@ jobs:
           PACKAGE: ${{ steps.package.outputs.file }}
           STANDALONE: ${{ steps.package.outputs.standalone }}
           APK: build/LeviMusic-Bridge-${{ steps.version.outputs.version }}.apk
+          WORLD3D: build/LeviMusic-WorldLyrics3D-${{ steps.version.outputs.version }}.mcpack
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
+          gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" "$WORLD3D" \
             --target "$GITHUB_SHA" \
             --title "LeviMusic Online v$VERSION (Release Candidate)" \
             --notes-file release-notes.md \

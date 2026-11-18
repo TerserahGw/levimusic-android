@@ -1,0 +1,46 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "LeviMusic World Lyrics 3D (Experimental)",
+    "description": "Client-visible 3D TextPrimitive lyrics, requires Beta APIs and script-event input; author ReaAurelis",
+    "uuid": "c8d3fcde-0b9e-4529-8345-8b583c7a9e41",
+    "version": [
+      1,
+      2,
+      1
+    ],
+    "min_engine_version": [
+      1,
+      26,
+      20
+    ]
+  },
+  "modules": [
+    {
+      "type": "data",
+      "uuid": "66fb950f-d109-41df-a17e-0ccf03fdb1f9",
+      "version": [
+        1,
+        2,
+        1
+      ]
+    },
+    {
+      "type": "script",
+      "language": "javascript",
+      "entry": "scripts/main.js",
+      "uuid": "4ceafccd-81d9-45ef-bcf1-80aeaf046bd1",
+      "version": [
+        1,
+        2,
+        1
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "module_name": "@minecraft/server",
+      "version": "beta"
+    }
+  ]
+}

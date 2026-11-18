@@ -26,6 +26,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 #include <cerrno>
+#include <cctype>
 #include <utility>
 #include <vector>
 #include <fstream>
@@ -293,6 +294,163 @@ std::vector<Track> searchAudiusFrom(JNIEnv* env, const std::string& query, const
 std::vector<Track> searchAudius(JNIEnv* env, const std::string& query) {
     return searchAudiusFrom(env, query, API);
 }
+
+
+#if defined(LEVI_STANDALONE)
+// ChruPipe is a self-hosted Kotlin/Ktor+NewPipeExtractor server, NOT a native
+// library. This lightweight standalone client talks directly to its public
+// /search and /stream JSON endpoints. No LeviMusic Bridge APK or Audius is used.
+// Loopback HTTP uses a POSIX socket because Minecraft's Android network security
+// policy may reject cleartext Java URLConnection. Remote servers must use HTTPS.
+std::string decodeChunked(std::string_view data) {
+    std::string decoded;
+    size_t cursor=0;
+    while(cursor<data.size() && decoded.size()<2*1024*1024) {
+        size_t nl=data.find("\r\n",cursor);
+        if(nl==std::string_view::npos || nl-cursor>24)return {};
+        std::string lengthToken(data.substr(cursor,nl-cursor));
+        auto semicolon=lengthToken.find(';');
+        if(semicolon!=std::string::npos)lengthToken.resize(semicolon);
+        size_t n=0;
+        try{n=std::stoul(lengthToken,nullptr,16);}catch(...){return {};}
+        cursor=nl+2;
+        if(n==0)return decoded;
+        if(n>2*1024*1024-decoded.size()||n>data.size()-cursor)return {};
+        decoded.append(data.substr(cursor,n));
+        cursor+=n;
+        if(cursor+2>data.size() || data.substr(cursor,2)!="\r\n")return {};
+        cursor+=2;
+    }
+    return {};
+}
+std::string chruLoopbackGet(const std::string& url) {
+    const std::string prefix="http://";
+    if(url.rfind(prefix,0)!=0)return {};
+    size_t hostBegin=prefix.size(), slash=url.find('/',hostBegin);
+    if(slash==std::string::npos)return {};
+    std::string authority=url.substr(hostBegin,slash-hostBegin);
+    std::string host=authority,portString="8080";
+    auto colon=authority.rfind(':');
+    if(colon!=std::string::npos) {
+        host=authority.substr(0,colon);
+        portString=authority.substr(colon+1);
+    }
+    if(host!="127.0.0.1"&&host!="localhost")return {};
+    int port=0;
+    try{port=std::stoi(portString);}catch(...){return {};}
+    if(port<1||port>65535)return {};
+    int fd=::socket(AF_INET,SOCK_STREAM,0);
+    if(fd<0)return {};
+    timeval timeout{};timeout.tv_sec=5;
+    setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
+    setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
+    sockaddr_in address{};address.sin_family=AF_INET;
+    address.sin_port=htons(static_cast<uint16_t>(port));
+    inet_pton(AF_INET,"127.0.0.1",&address.sin_addr);
+    std::string response;
+    if(::connect(fd,reinterpret_cast<sockaddr*>(&address),sizeof(address))==0) {
+        std::string req="GET "+url.substr(slash)+" HTTP/1.1\r\nHost: localhost\r\n"
+            "User-Agent: LeviMusic/1.2.1\r\nAccept: application/json\r\n"
+            "Accept-Encoding: identity\r\nConnection: close\r\n\r\n";
+        if(::send(fd,req.data(),req.size(),MSG_NOSIGNAL)==static_cast<ssize_t>(req.size())){
+            char buffer[8192];
+            while(response.size()<2*1024*1024) {
+                ssize_t read=::recv(fd,buffer,sizeof(buffer),0);
+                if(read<=0)break;
+                response.append(buffer,static_cast<size_t>(read));
+            }
+        }
+    }
+    ::close(fd);
+    if(response.rfind("HTTP/1.1 200 ",0)!=0 && response.rfind("HTTP/1.0 200 ",0)!=0)
+        return {};
+    size_t headerEnd=response.find("\r\n\r\n");
+    if(headerEnd==std::string::npos||headerEnd>32768)return {};
+    std::string headers=response.substr(0,headerEnd);
+    std::string data=response.substr(headerEnd+4);
+    std::transform(headers.begin(),headers.end(),headers.begin(),
+                   [](unsigned char c){return static_cast<char>(std::tolower(c));});
+    if(headers.find("transfer-encoding: chunked")!=std::string::npos)
+        return decodeChunked(data);
+    return data;
+}
+std::string chruRequest(JNIEnv* env,const std::string& server,const std::string& path) {
+    std::string root=server;
+    while(!root.empty()&&root.back()=='/')root.pop_back();
+    if(root.size()>350||path.size()>2200)return {};
+    if(root.rfind("https://",0)==0)return getHttp(env,root+path);
+    if(root.rfind("http://127.0.0.1:",0)==0||
+       root=="http://127.0.0.1"||
+       root.rfind("http://localhost:",0)==0||
+       root=="http://localhost")return chruLoopbackGet(root+path);
+    return {}; // No cleartext remote URLs or SSRF to LAN hosts.
+}
+std::vector<Track> searchChruPipe(JNIEnv* env,const std::string& server,
+                                  const std::string& query) {
+    std::vector<Track> tracks;
+    if(query.empty())return tracks;
+    auto body=chruRequest(env,server,"/search?q="+encode(env,query)+"&service=youtube");
+    jobject root=makeJson(env,body);
+    if(!root)return tracks;
+    jobject array=optArray(env,root,"items");
+    if(array) {
+        jclass cls=env->FindClass("org/json/JSONArray");
+        jmethodID length=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+        jmethodID item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+        int n=length?env->CallIntMethod(array,length):0;
+        if(clearException(env,"ChruPipe search length"))n=0;
+        for(int i=0;i<std::min(n,24);i++){
+            jobject obj=item?env->CallObjectMethod(array,item,i):nullptr;
+            if(!obj||clearException(env,"ChruPipe search item"))continue;
+            if(optString(env,obj,"isLive")=="true"){env->DeleteLocalRef(obj);continue;}
+            Track tr;
+            tr.id=optString(env,obj,"url");
+            tr.title=optString(env,obj,"title");
+            tr.artist=optString(env,obj,"uploader");
+            tr.art=optString(env,obj,"thumbnailUrl");
+            if(tr.id.rfind("https://",0)==0&&!tr.title.empty())
+                tracks.push_back(std::move(tr));
+            env->DeleteLocalRef(obj);
+        }
+        if(cls)env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(array);
+    }
+    env->DeleteLocalRef(root);
+    return tracks;
+}
+std::string streamChruPipe(JNIEnv* env,const std::string& server,
+                            const std::string& contentUrl) {
+    auto body=chruRequest(env,server,"/stream?url="+encode(env,contentUrl));
+    jobject root=makeJson(env,body);
+    if(!root)return {};
+    std::string selected;
+    jobject array=optArray(env,root,"audioStreams");
+    if(array) {
+        jclass cls=env->FindClass("org/json/JSONArray");
+        jmethodID length=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+        jmethodID item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+        int n=length?env->CallIntMethod(array,length):0;
+        if(clearException(env,"ChruPipe stream length"))n=0;
+        for(int i=0;i<std::min(n,30);++i){
+            jobject obj=item?env->CallObjectMethod(array,item,i):nullptr;
+            if(!obj||clearException(env,"ChruPipe audio stream"))continue;
+            auto url=optString(env,obj,"url");
+            auto format=optString(env,obj,"format");
+            if(url.rfind("https://",0)==0) {
+                if(selected.empty())selected=url;
+                // Prefer broadly compatible M4A/AAC over Opus/WebM.
+                if(format.find("M4A")!=std::string::npos ||
+                   format.find("AAC")!=std::string::npos)selected=url;
+            }
+            env->DeleteLocalRef(obj);
+        }
+        if(cls)env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(array);
+    }
+    env->DeleteLocalRef(root);
+    return selected;
+}
+#endif
 
 std::vector<Lyric> parseLrc(const std::string& raw) {
     std::vector<Lyric> lines;
@@ -1020,6 +1178,9 @@ class LeviMusic {
     std::vector<Lyric> lyrics_;
     std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
     std::string info_="Tap to open your music library", lyric_, apiKey_, bridgeKey_;
+#if defined(LEVI_STANDALONE)
+    std::string chruBase_="http://127.0.0.1:8080";
+#endif
     std::string coverUrl_,coverImageId_;
     int coverCount_=0;
     int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
@@ -1048,7 +1209,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.0 Experimental loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.1 RC loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1071,7 +1232,12 @@ public:
 #if defined(LEVI_STANDALONE)
             .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,"false")
 #endif
+#if defined(LEVI_STANDALONE)
+            .config("chruServer","ChruPipe server URL (local 127.0.0.1:8080 or HTTPS)",
+                    pl::modmenu::ConfigType::Text,"http://127.0.0.1:8080")
+#else
             .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,"")
+#endif
             .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,"true")
             .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,"true")
             .config("hudSize","HUD Size (%)",pl::modmenu::ConfigType::SliderInt,"84","55","125")
@@ -1127,6 +1293,19 @@ private:
             animation_ = v=="1"||v=="true";
         } else {
             std::lock_guard lock(mu_);
+#if defined(LEVI_STANDALONE)
+            if(k=="chruServer"){
+                std::string requested(v);
+                if(requested.size()<350 &&
+                   (requested.rfind("https://",0)==0 ||
+                    requested.rfind("http://127.0.0.1:",0)==0 ||
+                    requested=="http://127.0.0.1" ||
+                    requested.rfind("http://localhost:",0)==0 ||
+                    requested=="http://localhost")) {
+                    chruBase_=std::move(requested);
+                }
+            } else
+#endif
             if(k=="bridgeKey"){
                 if(!v.empty())bridgeKey_=std::string(v).substr(0,100);
             }
@@ -1532,7 +1711,12 @@ private:
         icon("skip-forward",l.next.x+12*u,l.next.y+12*u,22*u);
         icon("volume-2",l.left.x+16*u,l.left.y+l.left.h-14*u,12*u);
         text(l.left.x+34*u,l.left.y+l.left.h-4*u,
-             streamingBridge?("AUTOPLAY NEXT • BRIDGE"):("AUDIUS • "+std::to_string(volume)+"%"),
+             streamingBridge?("AUTOPLAY NEXT • BRIDGE"):
+#if defined(LEVI_STANDALONE)
+             ("CHRUPIPE • "+std::to_string(volume)+"%"),
+#else
+             ("AUDIUS • "+std::to_string(volume)+"%"),
+#endif
              9.7f*u,C_DIM);
 
         // Independent lyrics column stays visible while browsing/searching playlists.
@@ -1740,6 +1924,21 @@ private:
                 vol=volume_;key=apiKey_;playing_=false;elapsed_=0;total_=0;
                 lyrics_.clear();lyric_.clear();
             }
+#if defined(LEVI_STANDALONE)
+            std::string server;
+            {std::lock_guard lock(mu_);server=chruBase_;}
+            update(tr.title,tr.artist,"Resolving stream via ChruPipe...");
+            const auto mediaUrl=streamChruPipe(env,server,tr.id);
+            if(mediaUrl.empty()) {
+                update(tr.title,tr.artist,"ChruPipe returned no compatible audio stream");
+                return;
+            }
+            bool ok=player.startUrl(env,mediaUrl,vol);
+            if(!ok){
+                update(tr.title,tr.artist,"Could not play extracted stream in Android MediaPlayer");
+                return;
+            }
+#else
             update(tr.title,tr.artist,"Opening Audius stream...");
             std::string base=std::string(API)+"/tracks/"+encode(env,tr.id)+"/stream?app_name="+APP_NAME;
             if(!key.empty())base+="&api_key="+encode(env,key);
@@ -1752,11 +1951,16 @@ private:
                 ok=player.startUrl(env,mirror,vol);
             }
             if(!ok){update(tr.title,tr.artist,"Stream error - try another song or API key");return;}
+#endif
             {
                 std::lock_guard lock(mu_);
                 playing_=true;total_=player.duration(env);
             }
+#if defined(LEVI_STANDALONE)
+            update(tr.title,tr.artist,"ChruPipe / NewPipeExtractor streaming");
+#else
             update(tr.title,tr.artist,"Streaming online (Audius)");
+#endif
             std::vector<Lyric> found=searchLyrics(env,tr,player.duration(env));
             {
                 std::lock_guard lock(mu_);
@@ -2031,12 +2235,19 @@ private:
                 switch(job.action){
                     case Action::Search:{
                         if(job.query.empty()){update("Search","Empty query","Tap search and enter a title");break;}
+#if defined(LEVI_STANDALONE)
+                        update("Searching",job.query,"Contacting your ChruPipe server...");
+                        std::string server;
+                        {std::lock_guard lock(mu_);server=chruBase_;}
+                        auto found=searchChruPipe(env,server,job.query);
+#else
                         update("Searching",job.query,"Contacting Audius...");
                         std::string key;
                         {std::lock_guard lock(mu_);key=apiKey_;}
                         auto found=searchAudiusFrom(env,job.query,API,key);
                         if(found.empty())
                             found=searchAudiusFrom(env,job.query,"https://discoveryprovider.audius.co/v1",key);
+#endif
                         {
                             std::lock_guard lock(mu_);
                             results_=std::move(found);
@@ -2044,7 +2255,12 @@ private:
                             page_=0;
                         }
                         if(selected_>=0)playSelected();
+#if defined(LEVI_STANDALONE)
+                        else update("ChruPipe unavailable / no results",job.query,
+                                    "Run the ChruPipe backend or set its server URL");
+#else
                         else update("No results",job.query,"Please check internet/API key");
+#endif
                         break;
                     }
                     case Action::Select:playSelected();break;
@@ -2105,7 +2321,7 @@ private:
                     }
                 }
             }
-            } // Audius legacy mode
+            } // Non-bridge mode: ChruPipe (standalone), legacy Audius (full)
             const auto now=std::chrono::steady_clock::now();
             if(now-lastPaint>std::chrono::milliseconds(animation_?110:400)){
                 paint();lastPaint=now;

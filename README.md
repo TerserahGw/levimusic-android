@@ -1,49 +1,44 @@
-# LeviMusic v1.2.0 RC
+# LeviMusic v1.2.1 Release Candidate
 
-**Author:** ReaAurelis  
-**Platform:** Minecraft Bedrock via LeviLauncher Android (ARM64).
+Author: **ReaAurelis** | Platform: Minecraft Bedrock, LeviLauncher Android ARM64.
 
-v1.2.0 contains a new optional embedded Standalone WebView browser and a permanent APK release-signing process. Actual Android 16 runtime compatibility remains unverified.
+## Standalone: ChruPipe backend (Audius replaced)
 
-## IMPORTANT: one-time signing setup in Termux
+ChruPipe (https://github.com/chukjosh/ChruPipe) is a GPL-3.0 self-hosted service with a Kotlin/Ktor backend powered by NewPipeExtractor. It is NOT a native .so library.
 
-Previous builds were APKs signed with GitHub Actions debug certificates, which can change between runs. Android requires the same signing certificate for in-place APK upgrades. This cannot be fixed retroactively without the earlier private signing key. See Android documentation.
+The Standalone .levipack now makes native JSON requests to its self-hosted HTTP API, specifically GET /search?q=QUERY&service=youtube and GET /stream?url=CONTENT_URL. It parses title, artist/uploader and artwork, resolves audio stream URLs, and plays with Android MediaPlayer via JNI. Existing LRCLIB timestamped lyrics remain available.
 
-1. **Before uninstalling an old app**, if you use playlists, keep the old Bridge running. In Termux run: bash scripts/backup_playlists_old_termux.sh. Paste the Bridge Key from the installed app. The script writes LeviMusic-playlists-backup.json to Downloads if available.
-2. Sync latest project source: git pull --ff-only origin main (inside your LeviMusic repository folder).
-3. Termux dependencies: pkg install gh openjdk-17 openssl.
-4. Run: bash scripts/setup_apk_signing_termux.sh.
-5. This command creates/reuses a PKCS12 signing keystore in Termux's **private home directory**, sets two protected GitHub Actions Secrets, then triggers a GitHub Actions build.
-6. KEEP A PRIVATE BACKUP of the keystore and password. Never commit either file or send them in chat.
-7. Once a signed GitHub Release appears, if Android rejects the update due to the previous debug certificate, this specific transition requires a ONE-TIME removal of the old APK. Make sure playlist backup exists first.
-8. Install the new signed Bridge APK, open **My Playlists -> Import backup**, choose the JSON file. Future updates should install on top of this new build if the signing key remains unchanged and versionCode increases.
+**ChruPipe server is REQUIRED and must already be running.** No Android Bridge APK is needed for this variant, but the backend is NOT packaged in the .levipack. The user must self-host ChruPipe via a compatible Java environment in Termux, an existing VPS, or another server. Unofficial extractor responses and playback are not guaranteed.
 
-Without the GitHub signing secrets, Actions deliberately **does not publish a new release**. This prevents distributing another APK that needs uninstalling on the next version. Debug artifacts may still be generated only for compiler testing.
+To configure:
 
-## Full mod / Standalone
+1. Run the ChruPipe Ktor backend according to its README; by default the server listens on port 8080. The React/Vite browser frontend is optional when using the JSON API.
+2. Install LeviMusic-Standalone-1.2.1-arm64-v8a.levipack. Never enable two LeviMusic native mod variants.
+3. In the LeviMusic Mod Menu settings, set **ChruPipe server URL** to http://127.0.0.1:8080 for a backend running on the same Android device, or to a reachable HTTPS origin for your own remote server.
+4. Search through the in-game music menu. If results are empty, check the ChruPipe service using its HTTP /search route.
+5. The optional experimental WEB button still opens a separate visible WebView; it is not the ChruPipe engine.
 
-Full setup: LeviMusic Bridge APK and LeviMusic ARM64 .levipack. This has searchable catalog (via unofficial NewPipeExtractor YouTube results), playlist queue, player controls, artwork and lyrics through the authenticated local bridge. It still depends on unofficial provider access; Spotify Premium/YouTube Music Premium is not unlocked.
+No Audius search/streaming is used in the Standalone mode. ChruPipe access does not bypass paid plans, DRM, ads, country restrictions or upstream terms of service.
 
-Standalone: LeviMusic-Standalone arm64 .levipack. The existing built-in music HUD still uses Audius, with an optional **WEB** control which embeds Android System WebView directly in the Minecraft Activity. Enable **Experimental embedded WebView (visible video)** in Mod Menu, then tap WEB. This mode needs no separate APK, but WebView may fail if Android 16 blocks the ActivityThread reflection used to find Minecraft Activity.
+## New optional real-world 3D lyric renderer
 
-WebView is not an audio-extraction API and does not replace the native player's metadata/search/playlist backend. It opens a visible interactive browser UI, defaulting to https://m.youtube.com. User actions, website permissions, DRM, ads, and playback policies apply. Closing the browser destroys WebView. Browser rendering into the 3D world is not included. See docs/STANDALONE_BROWSER.md.
+The extra file LeviMusic-WorldLyrics3D-1.2.1.mcpack provides genuine Minecraft world-space text using @minecraft/server TextPrimitive, introduced in Bedrock 26.20. Unlike HUD 2D scatter, each line is a text primitive positioned several blocks in front of a player's camera with random lateral/vertical offsets and optional depth testing.
 
-## Floating Lyrics in true 3D
+The pack explicitly sets visibleTo to just the player who triggered the text, so others do not see it. It creates no world entity, changes no blocks, fades the text in/out, and replaces the previous line when another line arrives.
 
-The two uploaded reference .levipack mods were inspected without executing them: WebScreen uses native Android WebView/GL texture concepts; LHolo has native world projection/render hooks. That architecture can inform a version-matched, locally rendered 3D lyric billboard.
+**Install:** import the behavior pack, enable it for the desired world, and enable the Beta APIs experiment if prompted. Test in a command-enabled world:
 
-**NOT INCLUDED IN v1.2.0:** client-only world-space 3D lyric quads with new random world positions each line. These require safe camera and world-renderer hooks for the exact game version; using binary offsets from other mods without testing could cause black screens/crashes. There is a documented development plan in docs/WORLD_LYRICS_3D.md. The existing 2D lyric scatter remains separate, optional and off by default.
+    /scriptevent levimusic:lyric Hello from LeviMusic in true 3D
+    /scriptevent levimusic:clear
 
-## Previous v1.1.2 features preserved
+**Important limitation:** this release does NOT yet automatically feed LRC lines from the native mod into the behavior pack. The Script API and native Preloader HUD have no already verified bridge. The new pack proves true 3D world rendering and client-restricted visibility through manual script events; automatic music synchronization is remaining integration work. The renderer is not included by default in the .levipack; it is explicitly opt-in as a separate addon. Avoid advertising automatic 3D karaoke until linked and tested.
 
-Three-column UI (player / synced lyrics / search and playlists), autoplay next and best-effort related-track recommendations, HUD config and cover art, lyric match by timestamps, Bridge pairing, playlist editing and Lucide icons.
+Minecraft Docs:
+- https://learn.microsoft.com/en-us/minecraft/creator/scriptapi/minecraft/server/textprimitive?view=minecraft-bedrock-experimental
+- https://learn.microsoft.com/en-us/minecraft/creator/scriptapi/minecraft/server/primitiveshape?view=minecraft-bedrock-stable
 
-## Troubleshooting
+## Full mod unchanged
 
-- APK update rejected: check package name and certificate; a one-time migration away from the old debug cert may be necessary.
-- New signed release missing: run the signing setup script, then inspect GitHub Actions for failed checks.
-- WEB fails to open: ensure Standalone mod, experiment ON, WebView installed; inspect Android logcat for LeviMusicWebView and NativeBrowser.open.
-- 3D lyric absent: that experimental renderer has not been implemented. Do not confuse it with 2D scatter.
-- Back up playlists before app uninstall; uninstall may erase private app data.
+The full LeviMusic-1.2.1-arm64-v8a.levipack + LeviMusic-Bridge-1.2.1.apk retains Android Bridge Media3, search/playlists and its unofficial YouTube extractor. It does not require ChruPipe. Permanent Android signing from 1.2.0 is retained for safe APK upgrades.
 
-Resources: docs/STANDALONE_BROWSER.md, docs/WORLD_LYRICS_3D.md, FEATURES.md, THIRD_PARTY_LICENSES.md.
+This release is still RC; compilation is not proof of successful playback and world-render testing. See FEATURES.md and the release notes.
