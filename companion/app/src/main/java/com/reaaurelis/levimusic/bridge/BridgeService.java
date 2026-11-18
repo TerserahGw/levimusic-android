@@ -150,7 +150,11 @@ public final class BridgeService extends NotificationListenerService {
                 default: return o.put("accepted",false).put("error","Unknown action");
             }
             return o.put("accepted",true).put("note","Provider may reject restricted actions");
-        }catch(Exception e){return o.put("accepted",false).put("error","Action failed");}
+        }catch(Exception e){
+            Log.w(TAG,"Music session action failed",e);
+            try { return o.put("accepted",false).put("error","Action failed"); }
+            catch(org.json.JSONException ignored) { return new JSONObject(); }
+        }
     }
     private String getParam(String path,String key){
         String q=path.contains("?")?path.substring(path.indexOf('?')+1):"";
