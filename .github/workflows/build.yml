@@ -32,12 +32,16 @@ jobs:
           if [[ -n "$existing" ]]; then
             version="${existing#v}"
             already_released=true
-          elif [[ -z "$previous" ]]; then
-            version="0.1.0"
-            already_released=false
           else
-            IFS=. read -r major minor patch <<< "${previous#v}"
-            version="$major.$minor.$((patch + 1))"
+            minimum="$(tr -d '\r\n ' < VERSION)"
+            [[ "$minimum" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid VERSION: $minimum"; exit 1; }
+            if [[ -z "$previous" ]]; then
+              version="$minimum"
+            else
+              IFS=. read -r major minor patch <<< "${previous#v}"
+              candidate="$major.$minor.$((patch + 1))"
+              version="$(printf '%s\n%s\n' "$minimum" "$candidate" | sort -V | tail -n 1)"
+            fi
             already_released=false
           fi
           {
@@ -90,7 +94,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-0.1.0-arm64-v8a.levipack"
+          source_file="build/LeviMusic-0.2.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"

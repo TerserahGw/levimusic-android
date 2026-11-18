@@ -4,6 +4,7 @@
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
 #include <pl/Input.hpp>
+#include "LucideIcons.hpp"
 #include <cmath>
 #include <jni.h>
 #include <android/log.h>
@@ -503,48 +504,55 @@ struct Rect {
 };
 struct UI {
     float w{},h{},s{};
-    Rect mini,outer,left,right,close,searchBox,searchGo,prev,play,next,stop,seek,pagePrev,pageNext;
+    Rect mini,outer,left,right,close,settings,searchBox,searchGo,prev,play,next,stop,seek,pagePrev,pageNext;
     std::vector<Rect> rows;
     bool ok()const{return w>0&&h>0;}
 };
-UI measure() {
+UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=26) {
     UI p;
     const auto surface=pl::modmenu::getHudSurfaceSize();
     p.w=surface.width;p.h=surface.height;
     if(!p.ok())return p;
     p.s=std::clamp(p.h/540.f,.65f,2.5f);
-    const float s=p.s;
-    p.mini={18*s,p.h-83*s,std::min(335*s,p.w*.4f),64*s};
-    p.outer={p.w*.05f,p.h*.07f,p.w*.90f,p.h*.86f};
-    const float contentY=p.outer.y+63*s;
-    const float contentH=p.outer.h-76*s;
-    const float contentX=p.outer.x+22*s;
-    const float contentW=p.outer.w-44*s;
-    p.left={contentX,contentY,contentW*.445f-6*s,contentH};
-    p.right={contentX+contentW*.445f+6*s,contentY,contentW*.555f-6*s,contentH};
-    p.close={p.outer.x+p.outer.w-51*s,p.outer.y+12*s,33*s,34*s};
-    p.searchBox={p.right.x+12*s,p.right.y+12*s,p.right.w-112*s,42*s};
-    p.searchGo={p.right.x+p.right.w-91*s,p.right.y+12*s,79*s,42*s};
-    const float b=p.left.y+p.left.h-91*s, center=p.left.x+p.left.w*.5f;
-    p.stop={p.left.x+10*s,b,39*s,52*s};
-    p.prev={center-102*s,b,53*s,52*s};
-    p.play={center-40*s,b,80*s,52*s};
-    p.next={center+49*s,b,53*s,52*s};
-    p.seek={p.left.x+20*s,b-54*s,p.left.w-40*s,18*s};
-    float rowY=p.right.y+80*s;
-    float rowsBottom=p.right.y+p.right.h-57*s;
-    float rowH=std::min(53*s,std::max(28*s,(rowsBottom-rowY)/6));
-    for(int i=0;i<6;i++)p.rows.push_back({p.right.x+12*s,rowY+i*rowH,p.right.w-24*s,rowH-3*s});
-    p.pagePrev={p.right.x+p.right.w*.45f,p.right.y+p.right.h-48*s,39*s,35*s};
-    p.pageNext={p.right.x+p.right.w*.45f+48*s,p.right.y+p.right.h-48*s,39*s,35*s};
+    const float u=p.s, factor=std::clamp(hudScale,55,125)/100.f;
+    const float miniW=std::min(267*u*factor,p.w*.45f);
+    const float miniH=50*u*factor;
+    const float x=std::clamp((p.w-miniW)*std::clamp(hudX,0,100)/100.f,4*u,p.w-miniW-4*u);
+    const float y=std::clamp((p.h-miniH)*std::clamp(hudY,0,100)/100.f,4*u,p.h-miniH-4*u);
+    p.mini={x,y,miniW,miniH};
+    const float topPercent=std::clamp(panelTop,15,35)/100.f;
+    p.outer={p.w*.07f,p.h*topPercent,p.w*.86f,p.h*(.95f-topPercent)};
+    const float contentY=p.outer.y+54*u;
+    const float contentH=p.outer.h-67*u;
+    const float contentX=p.outer.x+16*u;
+    const float contentW=p.outer.w-32*u;
+    p.left={contentX,contentY,contentW*.43f-5*u,contentH};
+    p.right={contentX+contentW*.43f+5*u,contentY,contentW*.57f-5*u,contentH};
+    p.close={p.outer.x+p.outer.w-42*u,p.outer.y+10*u,30*u,30*u};
+    p.settings={p.close.x-40*u,p.close.y,30*u,30*u};
+    p.searchBox={p.right.x+12*u,p.right.y+11*u,p.right.w-82*u,36*u};
+    p.searchGo={p.right.x+p.right.w-58*u,p.right.y+11*u,46*u,36*u};
+    const float b=p.left.y+p.left.h-58*u,mid=p.left.x+p.left.w*.5f;
+    p.stop={p.left.x+14*u,b,36*u,44*u};
+    p.prev={mid-89*u,b,45*u,44*u};
+    p.play={mid-33*u,b,66*u,44*u};
+    p.next={mid+44*u,b,45*u,44*u};
+    p.seek={p.left.x+20*u,b-41*u,p.left.w-40*u,15*u};
+    const float rowY=p.right.y+68*u;
+    const float bottom=p.right.y+p.right.h-44*u;
+    const float rowH=std::max(20*u,(bottom-rowY)/6.f);
+    for(int i=0;i<6;i++)p.rows.push_back({p.right.x+12*u,rowY+i*rowH,p.right.w-24*u,rowH-3*u});
+    p.pagePrev={p.right.x+p.right.w-113*u,p.right.y+p.right.h-39*u,38*u,31*u};
+    p.pageNext={p.right.x+p.right.w-62*u,p.right.y+p.right.h-39*u,38*u,31*u};
     return p;
 }
-constexpr uint32_t C_BG=0xEA0C1522U;
-constexpr uint32_t C_PANEL=0xEC1B2A3CU;
-constexpr uint32_t C_BORDER=0xFF455D73U;
+
+constexpr uint32_t C_BG=0xEE0C1423U;
+constexpr uint32_t C_PANEL=0xE91A2638U;
+constexpr uint32_t C_BORDER=0xA4587083U;
 constexpr uint32_t C_TEXT=0xFFFFFFFFU;
 constexpr uint32_t C_DIM=0xFFB6C5D6U;
-constexpr uint32_t C_MINT=0xFF7DE2D4U;
+constexpr uint32_t C_MINT=0xFF8DF0DBU;
 
 class LeviMusic {
     ll::mod::NativeMod& self_;
@@ -560,12 +568,15 @@ class LeviMusic {
     int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
     std::atomic<bool> enabled_{false};
+    std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{26};
+    std::atomic<bool> animation_{true};
+
 public:
     LeviMusic():self_(*ll::mod::NativeMod::current()){}
     static LeviMusic& instance(){static LeviMusic mod;return mod;}
     bool load(){
         vm_=self_.getJavaVM();
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v0.1.2 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v0.2.0-beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -580,6 +591,11 @@ public:
             .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,"")
             .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,"true")
             .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,"true")
+            .config("hudSize","HUD Size (%)",pl::modmenu::ConfigType::SliderInt,"84","55","125")
+            .config("hudX","HUD Horizontal Position (0-100%)",pl::modmenu::ConfigType::SliderInt,"3","0","100")
+            .config("hudY","HUD Vertical Position (0-100%)",pl::modmenu::ConfigType::SliderInt,"93","0","100")
+            .config("panelTop","Menu Distance from Top (%)",pl::modmenu::ConfigType::SliderInt,"26","15","35")
+            .config("animation","Subtle Animations",pl::modmenu::ConfigType::Toggle,"true")
             .onConfigChanged([](std::string_view,std::string_view k,std::string_view v){
                 instance().setConfig(k,v);
             }).registerModule();
@@ -590,6 +606,7 @@ public:
             pl::input::registerTextInputCallback([](const pl::input::TextInputEvent& e){return instance().input(e);});
             pl::input::registerKeyCallback([](const pl::input::KeyEvent& e){return instance().key(e);});
         });
+        levimusic_icons::registerAll();
         enabled_=true;
         worker_=std::thread([this](){process();});
         paint();
@@ -607,14 +624,27 @@ public:
     bool unload(){return true;}
 private:
     void setConfig(std::string_view k,std::string_view v){
-        std::lock_guard lock(mu_);
-        if(k=="apiKey")apiKey_=std::string(v).substr(0,200);
-        else if(k=="hud")hud_=v=="1"||v=="true";
-        else if(k=="lyrics")lyricsOn_=v=="1"||v=="true";
-        else if(k=="volume"){
-            try{volume_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
-            jobs_.push_back({Action::SetVolume,{}});cv_.notify_one();
+        if(k=="hudSize") {
+            try{hudSize_=std::clamp(std::stoi(std::string(v)),55,125);}catch(...){}
+        } else if(k=="hudX") {
+            try{hudX_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
+        } else if(k=="hudY") {
+            try{hudY_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
+        } else if(k=="panelTop") {
+            try{panelTop_=std::clamp(std::stoi(std::string(v)),15,35);}catch(...){}
+        } else if(k=="animation") {
+            animation_ = v=="1"||v=="true";
+        } else {
+            std::lock_guard lock(mu_);
+            if(k=="apiKey")apiKey_=std::string(v).substr(0,200);
+            else if(k=="hud")hud_=v=="1"||v=="true";
+            else if(k=="lyrics")lyricsOn_=v=="1"||v=="true";
+            else if(k=="volume"){
+                try{volume_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
+                jobs_.push_back({Action::SetVolume,{}});cv_.notify_one();
+            }
         }
+        paint();
     }
     void addJob(Action action,std::string arg={}){
         std::lock_guard lock(mu_);
@@ -629,7 +659,7 @@ private:
     }
     bool touch(const pl::input::TouchEvent& e){
         if(!enabled_ || (e.action!=0&&e.action!=1))return false;
-        UI l=measure();if(!l.ok())return false;
+        UI l=measure(hudSize_,hudX_,hudY_,panelTop_);if(!l.ok())return false;
         bool opened,hud;
         {std::lock_guard lock(mu_);opened=open_;hud=hud_;}
         if(e.action==0) return opened || (hud&&l.mini.contains(e.x,e.y));
@@ -640,7 +670,11 @@ private:
             }
             return false;
         }
-        if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
+        if(l.settings.contains(e.x,e.y)){
+            {std::lock_guard lock(mu_);open_=false;typing_=false;}
+            pl::input::hideKeyboard();
+            pl::modmenu::requestOpenMenu();
+        } else if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
             {std::lock_guard lock(mu_);open_=false;typing_=false;}
             pl::input::hideKeyboard();
         } else if(l.searchBox.contains(e.x,e.y)){
@@ -717,94 +751,175 @@ private:
     }
     void paint(){
         if(!enabled_)return;
-        UI l=measure();if(!l.ok())return;
-        std::string name,artist,info,query,lyric;
+        UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
+        if(!l.ok())return;
+        std::string title,artist,info,query,lyric;
         std::vector<Track> tracks;
         int current,page,elapsed,total,volume;
         bool open,showHud,playing,typing;
         {
             std::lock_guard lock(mu_);
-            name=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";
-            tracks=results_;current=selected_;page=page_;elapsed=elapsed_;total=total_;
-            volume=volume_;open=open_;showHud=hud_;playing=playing_;typing=typing_;
+            title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";
+            tracks=results_;current=selected_;page=page_;
+            elapsed=elapsed_;total=total_;volume=volume_;
+            open=open_;showHud=hud_;playing=playing_;typing=typing_;
         }
         std::vector<pl::modmenu::DrawCommand> out;
+        out.reserve(110);
         const float u=l.s;
-        auto rectangle=[&](Rect r,uint32_t color){
-            pl::modmenu::DrawCommand c;c.type=pl::modmenu::DrawCommandType::RectFilled;
-            c.x=r.x;c.y=r.y;c.w=r.w;c.h=r.h;c.x3=8*u;c.color=color;out.push_back(std::move(c));
+        const bool moving=animation_ && playing;
+        const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto box=[&](Rect r,uint32_t color,float radius=9.f){
+            pl::modmenu::DrawCommand c;
+            c.type=pl::modmenu::DrawCommandType::RectFilled;
+            c.x=r.x;c.y=r.y;c.w=r.w;c.h=r.h;c.x3=radius*u;c.color=color;out.push_back(std::move(c));
         };
         auto text=[&](float x,float y,std::string v,float size,uint32_t color,size_t max=60){
             pl::modmenu::DrawCommand c;c.type=pl::modmenu::DrawCommandType::Text;
-            c.x=x;c.y=y;c.size=size;c.color=color;c.text=shorten(v,max);out.push_back(std::move(c));
+            c.x=x;c.y=y;c.size=size;c.color=color;c.text=shorten(v,max);
+            out.push_back(std::move(c));
         };
-        auto circle=[&](float x,float y,float radius,uint32_t color){
+        auto disc=[&](float x,float y,float radius,uint32_t color){
             pl::modmenu::DrawCommand c;c.type=pl::modmenu::DrawCommandType::CircleFilled;
             c.x=x;c.y=y;c.size=radius;c.color=color;out.push_back(std::move(c));
         };
-        if(!open){
+        auto icon=[&](std::string name,float x,float y,float side){
+            pl::modmenu::DrawCommand c;
+            c.type=pl::modmenu::DrawCommandType::Image;
+            c.x=x;c.y=y;c.w=side;c.h=side;
+            c.color=0xFFFFFFFFU;
+            c.imageId="levimusic.icon."+name;
+            out.push_back(std::move(c));
+        };
+        auto equalizer=[&](float x,float y,float width,float height){
+            for(int i=0;i<4;i++){
+                float wave=moving?(.25f+.75f*std::abs(std::sin(tick*3.4f+i*1.31f))):.35f;
+                float bh=height*wave;
+                box({x+i*width*.25f,y+height-bh,std::max(2.f,width*.13f),bh},C_MINT,1.8f);
+            }
+        };
+        const float miniScale=std::clamp(hudSize_.load(),55,125)/100.f;
+        if(!open) {
             if(showHud){
-                rectangle({l.mini.x-2*u,l.mini.y-2*u,l.mini.w+4*u,l.mini.h+4*u},C_BORDER);
-                rectangle(l.mini,C_BG);
-                rectangle({l.mini.x,l.mini.y,l.mini.w,4*u},C_MINT);
-                circle(l.mini.x+30*u,l.mini.y+33*u,18*u,0xFF3E5368U);
-                circle(l.mini.x+30*u,l.mini.y+33*u,7*u,C_MINT);
-                text(l.mini.x+58*u,l.mini.y+23*u,name,15*u,C_TEXT,42);
-                text(l.mini.x+58*u,l.mini.y+44*u,artist+"  •  Tap to open",11*u,C_DIM,51);
-                if(total>0)rectangle({l.mini.x,l.mini.y+l.mini.h-3*u,
-                    l.mini.w*std::clamp(float(elapsed)/total,0.f,1.f),3*u},C_MINT);
+                box({l.mini.x+2*u,l.mini.y+4*u,l.mini.w,l.mini.h},0x70000000U,15*miniScale);
+                box(l.mini,0xEC101B2AU,15*miniScale);
+                box({l.mini.x,l.mini.y,l.mini.w,1.1f*u},0xFF477B80U,2.f);
+                const float sz=17*u*miniScale;
+                disc(l.mini.x+24*u*miniScale,l.mini.y+l.mini.h*.50f,sz,0xFF284B56U);
+                icon("disc-3",l.mini.x+13*u*miniScale,l.mini.y+(l.mini.h-23*u*miniScale)/2,23*u*miniScale);
+                float x=l.mini.x+48*u*miniScale;
+                float fs=std::max(10.f,12.5f*u*miniScale);
+                text(x,l.mini.y+l.mini.h*.40f, title,fs,C_TEXT,31);
+                text(x,l.mini.y+l.mini.h*.72f, artist,fs*.77f,C_DIM,37);
+                equalizer(l.mini.x+l.mini.w-19*u*miniScale,l.mini.y+l.mini.h*.24f,
+                          13*u*miniScale,l.mini.h*.47f);
+                if(total>0){
+                    float ratio=std::clamp(float(elapsed)/total,0.f,1.f);
+                    box({l.mini.x+10*u*miniScale,l.mini.y+l.mini.h-5*u*miniScale,
+                         l.mini.w-20*u*miniScale,1.8f*u*miniScale},0xFF2A4056U,1.f);
+                    box({l.mini.x+10*u*miniScale,l.mini.y+l.mini.h-5*u*miniScale,
+                         (l.mini.w-20*u*miniScale)*ratio,1.8f*u*miniScale},C_MINT,1.f);
+                }
             }
             pl::modmenu::submitDrawCommands(MODULE,out);
             return;
         }
-        rectangle({l.outer.x-2*u,l.outer.y-2*u,l.outer.w+4*u,l.outer.h+4*u},C_BORDER);
-        rectangle(l.outer,C_BG);
-        rectangle({l.outer.x,l.outer.y,5*u,l.outer.h},C_MINT);
-        text(l.outer.x+24*u,l.outer.y+37*u,"LEVI MUSIC",22*u,C_TEXT);
-        text(l.outer.x+211*u,l.outer.y+35*u,"ONLINE PLAYER • v0.1.2",12*u,C_MINT);
-        rectangle(l.close,0xFF344558U);
-        text(l.close.x+9*u,l.close.y+25*u,"X",20*u,C_TEXT);
-        rectangle(l.left,C_PANEL);
-        rectangle(l.right,C_PANEL);
-        const float cx=l.left.x+l.left.w*.5f;
-        const float discY=l.left.y+std::min(84*u,l.left.h*.22f);
-        circle(cx,discY,58*u,0xFF40536CU);
-        circle(cx,discY,48*u,0xFF142237U);
-        circle(cx,discY,34*u,0xFF486074U);
-        circle(cx,discY,10*u,C_MINT);
-        const float ty=l.left.y+std::min(174*u,l.left.h*.44f);
-        text(l.left.x+16*u,ty,name,18*u,C_TEXT,50);
-        text(l.left.x+16*u,ty+26*u,artist,13*u,C_MINT,50);
-        text(l.left.x+16*u,ty+46*u,info,11*u,C_DIM,56);
-        if(!lyric.empty())text(l.left.x+16*u,ty+67*u,lyric,12*u,C_DIM,55);
-        rectangle(l.seek,0xFF35465CU);
-        if(total>0)rectangle({l.seek.x,l.seek.y,
-            l.seek.w*std::clamp(float(elapsed)/total,0.f,1.f),l.seek.h},C_MINT);
-        text(l.seek.x,l.seek.y+l.seek.h+17*u,clockText(elapsed),12*u,C_DIM);
-        text(l.seek.x+l.seek.w-58*u,l.seek.y+l.seek.h+17*u,clockText(total),12*u,C_DIM);
-        rectangle(l.stop,0xFF3A5268U);text(l.stop.x+8*u,l.stop.y+33*u,"[]",15*u,C_TEXT);
-        rectangle(l.prev,0xFF3A5268U);text(l.prev.x+7*u,l.prev.y+33*u,"|<<",17*u,C_TEXT);
-        rectangle(l.play,C_MINT);text(l.play.x+12*u,l.play.y+33*u,playing?"PAUSE":"PLAY",15*u,0xFF10232AU);
-        rectangle(l.next,0xFF3A5268U);text(l.next.x+8*u,l.next.y+33*u,">>|",17*u,C_TEXT);
-        text(l.left.x+12*u,l.left.y+l.left.h-15*u,"Volume "+std::to_string(volume)+"%   •   Audius",11*u,C_DIM);
-        rectangle(l.searchBox,0xFF0B1929U);
-        text(l.searchBox.x+12*u,l.searchBox.y+28*u,(typing?"_ ":"")+query,14*u,typing?C_MINT:C_TEXT,43);
-        rectangle(l.searchGo,C_MINT);text(l.searchGo.x+8*u,l.searchGo.y+28*u,"SEARCH",13*u,0xFF0B2730U);
-        text(l.right.x+14*u,l.right.y+75*u,"SEARCH RESULTS   /   "+std::to_string(tracks.size()),12*u,C_DIM);
-        for(size_t i=0;i<l.rows.size();i++){
+
+        // Upper safe zone is deliberately left free for other mods' on-screen buttons.
+        box({0,0,l.w,l.h},0x4C02070EU,0.f);
+        box({l.outer.x,l.outer.y+4*u,l.outer.w,l.outer.h},0x77000000U,18.f);
+        box(l.outer,C_BG,18.f);
+        box({l.outer.x+3*u,l.outer.y+3*u,l.outer.w-6*u,1.5f*u},0xFF2C6370U,1.f);
+        box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF244956U,9.f);
+        icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
+        text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
+        text(l.outer.x+199*u,l.outer.y+31*u,"BETA 0.2.0",10.5f*u,C_MINT);
+        box(l.settings,0xFF26394BU,9.f);
+        icon("settings-2",l.settings.x+6*u,l.settings.y+6*u,18*u);
+        box(l.close,0xFF26394BU,9.f);
+        icon("x",l.close.x+6*u,l.close.y+6*u,18*u);
+        box(l.left,C_PANEL,12.f);
+        box(l.right,C_PANEL,12.f);
+
+        // Left: focused now-playing card. Small art leaves room for lyrics, seek and controls.
+        const float artX=l.left.x+61*u;
+        const float artY=l.left.y+68*u;
+        disc(artX,artY,46*u,0xFF31485DU);
+        disc(artX,artY,38*u,0xFF0F2032U);
+        disc(artX,artY,27*u,0xFF315B67U);
+        disc(artX,artY,10*u,C_MINT);
+        // Animated radial highlight.
+        if(animation_ && playing) {
+            float phase=tick*.9f;
+            disc(artX+30*u*std::cos(phase),artY+30*u*std::sin(phase),3*u,0xFFBDFFF0U);
+        }
+        const float ix=l.left.x+119*u;
+        text(ix,l.left.y+37*u,"NOW PLAYING",10.5f*u,C_MINT,35);
+        text(ix,l.left.y+65*u,title,16*u,C_TEXT,41);
+        text(ix,l.left.y+87*u,artist,12*u,C_DIM,43);
+        // Compact status, no potentially huge text block overlapping seek.
+        text(l.left.x+17*u,l.left.y+134*u,info,11*u,C_DIM,62);
+
+        const float lyricTop=l.left.y+154*u;
+        const float lyricHeight=std::max(22.f,l.seek.y-lyricTop-14*u);
+        if(lyricHeight>24.f) {
+            box({l.left.x+15*u,lyricTop,l.left.w-30*u,lyricHeight},0xA9112232U,8.f);
+            box({l.left.x+15*u,lyricTop,3*u,lyricHeight},C_MINT,2.f);
+            text(l.left.x+29*u,lyricTop+std::min(26*u,lyricHeight*.65f),
+                 lyric.empty()?"Lyrics appear here when available":lyric,
+                 11.5f*u,C_DIM,57);
+        }
+        const float prog=total>0?std::clamp(float(elapsed)/total,0.f,1.f):0.f;
+        const float lineY=l.seek.y+l.seek.h*.5f;
+        box({l.seek.x,lineY-1.35f*u,l.seek.w,2.7f*u},0xFF334758U,2.f);
+        if(total>0)box({l.seek.x,lineY-1.35f*u,std::max(.5f,l.seek.w*prog),2.7f*u},C_MINT,2.f);
+        if(total>0)disc(l.seek.x+l.seek.w*prog,lineY,4*u,C_MINT);
+        text(l.seek.x,l.seek.y+l.seek.h+9*u,clockText(elapsed),10*u,C_DIM);
+        text(l.seek.x+l.seek.w-42*u,l.seek.y+l.seek.h+9*u,clockText(total),10*u,C_DIM);
+        box(l.stop,0xFF294052U,10.f);
+        icon("square",l.stop.x+9*u,l.stop.y+13*u,18*u);
+        box(l.prev,0xFF294052U,10.f);
+        icon("skip-back",l.prev.x+12*u,l.prev.y+12*u,22*u);
+        box(l.play,0xFF2C5A62U,13.f);
+        box({l.play.x+2*u,l.play.y+2*u,l.play.w-4*u,l.play.h-4*u},0xFF3B7F81U,12.f);
+        icon(playing?"pause":"play",l.play.x+(l.play.w-23*u)*.5f,l.play.y+10*u,23*u);
+        box(l.next,0xFF294052U,10.f);
+        icon("skip-forward",l.next.x+12*u,l.next.y+12*u,22*u);
+        icon("volume-2",l.left.x+16*u,l.left.y+l.left.h-14*u,12*u);
+        text(l.left.x+34*u,l.left.y+l.left.h-4*u,
+             std::to_string(volume)+"%    |    Audius",10*u,C_DIM);
+
+        // Right: search bar, readable active track, paginate 20 results.
+        box(l.searchBox,0xFF111E30U,9.f);
+        text(l.searchBox.x+12*u,l.searchBox.y+23*u,
+             (typing?"_ ":"")+query,12.5f*u,typing?C_MINT:C_TEXT,44);
+        box(l.searchGo,0xFF2E6670U,10.f);
+        icon("search",l.searchGo.x+14*u,l.searchGo.y+8*u,20*u);
+        icon("list-music",l.right.x+13*u,l.right.y+52*u,14*u);
+        text(l.right.x+36*u,l.right.y+64*u,"SEARCH RESULTS",10.5f*u,C_DIM,25);
+        text(l.right.x+l.right.w-73*u,l.right.y+64*u,
+             std::to_string(tracks.size())+" songs",10*u,C_MINT,17);
+        for(size_t i=0;i<l.rows.size();i++) {
             size_t n=static_cast<size_t>(page*6)+i;
             if(n>=tracks.size())break;
-            Rect r=l.rows[i];
-            rectangle(r,static_cast<int>(n)==current?0xFF2D5261U:0xFF2A394BU);
-            text(r.x+10*u,r.y+std::min(22*u,r.h*.47f),
-                std::to_string(n+1)+". "+tracks[n].title,13*u,C_TEXT,42);
-            text(r.x+10*u,r.y+std::min(39*u,r.h*.83f),tracks[n].artist,11*u,C_DIM,48);
+            const Rect r=l.rows[i];
+            const bool currentSong=static_cast<int>(n)==current;
+            box(r,currentSong?0xFF2A5862U:((n%2==0)?0xFF223448U:0xFF26384BU),8.f);
+            if(currentSong)box({r.x,r.y,3*u,r.h},C_MINT,1.f);
+            text(r.x+12*u,r.y+std::min(20*u,r.h*.45f),
+                 std::to_string(n+1)+".  "+tracks[n].title,12*u,C_TEXT,46);
+            text(r.x+12*u,r.y+std::min(38*u,r.h*.84f),
+                 tracks[n].artist,10*u,C_DIM,52);
+            if(currentSong)icon(playing?"audio-lines":"play",
+                               r.x+r.w-29*u,r.y+(r.h-17*u)*.5f,17*u);
         }
-        rectangle(l.pagePrev,0xFF34495DU);rectangle(l.pageNext,0xFF34495DU);
-        text(l.pagePrev.x+13*u,l.pagePrev.y+25*u,"<",18*u,C_TEXT);
-        text(l.pageNext.x+13*u,l.pageNext.y+25*u,">",18*u,C_TEXT);
-        text(l.right.x+12*u,l.right.y+l.right.h-23*u,
-            std::to_string(page+1)+" / "+std::to_string(std::max<size_t>(1,(tracks.size()+5)/6)),12*u,C_DIM);
+        box(l.pagePrev,0xFF2B4256U,8.f);
+        icon("chevron-left",l.pagePrev.x+9*u,l.pagePrev.y+7*u,19*u);
+        box(l.pageNext,0xFF2B4256U,8.f);
+        icon("chevron-right",l.pageNext.x+9*u,l.pageNext.y+7*u,19*u);
+        text(l.right.x+14*u,l.right.y+l.right.h-18*u,
+             "Page "+std::to_string(page+1)+" / "+std::to_string(std::max<size_t>(1,(tracks.size()+5)/6)),
+             11*u,C_DIM);
         pl::modmenu::submitDrawCommands(MODULE,out);
     }
     void process(){
@@ -850,7 +965,7 @@ private:
             Job job{};bool hasJob=false;
             {
                 std::unique_lock lock(mu_);
-                cv_.wait_for(lock,std::chrono::milliseconds(350),
+                cv_.wait_for(lock,std::chrono::milliseconds(100),
                     [this]{return shutdown_||!jobs_.empty();});
                 if(shutdown_)break;
                 if(!jobs_.empty()){
@@ -926,7 +1041,7 @@ private:
                 }
             }
             const auto now=std::chrono::steady_clock::now();
-            if(now-lastPaint>std::chrono::milliseconds(400)){
+            if(now-lastPaint>std::chrono::milliseconds(animation_?110:400)){
                 paint();lastPaint=now;
             }
         }

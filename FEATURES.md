@@ -1,14 +1,27 @@
-## LeviMusic Online v0.1.2 — Beta
+# LeviMusic Online v0.2.0 Beta
 
-- **Native Minecraft Bedrock ARM64 client mod** for LeviLauncher Android v1.7.1 (preloader commit cc08b40a3).
-- **No external LeviMusic buttons.** A compact music HUD in the **lower-left corner** opens the interface when tapped.
-- **New two-column music interface** drawn via Preloader HUD: player/controls on the left, online search/results on the right.
-- **Touch controls:** play/pause, stop, next, previous, select any search result, page through up to 20 results.
-- **Progress/seek bar** with elapsed time, duration and song/artist labels (duration depends on the media provider).
-- **On-screen keyboard search** using the official native input callbacks; tap the search field to replace the current search query.
-- **Audius streaming improvements:** check endpoint redirects and HTTP responses, retry the Audius discovery host, optional Audius API key in Mod Menu.
-- **Optional synced lyrics** from LRCLIB when available.
-- **Simple dark glass-inspired palette** and mint accent; the overlay does not implement actual backdrop blur.
-- **Automatic GitHub Release:** versioned \`.levipack\` plus changelog after successful builds.
+**Author: ReaAurelis**
 
-> **Runtime status:** development beta. UI/touch/audio have not been validated on a real Minecraft Bedrock Android device. The media catalog is **Audius**, not Spotify, YouTube Music or Kuro/NewPipeExtractor. The Kuro project's Java/Kotlin + AndroidX Media3 engine cannot be embedded directly into a native-only \`.levipack\` without an Android companion component. No Kuro code or NewPipeExtractor code was copied. Audius may require a free API key or impose service restrictions.
+## Interface / UI
+- Smaller mini player HUD at the lower left (default size 84%), with dark rounded surfaces, audio visualization, and a thin progress line.
+- Editable HUD size (55-125%) and horizontal / vertical position (0-100%) through the LeviLauncher Mod Menu.
+- Animated equalizer / artwork indicator while audio plays, with an option to disable subtle animations.
+- New two-column music panel with Now Playing, title, artist, lyrics, playback controls, seek bar, search, and six tracks per page.
+- Thin 2.7-point duration bar and smoother progress updates (about every 110 ms when animations are enabled).
+- Real SVG icons from Lucide (ISC license), rasterized to RGBA via lunaSVG, not text approximations.
+- Default full panel starts lower on the screen (26% from the top) to reduce clashes with other launcher/mod overlay buttons. Panel Top is configurable from 15-35%.
+- Settings icon opens LeviLauncher's Mod Menu. No extra LeviMusic floating buttons.
+
+## Audio
+- Audius online search (up to 20 results) and native Android MediaPlayer streaming.
+- HTTP endpoint validation, redirect handling, Audius discovery host fallback, optional Audius API key.
+- Play, pause, stop, previous, next, seek, volume and progress/duration labels.
+- LRCLIB timed lyrics when a match exists.
+
+## Limits and compatibility
+- Kuro (https://github.com/ayashiiiyo/kuro) uses NewPipeExtractor and AndroidX Media3/ExoPlayer. That app's engine is **not embedded** in this native C++ .levipack. A companion Android service with licensed playback and authenticated IPC would be needed for that integration.
+- The catalog remains **Audius**, not YouTube Music or Spotify. No access to their full copyrighted catalogs is promised.
+- The overlay cannot force itself to appear above other mods' separately layered Android views. Use Panel Top and other overlays' placement settings to reduce conflicts.
+- Animation is a lightweight data-driven visual; no true blur or alpha tween framework.
+- Intended for LeviLauncher Android v1.7.1 (Preloader commit cc08b40a); still needs end-to-end testing on a real device.
+- v0.1.2 was shown playing a song successfully by the user. v0.2.0 has not yet been tested on hardware.

@@ -19,15 +19,16 @@ target_include_directories(levimusic PRIVATE ${preloader_android_SOURCE_DIR}/inc
 target_compile_options(levimusic PRIVATE -Wall -Wextra -fvisibility=hidden -fvisibility-inlines-hidden)
 target_link_options(levimusic PRIVATE "-Wl,-z,max-page-size=16384")
 find_library(ANDROID_LOG_LIB log REQUIRED)
-target_link_libraries(levimusic PRIVATE preloader fmt::fmt ${ANDROID_LOG_LIB})
+target_link_libraries(levimusic PRIVATE preloader fmt::fmt lunasvg::lunasvg ${ANDROID_LOG_LIB})
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-0.1.0-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-0.2.0-arm64-v8a.levipack")
 add_custom_target(levipack
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json" "${PACK_DIR}/manifest.json"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:levimusic>" "${PACK_DIR}/liblevimusic.so"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${PACK_DIR}" ${CMAKE_COMMAND} -E tar cf "${PACK_FILE}" --format=zip manifest.json liblevimusic.so
+    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_LICENSES.md" "${PACK_DIR}/THIRD_PARTY_LICENSES.md"
+    COMMAND ${CMAKE_COMMAND} -E chdir "${PACK_DIR}" ${CMAKE_COMMAND} -E tar cf "${PACK_FILE}" --format=zip manifest.json liblevimusic.so THIRD_PARTY_LICENSES.md
     DEPENDS levimusic
     VERBATIM)

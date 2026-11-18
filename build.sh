@@ -6,4 +6,4 @@ cmake -S . -B build -G Ninja \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
   -DCMAKE_BUILD_TYPE=Release
 cmake --build build --target levipack --parallel 2
-printf 'Output: build/LeviMusic-0.1.0-arm64-v8a.levipack\n'
+printf 'Output: build/LeviMusic-0.2.0-arm64-v8a.levipack\n'
