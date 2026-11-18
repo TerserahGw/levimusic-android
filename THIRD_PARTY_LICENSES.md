@@ -64,3 +64,9 @@ The companion APK includes NewPipeExtractor and is distributed under GNU GPL v3;
 AndroidX Media3: https://developer.android.com/media/media3 (Apache License 2.0).
 OkHttp: https://github.com/square/okhttp (Apache License 2.0).
 The app icon is original vector artwork, not Apple or Spotify branding.
+
+## BedrockTools (world renderer reference)
+
+Source: https://github.com/QYCottage/BedrockTools
+
+GPL-3.0. LeviMusic's optional 3D world renderer is adapted from the publicly documented signature-resolution and Tessellator-hook approach in BedrockTools, including ARM64 signatures and version-specific render offsets. The renderer logic and Latin glyph bitmaps are independently authored in src/WorldLyrics3D.hpp. No BedrockTools binaries are redistributed. Native renderer compatibility is not guaranteed across Minecraft versions.

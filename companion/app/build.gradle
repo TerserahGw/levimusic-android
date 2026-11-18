@@ -8,7 +8,7 @@ android {
         minSdk 28
         targetSdk 34
         versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10200')
-        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.2.0-rc1')
+        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.2.2-rc1')
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

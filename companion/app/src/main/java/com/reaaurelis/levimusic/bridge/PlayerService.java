@@ -40,6 +40,7 @@ public final class PlayerService extends MediaSessionService {
     private static volatile PlayerService active;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService resolver=Executors.newSingleThreadExecutor();
+    private final ExecutorService radioWorker=Executors.newSingleThreadExecutor();
     private ExoPlayer player;
     private MediaSession session;
     private volatile MusicCatalog.Song song;
@@ -50,6 +51,7 @@ public final class PlayerService extends MediaSessionService {
     private volatile boolean autoplay=true;
     private int navigationGeneration=0;
     private boolean endQueued=false;
+    private boolean radioFilling=false, pendingNext=false;
 
     public static boolean isActive(){return active!=null;}
     public static JSONObject getStatus() {
@@ -95,34 +97,58 @@ public final class PlayerService extends MediaSessionService {
         });
         return true;
     }
+    public static void requestRadioRefill(){
+        PlayerService instance=active;
+        if(instance!=null)instance.handler.post(instance::fillRadio);
+    }
     private void advance(int direction){
         MusicCatalog.Song current=song;
         if(current==null)return;
-        MusicCatalog.Song neighbor=MusicCatalog.neighbor(current.id,direction);
-        if(neighbor!=null){startTrack(neighbor);return;}
-        if(direction<0 || MusicCatalog.isPlaylistQueue()) {
-            statusMessage="No previous/next playlist track";
+        MusicCatalog.Song next=MusicCatalog.neighbor(current.id,direction);
+        if(next!=null){startTrack(next);return;}
+        if(direction<0 || MusicCatalog.isPlaylistQueue()){
+            statusMessage="No previous or next playlist track";
             return;
         }
-        // End of the search queue: extend it from actual YouTube related items.
-        final int generation=++navigationGeneration;
-        final List<String> exclude=new ArrayList<>(recentSongs);
-        statusMessage="Finding related music...";
-        loading=true;
-        resolver.execute(()->{
-            MusicCatalog.Song recommended=null;
-            try{recommended=MusicCatalog.recommendAfter(current,exclude);}
-            catch(Exception error){Log.w(TAG,"Could not recommend next song",error);}
-            final MusicCatalog.Song next=recommended;
+        pendingNext=true;
+        statusMessage="Finding a recommended song...";
+        fillRadio();
+    }
+    /**
+     * Keep the current song + exactly three visible upcoming radio suggestions.
+     * The displayed queue is independent of search-result order.
+     */
+    private void fillRadio(){
+        MusicCatalog.Song current=song;
+        if(current==null || MusicCatalog.isPlaylistQueue() || radioFilling)return;
+        int required=3-MusicCatalog.upcomingCount(current.id);
+        if(required<=0){
+            if(pendingNext){pendingNext=false;advance(1);}
+            return;
+        }
+        radioFilling=true;
+        final int generation=navigationGeneration;
+        final List<String> excluded=MusicCatalog.excludedIds(new ArrayList<>(recentSongs));
+        radioWorker.execute(()->{
+            List<MusicCatalog.Song> suggestions=List.of();
+            try{suggestions=MusicCatalog.recommendMany(current,excluded,required);}
+            catch(Exception e){Log.w(TAG,"Recommendation batch failed",e);}
+            final List<MusicCatalog.Song> batch=suggestions;
             handler.post(()->{
-                if(player==null || generation!=navigationGeneration || song!=current)return;
-                loading=false;
-                if(next==null){
-                    statusMessage="No related track available; search for another song";
+                radioFilling=false;
+                if(player==null || song!=current || navigationGeneration!=generation) {
+                    // An old batch must never overwrite an entirely new radio.
+                    if(song!=null && !MusicCatalog.isPlaylistQueue())fillRadio();
                     return;
                 }
-                MusicCatalog.appendRecommendation(next);
-                startTrack(next);
+                for(MusicCatalog.Song suggestion:batch)MusicCatalog.appendRecommendation(suggestion);
+                if(pendingNext){
+                    pendingNext=false;
+                    MusicCatalog.Song next=MusicCatalog.neighbor(current.id,1);
+                    if(next!=null){startTrack(next);return;}
+                    statusMessage="Recommendations unavailable. Choose a new song.";
+                }
+                // Do not loop forever when upstream returned fewer than requested.
             });
         });
     }
@@ -214,7 +240,9 @@ public final class PlayerService extends MediaSessionService {
             while(recentSongs.size()>16)recentSongs.removeFirst();
         }
         song=selected;
+        pendingNext=false;
         loading=true;playing=false;positionMs=0L;durationMs=selected.durationMs;
+        if(!MusicCatalog.isPlaylistQueue())fillRadio();
         statusMessage="Resolving stream...";
         player.stop();
         resolver.execute(()->{
@@ -260,7 +288,8 @@ public final class PlayerService extends MediaSessionService {
                 .put("playing",playing)
                 .put("loading",loading)
                 .put("autoplay",autoplay)
-                .put("queueMode",MusicCatalog.isPlaylistQueue()?"playlist":"recommendations")
+                .put("queueMode",MusicCatalog.isPlaylistQueue()?"playlist":"radio")
+                .put("nextCount",MusicCatalog.upcomingCount(current==null?"":current.id))
                 .put("positionMs",positionMs)
                 .put("durationMs",durationMs)
                 .put("message",statusMessage);
@@ -272,6 +301,7 @@ public final class PlayerService extends MediaSessionService {
         active=null;
         handler.removeCallbacks(snapshot);
         resolver.shutdownNow();
+        radioWorker.shutdownNow();
         if(session!=null){session.release();session=null;}
         if(player!=null){player.release();player=null;}
         super.onDestroy();

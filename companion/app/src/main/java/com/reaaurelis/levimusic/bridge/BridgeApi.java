@@ -201,8 +201,39 @@ public final class BridgeApi {
             if(parts.length<3||!"GET".equals(parts[0])) {
                 status=405;json=new JSONObject().put("error","GET only");
             }else if(path.equals("/v1/status"))json=state();
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.1.0").put("api",2);
-            else if(path.equals("/v1/queue"))json=MusicCatalog.queueJson();
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.2.2").put("api",3);
+            else if(path.equals("/v1/queue")){
+                JSONObject player=PlayerService.getStatus();
+                String id=player==null?"":player.optString("id");
+                json=MusicCatalog.queueJson(id);
+            }
+            else if(path.startsWith("/v1/queue/")){
+                String op=path.substring("/v1/queue/".length()).split("[?]")[0];
+                String id=getParam(path,"id");
+                JSONObject player=PlayerService.getStatus();
+                String now=player==null?"":player.optString("id");
+                boolean accepted=false;
+                String message="Unknown queue command";
+                switch(op){
+                    case "add":
+                        accepted=MusicCatalog.enqueue(MusicCatalog.find(id));
+                        message=accepted?"Added to Up Next":"Song already queued or unavailable";
+                        break;
+                    case "remove":
+                        accepted=MusicCatalog.removeUpcoming(id,now);
+                        if(accepted)PlayerService.requestRadioRefill();
+                        message=accepted?"Removed from Up Next":"Cannot remove current song";
+                        break;
+                    case "play": {
+                        MusicCatalog.Song selected=MusicCatalog.find(id);
+                        accepted=selected!=null&&PlayerService.play(context,selected);
+                        message=accepted?"Playing from Up Next":"Song no longer available";
+                        break;
+                    }
+                    default:status=404;
+                }
+                json=new JSONObject().put("accepted",accepted).put("message",message);
+            }
             else if(path.startsWith("/v1/control?"))json=control(path);
             else if(path.startsWith("/v1/search?")){
                 String query=URLDecoder.decode(getParam(path,"query"),"UTF-8");
@@ -211,7 +242,8 @@ public final class BridgeApi {
             }
             else if(path.equals("/v1/capabilities"))
                 json=new JSONObject().put("api",2).put("playlist",true).put("search",true)
-                    .put("player",true).put("pairing","local-clipboard");
+                    .put("player",true).put("radio3",true)
+                    .put("queueEditing",true).put("pairing","local-clipboard");
             else if(path.equals("/v1/playlists")||path.startsWith("/v1/playlists?")){
                 String filter=URLDecoder.decode(getParam(path,"query"),"UTF-8");
                 json=PlaylistStore.list(context,filter);
@@ -242,7 +274,7 @@ public final class BridgeApi {
             else if(path.startsWith("/v1/play?")){
                 String id=getParam(path,"id");
                 MusicCatalog.Song song=MusicCatalog.find(id);
-                MusicCatalog.activateSearchQueue();
+                if(song!=null)MusicCatalog.activateSearchQueue(song);
                 boolean started=PlayerService.play(context,song);
                 json=new JSONObject().put("accepted",started)
                     .put("message",started?"Playback requested":"Open LeviMusic app first or search again");

@@ -320,7 +320,7 @@ public final class MainActivity extends Activity {
             addSong.setOnClickListener(v->addToPlaylist(song));
             add(row,addSong,42,46);
             row.setOnClickListener(v->{
-                MusicCatalog.activateSearchQueue();
+                MusicCatalog.activateSearchQueue(song);
                 if(!PlayerService.play(this,song))headerStatus.setText("Start playback from the app first.");
                 else headerStatus.setText("Connecting to stream...");
             });
