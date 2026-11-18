@@ -93,7 +93,8 @@ public final class MusicCatalog {
     public static synchronized Song neighbor(String id,int direction){
         int at=-1;
         for(int i=0;i<RESULTS.size();i++)if(RESULTS.get(i).id.equals(id)){at=i;break;}
-        if(at<0||RESULTS.isEmpty())return null;
+        if(RESULTS.size()<=1)return null;
+        if(at<0)return direction>=0?RESULTS.get(0):RESULTS.get(RESULTS.size()-1);
         return RESULTS.get((at+direction+RESULTS.size())%RESULTS.size());
     }
 
@@ -113,7 +114,8 @@ public final class MusicCatalog {
             if(id.isEmpty())continue;
             String art="";
             if(stream.getThumbnails()!=null&&!stream.getThumbnails().isEmpty())
-                art=stream.getThumbnails().get(0).getUrl();
+                art=stream.getThumbnails().get(stream.getThumbnails().size()-1).getUrl();
+            if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
             found.add(new Song(id,stream.getName(),stream.getUploaderName(),url,art,
                     Math.max(0,stream.getDuration())*1000L));
             if(found.size()>=25)break;
@@ -125,12 +127,27 @@ public final class MusicCatalog {
         return found;
     }
 
+    public static JSONObject queueJson() {
+        JSONObject output=new JSONObject();
+        JSONArray items=new JSONArray();
+        synchronized(MusicCatalog.class) {
+            for(Song song:RESULTS)items.put(song.json());
+        }
+        try{output.put("success",true).put("tracks",items).put("count",items.length());}
+        catch(Exception ignored){}
+        return output;
+    }
     public static String idFromUrl(String url){
         if(url==null)return "";
         int at=url.indexOf("v=");
         if(at>=0){
             String piece=url.substring(at+2).split("[&#?]")[0];
             return piece.matches("[A-Za-z0-9_-]{11}")?piece:"";
+        }
+        int atShort=url.indexOf("youtu.be/");
+        if(atShort>=0){
+            String piece=url.substring(atShort+9).split("[&#?/]")[0];
+            if(piece.matches("[A-Za-z0-9_-]{11}"))return piece;
         }
         return "";
     }

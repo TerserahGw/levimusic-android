@@ -1,18 +1,16 @@
-# LeviMusic v1.0.0 RC — Features
+# LeviMusic 1.0.1 — Release Candidate
 
 **Author: ReaAurelis**
 
-- Full standalone music searching, result selection and Media3 playback inside the Android companion app.
-- Foreground MediaSession music service, title, artist, transport controls and seekbar.
-- New custom Android launcher icon, compact black/gray native UI.
-- Native Minecraft game mod can search and choose tracks through authenticated local Bridge search/play endpoints.
-- Native mod can also show playback metadata, elapsed/duration, pause/play, next/previous and seek.
-- Official Spotify/YouTube Music sessions still controllable through Android MediaSession where permitted.
-- No hardcoded daily quota; upstream providers may apply restrictions.
-- Synchronized LRCLIB lyrics with duration matching and persistent line-per-timestamp timing.
-- White karaoke-style HUD lyric text with black outline, no background plate.
-- Smaller dark mini-player with adjustable size, X/Y placement and settings.
-- Lucide SVG controls, minified UI spacing, simple animations.
-- Full GPL-3.0 source and third party credits.
+- Independent companion APK with AndroidX Media3/ExoPlayer, native lightweight music library and track search using unofficial NewPipeExtractor.
+- Independent authenticated localhost Bridge API; **Notification Access is no longer required for the built-in player, search and Minecraft control**.
+- API routes: health, status, search, play by track ID, playlist/queue snapshot, media controls and seek.
+- Longer timeouts for slow online search requests made inside Minecraft.
+- Play/Pause and improved Next/Previous behavior based on the companion's track queue.
+- Cover art displayed for searches and current song in the companion APK.
+- Cover artwork for the current song in the compact Minecraft HUD and full now-playing panel when the artwork URL is accessible.
+- LRCLIB synchronized lyrics lookup with client header and improved song/artist normalization; transparent white outline lyric HUD remains for its full timestamp window.
+- No added playback limit; actual providers may restrict access.
+- Native arm64-v8a `.levipack` for LeviLauncher Android and separate Android `.apk`.
 
-**Caveat:** The new standalone engine uses unofficial NewPipeExtractor YouTube searching/stream discovery. It is not licensed full-catalog Spotify/YouTube Music access, is not guaranteed unlimited, and requires real-device validation before Stable.
+**Known limitations:** Does not offer Spotify Premium or YouTube Music Premium for free, full catalogue guarantees, or guaranteed lyric coverage. API and runtime changes are a **Release Candidate**, not verified Stable without a real Android/Minecraft test.

@@ -8,6 +8,12 @@ import android.content.ClipData;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.widget.ImageView;
+import java.io.InputStream;
+import java.net.URL;
+import java.util.LinkedHashMap;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
@@ -40,10 +46,16 @@ public final class MainActivity extends Activity {
     private static final int SOFT=0xFF777B83;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService io=Executors.newSingleThreadExecutor();
+    private final ExecutorService artIo=Executors.newFixedThreadPool(3);
     private TextView currentTitle,currentArtist,timeLabel,trackCount,empty,headerStatus;
     private LinearLayout list;
     private EditText searchInput;
     private ImageButton playButton;
+    private ImageView currentCover;
+    private String currentCoverUrl="";
+    private final LinkedHashMap<String,Bitmap> coverCache=new LinkedHashMap<String,Bitmap>(18,.75f,true){
+        @Override protected boolean removeEldestEntry(java.util.Map.Entry<String,Bitmap> item){return size()>18;}
+    };
     private SeekBar timeline;
     private boolean dragging=false,searching=false;
     private int currentDuration=0;
@@ -55,6 +67,9 @@ public final class MainActivity extends Activity {
         if(Build.VERSION.SDK_INT>=33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 !=PackageManager.PERMISSION_GRANTED)requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS},27);
         buildUI();
+        BridgeApi.ensureStarted(getApplicationContext());
+        Intent ready=new Intent(this,PlayerService.class).setAction(PlayerService.ACTION_READY);
+        try { startForegroundService(ready); } catch(Exception ex){ android.util.Log.w("LeviMusic","Could not warm up media service",ex); }
         handler.post(poll);
     }
     private int dp(float n){return (int)(getResources().getDisplayMetrics().density*n+.5f);}
@@ -153,10 +168,12 @@ public final class MainActivity extends Activity {
 
         LinearLayout row=new LinearLayout(this);
         row.setGravity(Gravity.CENTER_VERTICAL);
-        TextView album=text("♫",27,PRIMARY,true);
-        album.setGravity(Gravity.CENTER);
-        album.setBackground(bg(SURFACE_ALT,14));
-        add(row,album,52,52);
+        currentCover=new ImageView(this);
+        currentCover.setImageResource(R.drawable.ic_launcher);
+        currentCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        currentCover.setBackground(bg(SURFACE_ALT,14));
+        currentCover.setClipToOutline(true);
+        add(row,currentCover,52,52);
         LinearLayout now=column();
         now.setPadding(dp(14),0,0,0);
         currentTitle=text("Nothing playing",16,PRIMARY,true);
@@ -262,9 +279,13 @@ public final class MainActivity extends Activity {
             row.setGravity(Gravity.CENTER_VERTICAL);
             row.setBackground(bg(SURFACE,13));
             row.setPadding(dp(14),dp(4),dp(12),dp(4));
-            TextView num=text(String.format(Locale.ROOT,"%02d",number),11,SOFT,true);
-            num.setGravity(Gravity.CENTER);
-            add(row,num,32,50);
+            ImageView thumbnail=new ImageView(this);
+            thumbnail.setImageResource(R.drawable.ic_launcher);
+            thumbnail.setScaleType(ImageView.ScaleType.CENTER_CROP);
+            thumbnail.setBackground(bg(SURFACE_ALT,9));
+            thumbnail.setClipToOutline(true);
+            add(row,thumbnail,46,46);
+            loadArtInto(thumbnail,song.art);
             LinearLayout details=column();
             details.setPadding(dp(8),0,dp(8),0);
             TextView title=text(song.title,14,PRIMARY,true);
@@ -305,10 +326,70 @@ public final class MainActivity extends Activity {
                 }
                 timeLabel.setText(format(position)+" / "+format(duration));
                 headerStatus.setText(state.optString("message",""));
+                showCover(state.optString("art",""));
             }
             handler.postDelayed(this,450);
         }
     };
+    private void loadArtInto(ImageView target,String url){
+        if(url==null||!url.startsWith("https://"))return;
+        target.setTag(url);
+        Bitmap cached;
+        synchronized(coverCache){cached=coverCache.get(url);}
+        if(cached!=null){target.setImageBitmap(cached);return;}
+        final String request=url;
+        artIo.execute(()->{
+            try{
+                java.net.URLConnection connection=new URL(request).openConnection();
+                connection.setConnectTimeout(4500);
+                connection.setReadTimeout(4500);
+                try(InputStream stream=connection.getInputStream()){
+                    BitmapFactory.Options options=new BitmapFactory.Options();
+                    options.inSampleSize=2;
+                    Bitmap bitmap=BitmapFactory.decodeStream(stream,null,options);
+                    if(bitmap==null)return;
+                    synchronized(coverCache){coverCache.put(request,bitmap);}
+                    runOnUiThread(()->{
+                        if(target!=null && request.equals(target.getTag()))
+                            target.setImageBitmap(bitmap);
+                    });
+                }
+            }catch(Exception ignored){}
+        });
+    }
+    private void showCover(String url){
+        if(url==null)url="";
+        if(url.equals(currentCoverUrl))return;
+        currentCoverUrl=url;
+        if(url.isEmpty()||!url.startsWith("https://")){
+            currentCover.setImageResource(R.drawable.ic_launcher);
+            return;
+        }
+        final String requested=url;
+        Bitmap fromCache;
+        synchronized(coverCache){fromCache=coverCache.get(requested);}
+        if(fromCache!=null){currentCover.setImageBitmap(fromCache);return;}
+        currentCover.setImageResource(R.drawable.ic_launcher);
+        artIo.execute(()->{
+            try{
+                URL remote=new URL(requested);
+                java.net.URLConnection connection=remote.openConnection();
+                connection.setConnectTimeout(5500);
+                connection.setReadTimeout(5500);
+                try(InputStream stream=connection.getInputStream()){
+                    BitmapFactory.Options options=new BitmapFactory.Options();
+                    options.inSampleSize=2;
+                    Bitmap bitmap=BitmapFactory.decodeStream(stream,null,options);
+                    if(bitmap==null)return;
+                    synchronized(coverCache){coverCache.put(requested,bitmap);}
+                    runOnUiThread(()->{
+                        if(requested.equals(currentCoverUrl)&&currentCover!=null)
+                            currentCover.setImageBitmap(bitmap);
+                    });
+                }
+            }catch(Exception ignored){}
+        });
+    }
     private void showBridgeSettings(){
         String token=BridgeService.getOrCreateToken(this);
         String info="Connect the Minecraft mod to this app.\n\n"
@@ -331,6 +412,6 @@ public final class MainActivity extends Activity {
             .show();
     }
     @Override public void onDestroy(){
-        handler.removeCallbacks(poll);io.shutdownNow();super.onDestroy();
+        handler.removeCallbacks(poll);io.shutdownNow();artIo.shutdownNow();super.onDestroy();
     }
 }

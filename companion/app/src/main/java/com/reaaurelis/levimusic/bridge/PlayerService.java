@@ -33,6 +33,7 @@ public final class PlayerService extends MediaSessionService {
     private static final String CHANNEL="levimusic_player";
     private static final int NOTIFICATION_ID=1030;
     public static final String ACTION_PLAY="com.reaaurelis.levimusic.PLAY";
+    public static final String ACTION_READY="com.reaaurelis.levimusic.READY";
     private static volatile PlayerService active;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService resolver=Executors.newSingleThreadExecutor();
@@ -94,6 +95,7 @@ public final class PlayerService extends MediaSessionService {
     @Override public void onCreate(){
         super.onCreate();
         active=this;
+        BridgeApi.ensureStarted(getApplicationContext());
         NotificationManager notifications=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if(notifications!=null && Build.VERSION.SDK_INT>=26){
             NotificationChannel chan=new NotificationChannel(CHANNEL,"LeviMusic Playback",NotificationManager.IMPORTANCE_LOW);
@@ -134,6 +136,11 @@ public final class PlayerService extends MediaSessionService {
     };
     @Override public int onStartCommand(Intent intent,int flags,int startId){
         int original=super.onStartCommand(intent,flags,startId);
+        if(intent!=null&&ACTION_READY.equals(intent.getAction())) {
+            try{startForeground(NOTIFICATION_ID,makeNotification("Connected to Minecraft"));
+            }catch(Exception e){Log.w(TAG,"Idle player foreground service unavailable",e);}
+            return START_STICKY;
+        }
         if(intent!=null&&ACTION_PLAY.equals(intent.getAction())){
             try{startForeground(NOTIFICATION_ID,makeNotification("Connecting to music..."));}
             catch(Exception e){Log.e(TAG,"Cannot begin foreground media service",e);}
@@ -197,6 +204,8 @@ public final class PlayerService extends MediaSessionService {
         try{
             json.put("available",current!=null)
                 .put("provider","LeviMusic • YouTube (unofficial)")
+                .put("art",current==null?"":current.art)
+                .put("id",current==null?"":current.id)
                 .put("title",current==null?"":current.title)
                 .put("artist",current==null?"":current.artist)
                 .put("playing",playing)

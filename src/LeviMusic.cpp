@@ -1,4 +1,4 @@
-// LeviMusic for LeviLauncher Android, beta 0.1.2
+// LeviMusic for LeviLauncher Android, v1.0.1 RC
 // Music discovery / playback: Audius public API (not Spotify/YouTube scraping).
 // Lyrics: optional LRCLIB synchronized lyrics, only when available.
 #include <pl/Mod.hpp>
@@ -39,6 +39,7 @@ struct Track {
     std::string id;
     std::string title;
     std::string artist;
+    std::string art;
 };
 struct Lyric {
     int ms = 0;
@@ -149,6 +150,18 @@ std::string getHttp(JNIEnv* env, const std::string& url) {
             jmethodID input = env->GetMethodID(connClass, "getInputStream", "()Ljava/io/InputStream;");
             if (connectTimeout) env->CallVoidMethod(conn, connectTimeout, 8000);
             if (readTimeout) env->CallVoidMethod(conn, readTimeout, 8000);
+            // LRCLIB encourages a descriptive client header; some edges reject
+            // default Java URLConnection clients.
+            if(url.find("lrclib.net")!=std::string::npos){
+                jmethodID header=env->GetMethodID(connClass,"setRequestProperty",
+                    "(Ljava/lang/String;Ljava/lang/String;)V");
+                jstring k=env->NewStringUTF("User-Agent");
+                jstring v=env->NewStringUTF("LeviMusic/1.0.1 (https://github.com/TerserahGw/levimusic-android)");
+                if(header && k && v)env->CallVoidMethod(conn,header,k,v);
+                clearException(env,"LRCLIB user agent");
+                if(k)env->DeleteLocalRef(k);
+                if(v)env->DeleteLocalRef(v);
+            }
             if (input) stream = env->CallObjectMethod(conn, input);
             clearException(env, "getInputStream");
             env->DeleteLocalRef(connClass);
@@ -393,7 +406,12 @@ std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0) {
     }
     const auto split=cleaned.find(" - ");
     if(split!=std::string::npos && split+3<cleaned.size()) {
+        auto inferredArtist=cleanLyricTitle(cleaned.substr(0,split));
         auto withoutPrefix=cleanLyricTitle(cleaned.substr(split+3));
+        if(!inferredArtist.empty() && !withoutPrefix.empty()) {
+            auto inferred=searchLyricsRaw(env,withoutPrefix,inferredArtist,duration);
+            if(!inferred.empty())return inferred;
+        }
         auto result=searchLyricsRaw(env,withoutPrefix,tr.artist,duration);
         if(!result.empty())return result;
         return searchLyricsRaw(env,withoutPrefix,"",duration);
@@ -466,7 +484,11 @@ std::string bridgeGet(const std::string& path,const std::string& token) {
     for(char c:token)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return {};
     int fd=::socket(AF_INET,SOCK_STREAM,0);
     if(fd<0)return {};
-    timeval timeout{};timeout.tv_sec=0;timeout.tv_usec=450000;
+    // External searches run on the native worker and may take several seconds.
+    const int timeoutMs=path.rfind("/v1/search?",0)==0?30000:
+                       path.rfind("/v1/play?",0)==0?3500:1500;
+    timeval timeout{};timeout.tv_sec=timeoutMs/1000;
+    timeout.tv_usec=(timeoutMs%1000)*1000;
     setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
     setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
     sockaddr_in address{};address.sin_family=AF_INET;
@@ -477,7 +499,7 @@ std::string bridgeGet(const std::string& path,const std::string& token) {
         std::string request="GET "+path+" HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nX-LeviMusic-Token: "+token+"\r\n\r\n";
         if(::send(fd,request.data(),request.size(),MSG_NOSIGNAL)>0) {
             char buf[4096];
-            while(body.size()<65536) {
+            while(body.size()<262144) {
                 ssize_t got=::recv(fd,buf,sizeof(buf),0);
                 if(got<=0)break;
                 body.append(buf,static_cast<size_t>(got));
@@ -508,6 +530,7 @@ std::vector<Track> parseBridgeSearch(JNIEnv* env,const std::string& source) {
             song.id=optString(env,object,"id");
             song.title=optString(env,object,"title");
             song.artist=optString(env,object,"artist");
+            song.art=optString(env,object,"art");
             if(!song.id.empty()&&!song.title.empty())tracks.push_back(std::move(song));
             env->DeleteLocalRef(object);
         }
@@ -520,7 +543,7 @@ std::vector<Track> parseBridgeSearch(JNIEnv* env,const std::string& source) {
 
 struct BridgeState {
     bool connected=false,available=false,playing=false;
-    std::string title,artist,provider,message;
+    std::string title,artist,provider,message,art;
     int elapsed=0,duration=0;
 };
 BridgeState decodeBridge(JNIEnv* env,const std::string& response) {
@@ -534,10 +557,56 @@ BridgeState decodeBridge(JNIEnv* env,const std::string& response) {
     result.artist=optString(env,root,"artist");
     result.provider=optString(env,root,"provider");
     result.message=optString(env,root,"message");
+    result.art=optString(env,root,"art");
     try{result.elapsed=std::max(0,std::stoi(optString(env,root,"positionMs")));}catch(...){}
     try{result.duration=std::max(0,std::stoi(optString(env,root,"durationMs")));}catch(...){}
     env->DeleteLocalRef(root);
     return result;
+}
+
+
+bool registerCover(JNIEnv* env,const std::string& url,const std::string& id){
+    if(url.rfind("https://",0)!=0 || url.size()>2048)return false;
+    const std::string raw=getHttp(env,url);
+    if(raw.empty() || raw.size()>750000)return false;
+    const int dimension=96;
+    jbyteArray bytes=env->NewByteArray(static_cast<jsize>(raw.size()));
+    if(!bytes)return false;
+    env->SetByteArrayRegion(bytes,0,static_cast<jsize>(raw.size()),reinterpret_cast<const jbyte*>(raw.data()));
+    jclass decoder=env->FindClass("android/graphics/BitmapFactory");
+    jmethodID decode=decoder?env->GetStaticMethodID(decoder,"decodeByteArray","([BII)Landroid/graphics/Bitmap;"):nullptr;
+    jobject bitmap=decode?env->CallStaticObjectMethod(decoder,decode,bytes,0,static_cast<jint>(raw.size())):nullptr;
+    bool okay=!clearException(env,"BitmapFactory decode") && bitmap!=nullptr;
+    if(decoder)env->DeleteLocalRef(decoder);
+    env->DeleteLocalRef(bytes);
+    if(!okay)return false;
+    jclass bmp=env->FindClass("android/graphics/Bitmap");
+    jmethodID scale=bmp?env->GetStaticMethodID(bmp,"createScaledBitmap","(Landroid/graphics/Bitmap;IIZ)Landroid/graphics/Bitmap;"):nullptr;
+    jobject reduced=scale?env->CallStaticObjectMethod(bmp,scale,bitmap,dimension,dimension,JNI_TRUE):nullptr;
+    okay=!clearException(env,"scale cover") && reduced!=nullptr;
+    env->DeleteLocalRef(bitmap);
+    if(!okay){if(bmp)env->DeleteLocalRef(bmp);return false;}
+    jintArray pixels=env->NewIntArray(dimension*dimension);
+    jmethodID getPixels=bmp?env->GetMethodID(bmp,"getPixels","([IIIIIII)V"):nullptr;
+    if(pixels && getPixels)env->CallVoidMethod(reduced,getPixels,pixels,0,dimension,0,0,dimension,dimension);
+    okay=pixels && !clearException(env,"getPixels");
+    std::vector<unsigned char> rgba(dimension*dimension*4);
+    if(okay){
+        std::vector<jint> argb(dimension*dimension);
+        env->GetIntArrayRegion(pixels,0,dimension*dimension,argb.data());
+        okay=!clearException(env,"cover pixels");
+        if(okay)for(int i=0;i<dimension*dimension;i++){
+            uint32_t pixel=static_cast<uint32_t>(argb[static_cast<size_t>(i)]);
+            rgba[static_cast<size_t>(i)*4+0]=static_cast<unsigned char>((pixel>>16)&255);
+            rgba[static_cast<size_t>(i)*4+1]=static_cast<unsigned char>((pixel>>8)&255);
+            rgba[static_cast<size_t>(i)*4+2]=static_cast<unsigned char>(pixel&255);
+            rgba[static_cast<size_t>(i)*4+3]=static_cast<unsigned char>((pixel>>24)&255);
+        }
+    }
+    if(pixels)env->DeleteLocalRef(pixels);
+    env->DeleteLocalRef(reduced);
+    if(bmp)env->DeleteLocalRef(bmp);
+    return okay && pl::modmenu::registerImage(id,rgba,dimension,dimension);
 }
 
 class AndroidPlayer {
@@ -719,6 +788,8 @@ class LeviMusic {
     std::vector<Lyric> lyrics_;
     std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
     std::string info_="Tap to open your music library", lyric_, apiKey_, bridgeKey_;
+    std::string coverUrl_,coverImageId_;
+    int coverCount_=0;
     int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
     std::atomic<bool> enabled_{false};
@@ -733,7 +804,7 @@ public:
     static LeviMusic& instance(){static LeviMusic mod;return mod;}
     bool load(){
         vm_=self_.getJavaVM();
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.0.0 RC loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.0.1 RC loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -918,7 +989,7 @@ private:
         if(!enabled_)return;
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
         if(!l.ok())return;
-        std::string title,artist,info,query,lyric;
+        std::string title,artist,info,query,lyric,coverImage;
         std::vector<Track> tracks;
         std::vector<Lyric> timedLyrics;
         float lyricAge=100.f;
@@ -926,7 +997,7 @@ private:
         bool open,showHud,playing,typing;
         {
             std::lock_guard lock(mu_);
-            title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";
+            title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";coverImage=coverImageId_;
             tracks=results_;timedLyrics=lyrics_;
             lyricAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-lyricChanged_).count();
             current=selected_;page=page_;
@@ -995,8 +1066,16 @@ private:
                 box(l.mini,0xF11D2026U,15*miniScale);
                 box({l.mini.x,l.mini.y,l.mini.w,1.1f*u},0x66FFFFFFU,2.f);
                 const float sz=17*u*miniScale;
-                disc(l.mini.x+24*u*miniScale,l.mini.y+l.mini.h*.50f,sz,0xFF37393DU);
-                icon("disc-3",l.mini.x+13*u*miniScale,l.mini.y+(l.mini.h-23*u*miniScale)/2,23*u*miniScale);
+                if(!coverImage.empty()) {
+                    pl::modmenu::DrawCommand c;
+                    c.type=pl::modmenu::DrawCommandType::Image;c.imageId=coverImage;
+                    c.x=l.mini.x+8*u*miniScale;c.y=l.mini.y+8*u*miniScale;
+                    c.w=34*u*miniScale;c.h=34*u*miniScale;c.color=0xFFFFFFFFU;
+                    out.push_back(std::move(c));
+                } else {
+                    disc(l.mini.x+24*u*miniScale,l.mini.y+l.mini.h*.50f,sz,0xFF37393DU);
+                    icon("disc-3",l.mini.x+13*u*miniScale,l.mini.y+(l.mini.h-23*u*miniScale)/2,23*u*miniScale);
+                }
                 float x=l.mini.x+48*u*miniScale;
                 float fs=std::max(10.f,12.5f*u*miniScale);
                 text(x,l.mini.y+l.mini.h*.40f, title,fs,C_TEXT,31);
@@ -1048,7 +1127,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.0 RC",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.0.1",10.0f*u,C_DIM);
         box(l.settings,0xFF32343AU,9.f);
         icon("settings-2",l.settings.x+6*u,l.settings.y+6*u,18*u);
         box(l.close,0xFF32343AU,9.f);
@@ -1059,14 +1138,16 @@ private:
         // Left: focused now-playing card. Small art leaves room for lyrics, seek and controls.
         const float artX=l.left.x+61*u;
         const float artY=l.left.y+68*u;
-        disc(artX,artY,46*u,0xFF37393DU);
-        disc(artX,artY,38*u,0xFF1E2024U);
-        disc(artX,artY,27*u,0xFF4C4F55U);
-        disc(artX,artY,10*u,C_MINT);
-        // Animated radial highlight.
-        if(animation_ && playing) {
-            float phase=tick*.9f;
-            disc(artX+30*u*std::cos(phase),artY+30*u*std::sin(phase),3*u,0xFFBDFFF0U);
+        if(!coverImage.empty()) {
+            pl::modmenu::DrawCommand c;
+            c.type=pl::modmenu::DrawCommandType::Image;c.imageId=coverImage;
+            c.x=artX-43*u;c.y=artY-43*u;c.w=86*u;c.h=86*u;c.color=0xFFFFFFFFU;
+            out.push_back(std::move(c));
+        } else {
+            disc(artX,artY,46*u,0xFF37393DU);
+            disc(artX,artY,38*u,0xFF1E2024U);
+            disc(artX,artY,27*u,0xFF4C4F55U);
+            disc(artX,artY,10*u,C_MINT);
         }
         const float ix=l.left.x+119*u;
         text(ix,l.left.y+37*u,"NOW PLAYING",10.5f*u,C_MINT,35);
@@ -1238,7 +1319,7 @@ private:
         };
         auto lastPaint=std::chrono::steady_clock::now();
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
-        std::string previousTitle, previousArtist, previousProvider;
+        std::string previousTitle, previousArtist, previousProvider,previousArt;
         bool lastBridgeConnected=false;
         while(true){
             Job job{};bool hasJob=false;
@@ -1273,14 +1354,22 @@ private:
                                 results_.clear();selected_=-1;page_=0;
                             } else if(!key.empty()){
                                 std::string query=job.query.substr(0,70);
+                                update("Searching",job.query,"Searching via LeviMusic companion...");
                                 std::string reply=bridgeGet("/v1/search?query="+encode(env,query),key);
                                 auto found=parseBridgeSearch(env,reply);
+                                bool foundAny=!found.empty();
+                                if(!foundAny){
+                                    if(reply.empty())update("Search unavailable",job.query,"Bridge offline / request timed out");
+                                    else update("No search results",job.query,"Try another title, check connectivity");
+                                } else update("Search results",job.query,std::to_string(found.size())+" songs ready to play");
                                 {
                                     std::lock_guard lock(mu_);
                                     results_=std::move(found);
                                     selected_=-1;
                                     page_=0;
                                 }
+                            } else {
+                                update("Bridge Key missing","Open LeviMusic settings","Paste the pairing key from the APK");
                             }
                             break;
                         }
@@ -1294,8 +1383,11 @@ private:
                             }
                             if(!selectedId.empty()&&!key.empty()){
                                 std::string reply=bridgeGet("/v1/play?id="+encode(env,selectedId),key);
-                                if(reply.empty())
-                                    __android_log_print(ANDROID_LOG_WARN,TAG,"Play request rejected by Bridge");
+                                auto answer=makeJson(env,reply);
+                                bool accepted=answer && optString(env,answer,"accepted")=="true";
+                                if(answer)env->DeleteLocalRef(answer);
+                                if(!accepted)update("Play request failed","LeviMusic Bridge",
+                                    "Open the companion app and retry the track");
                             }
                             break;
                         }
@@ -1303,7 +1395,10 @@ private:
                     }
                     if(!action.empty() && !key.empty()) {
                         auto answer=bridgeGet("/v1/control?action="+action,key);
-                        if(answer.empty())__android_log_print(ANDROID_LOG_WARN,TAG,"Companion media command failed: %s",action.c_str());
+                        if(answer.empty()) {
+                            __android_log_print(ANDROID_LOG_WARN,TAG,"Companion media command failed: %s",action.c_str());
+                            update("Bridge command failed",action,"Check APK running / pairing key");
+                        }
                     }
                 }
                 auto now=std::chrono::steady_clock::now();
@@ -1313,7 +1408,7 @@ private:
                     if(!key.empty())state=decodeBridge(env,bridgeGet("/v1/status",key));
                     if(!state.connected) {
                         if(lastBridgeConnected || previousTitle!="") {
-                            previousTitle.clear();previousArtist.clear();previousProvider.clear();
+                            previousTitle.clear();previousArtist.clear();previousProvider.clear();previousArt.clear();previousArt.clear();
                         }
                         lastBridgeConnected=false;
                         {
@@ -1322,7 +1417,7 @@ private:
                             artist_="Spotify / YouTube Music";
                             info_=key.empty()?"Paste Bridge Key in LeviMusic settings":
                                   "Start LeviMusic Bridge; grant Notification Access";
-                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();
+                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();coverImageId_.clear();coverImageId_.clear();
                         }
                     } else if(!state.available) {
                         lastBridgeConnected=true;
@@ -1352,6 +1447,19 @@ private:
                             info_=state.provider+" • Music session connected";
                             playing_=state.playing;elapsed_=state.elapsed;total_=state.duration;
                             bridgePositionStamp_=std::chrono::steady_clock::now();
+                        }
+                        if(state.art!=previousArt || changed){
+                            previousArt=state.art;
+                            bool good=false;std::string imageId;
+                            if(!state.art.empty() && coverCount_<80){
+                                imageId="levimusic.cover."+std::to_string(++coverCount_);
+                                good=registerCover(env,state.art,imageId);
+                            }
+                            {
+                                std::lock_guard lock(mu_);
+                                coverImageId_=good?imageId:"";
+                                coverUrl_=state.art;
+                            }
                         }
                         if(changed && !state.title.empty()) {
                             Track track;

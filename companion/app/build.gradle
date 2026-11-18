@@ -7,8 +7,8 @@ android {
         applicationId 'com.reaaurelis.levimusic.bridge'
         minSdk 28
         targetSdk 34
-        versionCode 100
-        versionName '1.0.0-rc1'
+        versionCode 101
+        versionName '1.0.1-rc1'
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
