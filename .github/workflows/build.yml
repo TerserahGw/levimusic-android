@@ -65,6 +65,10 @@ jobs:
           obj = json.loads(path.read_text(encoding="utf-8"))
           obj["version"] = os.environ["VERSION"]
           path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          path2 = Path("manifest-standalone.json")
+          standalone = json.loads(path2.read_text(encoding="utf-8"))
+          standalone["version"] = os.environ["VERSION"]
+          path2.write_text(json.dumps(standalone,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
           print("Packaging LeviMusic version", obj["version"])
           PY
 
@@ -85,7 +89,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Compile and package .levipack
-        run: cmake --build build --target levipack --parallel 2
+        run: cmake --build build --target levipack levipack_standalone --parallel 2
 
       - name: Setup Java for Android companion
         uses: actions/setup-java@v4
@@ -122,20 +126,30 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.0.1-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.1.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
+          standalone_src="build/LeviMusic-Standalone-1.1.0-arm64-v8a.levipack"
+          standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
+          if [[ "$standalone_src" != "$standalone_release" ]]; then
+            mv "$standalone_src" "$standalone_release"
+          fi
+          unzip -t "$standalone_release"
+          unzip -p "$standalone_release" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
+          echo "standalone=$standalone_release" >> "$GITHUB_OUTPUT"
           echo "file=$release_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact for every successful build
         uses: actions/upload-artifact@v4
         with:
           name: LeviMusic-${{ steps.version.outputs.version }}-arm64-v8a
-          path: ${{ steps.package.outputs.file }}
+          path: |
+            ${{ steps.package.outputs.file }}
+            ${{ steps.package.outputs.standalone }}
           if-no-files-found: error
 
       - name: Check whether the GitHub Release exists
@@ -187,12 +201,12 @@ jobs:
               *(changes),
               "",
               "## Instalasi",
-              "Unduh berkas `.levipack` pada bagian **Assets**, lalu impor melalui menu Mods di LeviLauncher Android.",
+              "Download APK Bridge + mod LeviPack, OR install the standalone Audius-only LeviPack. Do not install two mod variants at the same time.",
               "",
               "## Catatan kompatibilitas",
               "- Status **beta / belum diuji runtime dalam Minecraft**; berhasil dikompilasi tidak menjamin playback bekerja pada semua perangkat.",
               "- Music search uses unofficial NewPipeExtractor YouTube access; provider restrictions apply, not guaranteed unlimited or official Spotify.",
-              "- Lirik dari LRCLIB hanya ditampilkan bila tersedia.",
+              "- Lirik dari LRCLIB atau file LRC yang diimpor; lirik tidak dibuat otomatis jika tidak ada data.",
               "",
           ])
           Path("release-notes.md").write_text(notes, encoding="utf-8")
@@ -206,11 +220,12 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
           PACKAGE: ${{ steps.package.outputs.file }}
+          STANDALONE: ${{ steps.package.outputs.standalone }}
           APK: build/LeviMusic-Bridge-${{ steps.version.outputs.version }}.apk
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$TAG" "$PACKAGE" "$APK" \
+          gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
             --target "$GITHUB_SHA" \
             --title "LeviMusic Online v$VERSION (Release Candidate)" \
             --notes-file release-notes.md \

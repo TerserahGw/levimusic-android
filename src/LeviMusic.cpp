@@ -28,6 +28,8 @@
 #include <cerrno>
 #include <utility>
 #include <vector>
+#include <fstream>
+#include <filesystem>
 
 namespace {
 constexpr const char* TAG = "LeviMusic";
@@ -46,7 +48,7 @@ struct Lyric {
     std::string line;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
@@ -315,9 +317,12 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
     return lines;
 }
 
-std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, const std::string& songArtist, int trackDurationMs) {
-    const std::string url = "https://lrclib.net/api/search?track_name=" + encode(env, songTitle) +
-                            (songArtist.empty()?"":"&artist_name="+encode(env,songArtist));
+std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, const std::string& songArtist,
+                                  int trackDurationMs,bool broad=false) {
+    const std::string url = broad?
+             ("https://lrclib.net/api/search?q="+encode(env,songTitle+" "+songArtist)):
+             ("https://lrclib.net/api/search?track_name="+encode(env,songTitle)+
+                (songArtist.empty()?"":"&artist_name="+encode(env,songArtist)));
     const std::string text = getHttp(env, url);
     if (text.empty()) return {};
     jclass arrayClass = env->FindClass("org/json/JSONArray");
@@ -337,7 +342,24 @@ std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, co
             jobject obj = env->CallObjectMethod(array, get, i);
             if (clearException(env, "lyrics entry") || !obj) continue;
             auto lrc = optString(env, obj, "syncedLyrics");
-            int score = 0;
+            if(optString(env,obj,"instrumental")=="true"){env->DeleteLocalRef(obj);continue;}
+            const std::string actualTitle=optString(env,obj,"trackName");
+            const std::string actualArtist=optString(env,obj,"artistName");
+            auto lower=[](std::string str){
+                for(char& c:str)if(c>='A'&&c<='Z')c=static_cast<char>(c+32);
+                return str;
+            };
+            int score=0;
+            if(!actualTitle.empty()){
+                const auto a=lower(actualTitle),b=lower(songTitle);
+                score += a==b?30000:(a.find(b)!=std::string::npos ||
+                                      b.find(a)!=std::string::npos?9000:-13000);
+            }
+            if(!songArtist.empty()&&!actualArtist.empty()){
+                const auto a=lower(actualArtist),b=lower(songArtist);
+                score += a==b?18000:(a.find(b)!=std::string::npos ||
+                                      b.find(a)!=std::string::npos?5500:-8000);
+            }
             if(trackDurationMs > 0) {
                 try {
                     int seconds = static_cast<int>(std::stod(optString(env,obj,"duration")));
@@ -394,8 +416,40 @@ std::string cleanLyricTitle(const std::string& original) {
     return out.substr(start,end-start+1);
 }
 
-std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0) {
+std::string bridgeGet(const std::string& path,const std::string& token);
+
+std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0,
+                                const std::string& bridgeKey={}) {
     if(tr.title.empty())return {};
+    // First try a user-imported LRC for the exact currently playing track.
+    if(!bridgeKey.empty()) {
+        std::string response=bridgeGet("/v1/lyrics?title="+encode(env,tr.title)+
+             "&artist="+encode(env,tr.artist),bridgeKey);
+        if(!response.empty()) {
+            jobject root=makeJson(env,response);
+            if(root){
+                std::string raw=optString(env,root,"syncedLyrics");
+                env->DeleteLocalRef(root);
+                auto local=parseLrc(raw);
+                if(!local.empty())return local;
+            }
+        }
+    }
+    // Then use LRCLIB's exact-match endpoint when title, artist and duration are known.
+    if(duration>0&&!tr.artist.empty()) {
+        const std::string url="https://lrclib.net/api/get?track_name="+encode(env,tr.title)+
+             "&artist_name="+encode(env,tr.artist)+"&album_name=&duration="+
+             std::to_string(std::max(1,(duration+500)/1000));
+        const std::string response=getHttp(env,url);
+        if(!response.empty()) {
+            jobject root=makeJson(env,response);
+            if(root){
+                auto result=parseLrc(optString(env,root,"syncedLyrics"));
+                env->DeleteLocalRef(root);
+                if(!result.empty())return result;
+            }
+        }
+    }
     auto first=searchLyricsRaw(env,tr.title,tr.artist,duration);
     if(!first.empty())return first;
     std::string cleaned=cleanLyricTitle(tr.title);
@@ -416,7 +470,9 @@ std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0) {
         if(!result.empty())return result;
         return searchLyricsRaw(env,withoutPrefix,"",duration);
     }
-    return searchLyricsRaw(env,cleaned,"",duration);
+    auto byTitle=searchLyricsRaw(env,cleaned,"",duration);
+    if(!byTitle.empty())return byTitle;
+    return searchLyricsRaw(env,cleaned,tr.artist,duration,true);
 }
 
 // Probe Audius redirects on the music worker (never on the game UI thread).
@@ -541,6 +597,30 @@ std::vector<Track> parseBridgeSearch(JNIEnv* env,const std::string& source) {
     return tracks;
 }
 
+std::vector<std::string> parsePlaylistNames(JNIEnv* env,const std::string& body) {
+    std::vector<std::string> names;
+    jobject root=makeJson(env,body);
+    if(!root)return names;
+    jobject array=optArray(env,root,"playlists");
+    if(array) {
+        jclass cls=env->FindClass("org/json/JSONArray");
+        jmethodID count=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+        jmethodID item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+        int size=count?env->CallIntMethod(array,count):0;
+        for(int i=0;i<std::min(40,size);i++){
+            jobject obj=item?env->CallObjectMethod(array,item,i):nullptr;
+            if(obj){std::string name=optString(env,obj,"name");
+                if(!name.empty())names.push_back(std::move(name));
+                env->DeleteLocalRef(obj);
+            }
+        }
+        if(cls)env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(array);
+    }
+    clearException(env,"playlist JSON");
+    env->DeleteLocalRef(root);
+    return names;
+}
 struct BridgeState {
     bool connected=false,available=false,playing=false;
     std::string title,artist,provider,message,art;
@@ -717,6 +797,76 @@ std::string shorten(const std::string& value,size_t bytes) {
     while(n>0 && (static_cast<unsigned char>(value[n])&0xC0u)==0x80u)--n;
     return value.substr(0,n)+"...";
 }
+
+bool validToken(const std::string& v) {
+    if(v.size()!=48)return false;
+    for(char c:v)if(!((c>='0'&&c<='9')||(c>='a'&&c<='f')))return false;
+    return true;
+}
+std::string clipboardToken(JNIEnv* env) {
+    jclass thread=env->FindClass("android/app/ActivityThread");
+    if(!thread||clearException(env,"clipboard thread"))return {};
+    jmethodID method=env->GetStaticMethodID(thread,"currentApplication","()Landroid/app/Application;");
+    jobject app=method?env->CallStaticObjectMethod(thread,method):nullptr;
+    if(!app||clearException(env,"clipboard application")){env->DeleteLocalRef(thread);return {};}
+    jclass context=env->GetObjectClass(app);
+    jmethodID getService=env->GetMethodID(context,"getSystemService","(Ljava/lang/String;)Ljava/lang/Object;");
+    jstring name=env->NewStringUTF("clipboard");
+    jobject service=getService?env->CallObjectMethod(app,getService,name):nullptr;
+    if(clearException(env,"clipboard service"))service=nullptr;
+    std::string token;
+    if(service) {
+        jclass manager=env->GetObjectClass(service);
+        jmethodID getClip=env->GetMethodID(manager,"getPrimaryClip","()Landroid/content/ClipData;");
+        jobject clip=getClip?env->CallObjectMethod(service,getClip):nullptr;
+        if(clip&&!clearException(env,"clipboard clip")) {
+            jclass cl=env->GetObjectClass(clip);
+            jmethodID count=env->GetMethodID(cl,"getItemCount","()I");
+            jmethodID item=env->GetMethodID(cl,"getItemAt","(I)Landroid/content/ClipData$Item;");
+            if(count&&item&&env->CallIntMethod(clip,count)>0) {
+                jobject one=env->CallObjectMethod(clip,item,0);
+                if(one) {
+                    jclass itemCl=env->GetObjectClass(one);
+                    jmethodID getText=env->GetMethodID(itemCl,"getText","()Ljava/lang/CharSequence;");
+                    jobject chars=getText?env->CallObjectMethod(one,getText):nullptr;
+                    if(chars) {
+                        jclass charCl=env->GetObjectClass(chars);
+                        jmethodID toString=env->GetMethodID(charCl,"toString","()Ljava/lang/String;");
+                        jstring str=toString?(jstring)env->CallObjectMethod(chars,toString):nullptr;
+                        token=fromJava(env,str);
+                        if(str)env->DeleteLocalRef(str);
+                        env->DeleteLocalRef(charCl);env->DeleteLocalRef(chars);
+                    }
+                    env->DeleteLocalRef(itemCl);env->DeleteLocalRef(one);
+                }
+            }
+            env->DeleteLocalRef(cl);env->DeleteLocalRef(clip);
+        }
+        env->DeleteLocalRef(manager);env->DeleteLocalRef(service);
+    }
+    if(name)env->DeleteLocalRef(name);
+    env->DeleteLocalRef(context);env->DeleteLocalRef(app);env->DeleteLocalRef(thread);
+    clearException(env,"clipboard cleanup");
+    return validToken(token)?token:std::string{};
+}
+std::string marqueeTitle(const std::string& value,size_t width,float seconds) {
+    std::vector<std::string> symbols;
+    for(size_t i=0;i<value.size();) {
+        unsigned char c=static_cast<unsigned char>(value[i]);
+        size_t n=c<0x80?1:c<0xE0?2:c<0xF0?3:4;
+        n=std::min(n,value.size()-i);
+        symbols.push_back(value.substr(i,n));i+=n;
+    }
+    if(symbols.size()<=width)return value;
+    size_t offset=static_cast<size_t>(std::max(0.f,seconds*.85f)) % (symbols.size()+7);
+    std::string view;
+    for(size_t i=0;i<width;i++) {
+        size_t index=offset+i;
+        view += index<symbols.size()?symbols[index]:" ";
+    }
+    return view;
+}
+
 std::string clockText(int ms) {
     int n=std::max(0,ms/1000);
     return std::to_string(n/60)+":"+(n%60<10?"0":"")+std::to_string(n%60);
@@ -727,7 +877,7 @@ struct Rect {
 };
 struct UI {
     float w{},h{},s{};
-    Rect mini,outer,left,right,close,settings,searchBox,searchGo,prev,play,next,stop,seek,pagePrev,pageNext;
+    Rect mini,outer,left,right,close,settings,pair,library,addSong,searchBox,searchGo,prev,play,next,stop,seek,pagePrev,pageNext;
     std::vector<Rect> rows;
     bool ok()const{return w>0&&h>0;}
 };
@@ -753,13 +903,16 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=26) {
     p.right={contentX+contentW*.43f+5*u,contentY,contentW*.57f-5*u,contentH};
     p.close={p.outer.x+p.outer.w-42*u,p.outer.y+10*u,30*u,30*u};
     p.settings={p.close.x-40*u,p.close.y,30*u,30*u};
+    p.library={p.settings.x-101*u,p.close.y,92*u,30*u};
+    p.pair={p.library.x-69*u,p.close.y,61*u,30*u};
+    p.addSong={p.right.x+p.right.w-133*u,p.right.y+52*u,39*u,27*u};
     p.searchBox={p.right.x+12*u,p.right.y+11*u,p.right.w-82*u,36*u};
     p.searchGo={p.right.x+p.right.w-58*u,p.right.y+11*u,46*u,36*u};
     const float b=p.left.y+p.left.h-58*u,mid=p.left.x+p.left.w*.5f;
-    p.stop={p.left.x+14*u,b,36*u,44*u};
-    p.prev={mid-89*u,b,45*u,44*u};
+    p.stop={-10000.f,-10000.f,0.f,0.f}; // transport stop hidden in v1.1
+    p.prev={mid-113*u,b,45*u,44*u};
     p.play={mid-33*u,b,66*u,44*u};
-    p.next={mid+44*u,b,45*u,44*u};
+    p.next={mid+68*u,b,45*u,44*u};
     p.seek={p.left.x+20*u,b-41*u,p.left.w-40*u,15*u};
     const float rowY=p.right.y+68*u;
     const float bottom=p.right.y+p.right.h-44*u;
@@ -785,6 +938,10 @@ class LeviMusic {
     std::condition_variable cv_;
     std::deque<Job> jobs_;
     std::vector<Track> results_;
+    std::vector<Track> searchCache_;
+    std::vector<std::string> playlistNames_;
+    std::string activePlaylist_;
+    int libraryMode_=0; // 0 search, 1 playlists, 2 playlist tracks
     std::vector<Lyric> lyrics_;
     std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
     std::string info_="Tap to open your music library", lyric_, apiKey_, bridgeKey_;
@@ -795,16 +952,27 @@ class LeviMusic {
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{26};
     std::atomic<bool> animation_{true};
-    std::atomic<bool> useBridge_{true},lyricsBelow_{false};
+#if defined(LEVI_STANDALONE)
+    std::atomic<bool> useBridge_{false},lyricsBelow_{false},floatingLyrics_{false};
+#else
+    std::atomic<bool> useBridge_{true},lyricsBelow_{false},floatingLyrics_{false};
+#endif
     std::chrono::steady_clock::time_point lyricChanged_{std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point bridgePositionStamp_{std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point panelToggled_{std::chrono::steady_clock::now()};
+    std::string playbackError_;
 
 public:
     LeviMusic():self_(*ll::mod::NativeMod::current()){}
     static LeviMusic& instance(){static LeviMusic mod;return mod;}
     bool load(){
         vm_=self_.getJavaVM();
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.0.1 RC loaded, vm=%p",(void*)vm_);
+        try{
+            std::ifstream keyFile(self_.getConfigDir()/"bridge.token");
+            std::string saved;
+            if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
+        }catch(...){}
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.1.0 RC loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -816,9 +984,14 @@ public:
             .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(true)
             .description("Native music HUD. Bridge mode controls Spotify or YouTube Music via companion Android app.")
             .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,"75","0","100")
-            .config("useBridge","Spotify / YouTube Music Bridge",pl::modmenu::ConfigType::Toggle,"true")
+#if defined(LEVI_STANDALONE)
+            .config("useBridge","Use Android Bridge (optional)",pl::modmenu::ConfigType::Toggle,"false")
+#else
+            .config("useBridge","Use Android Bridge",pl::modmenu::ConfigType::Toggle,"true")
+#endif
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,"false")
+            .config("floatingLyrics","Experimental floating screen lyrics (2D, not world-anchored)",pl::modmenu::ConfigType::Toggle,"false")
             .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,"")
             .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,"true")
             .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,"true")
@@ -855,7 +1028,9 @@ public:
     bool unload(){return true;}
 private:
     void setConfig(std::string_view k,std::string_view v){
-        if(k=="useBridge") {
+        if(k=="floatingLyrics") {
+            floatingLyrics_=v=="true"||v=="1";
+        } else if(k=="useBridge") {
             useBridge_=v=="true"||v=="1";
         } else if(k=="lyricBelow") {
             lyricsBelow_=v=="true"||v=="1";
@@ -871,7 +1046,9 @@ private:
             animation_ = v=="1"||v=="true";
         } else {
             std::lock_guard lock(mu_);
-            if(k=="bridgeKey")bridgeKey_=std::string(v).substr(0,100);
+            if(k=="bridgeKey"){
+                if(!v.empty())bridgeKey_=std::string(v).substr(0,100);
+            }
             else if(k=="apiKey")apiKey_=std::string(v).substr(0,200);
             else if(k=="hud")hud_=v=="1"||v=="true";
             else if(k=="lyrics")lyricsOn_=v=="1"||v=="true";
@@ -901,29 +1078,52 @@ private:
         if(e.action==0) return opened || (hud&&l.mini.contains(e.x,e.y));
         if(!opened){
             if(hud&&l.mini.contains(e.x,e.y)){
-                {std::lock_guard lock(mu_);open_=true;}
+                {std::lock_guard lock(mu_);open_=true;panelToggled_=std::chrono::steady_clock::now();}
                 paint();return true;
             }
             return false;
         }
         if(l.settings.contains(e.x,e.y)){
-            {std::lock_guard lock(mu_);open_=false;typing_=false;}
+            {std::lock_guard lock(mu_);open_=false;typing_=false;panelToggled_=std::chrono::steady_clock::now();}
             pl::input::hideKeyboard();
             pl::modmenu::requestOpenMenu();
         } else if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
             {std::lock_guard lock(mu_);open_=false;typing_=false;}
             pl::input::hideKeyboard();
+        } else if(l.pair.contains(e.x,e.y)&&useBridge_){
+            addJob(Action::Pair);
+        } else if(l.library.contains(e.x,e.y)&&useBridge_){
+            bool enter=false;
+            {
+                std::lock_guard lock(mu_);
+                if(libraryMode_==0){
+                    searchCache_=results_;libraryMode_=1;enter=true;
+                    results_.clear();query_.clear();selected_=-1;page_=0;
+                } else {
+                    libraryMode_=0;results_=searchCache_;selected_=-1;page_=0;
+                }
+            }
+            if(enter)addJob(Action::PlaylistList);
+        } else if(l.addSong.contains(e.x,e.y)&&useBridge_){
+            int mode;std::string name;
+            {std::lock_guard lock(mu_);mode=libraryMode_;name=query_;}
+            if(mode==1)addJob(Action::PlaylistCreate,name);
+            else if(mode==0)addJob(Action::PlaylistAdd);
         } else if(l.searchBox.contains(e.x,e.y)){
             {std::lock_guard lock(mu_);if(!typing_)query_.clear();typing_=true;}
             pl::input::showKeyboard();
         } else if(l.searchGo.contains(e.x,e.y)){
             std::string q;
             {std::lock_guard lock(mu_);q=query_;typing_=false;page_=0;}
-            pl::input::hideKeyboard();addJob(Action::Search,q);
+            pl::input::hideKeyboard();
+            int mode;
+            {std::lock_guard lock(mu_);mode=libraryMode_;}
+            if(mode==1)addJob(Action::PlaylistList,q);
+            else if(mode==2)addJob(Action::PlaylistList);
+            else addJob(Action::Search,q);
         } else if(l.prev.contains(e.x,e.y))addJob(Action::Previous);
         else if(l.play.contains(e.x,e.y))addJob(Action::PlayPause);
         else if(l.next.contains(e.x,e.y))addJob(Action::Next);
-        else if(l.stop.contains(e.x,e.y))addJob(Action::Stop);
         else if(l.seek.contains(e.x,e.y)){
             int duration;
             {std::lock_guard lock(mu_);duration=total_;}
@@ -934,19 +1134,31 @@ private:
         } else if(l.pagePrev.contains(e.x,e.y)){
             {std::lock_guard lock(mu_);page_=std::max(0,page_-1);}
         } else if(l.pageNext.contains(e.x,e.y)){
-            {std::lock_guard lock(mu_);if(static_cast<size_t>((page_+1)*6)<results_.size())++page_;}
+            {std::lock_guard lock(mu_);
+                size_t count=libraryMode_==1?playlistNames_.size():results_.size();
+                if(static_cast<size_t>((page_+1)*6)<count)++page_;
+            }
         } else {
-            bool tapped=false;
+            int mode,selected=-1;std::string chosenName;
             {
                 std::lock_guard lock(mu_);
+                mode=libraryMode_;
                 for(size_t i=0;i<l.rows.size();++i){
                     int n=page_*6+static_cast<int>(i);
-                    if(n<static_cast<int>(results_.size()) && l.rows[i].contains(e.x,e.y)){
-                        selected_=n;tapped=true;break;
+                    bool inRange=mode==1?n<static_cast<int>(playlistNames_.size()):
+                                         n<static_cast<int>(results_.size());
+                    if(inRange && l.rows[i].contains(e.x,e.y)){
+                        selected_=n;selected=n;
+                        if(mode==1)chosenName=playlistNames_[static_cast<size_t>(n)];
+                        break;
                     }
                 }
             }
-            if(tapped)addJob(Action::Select);
+            if(selected>=0){
+                if(mode==1)addJob(Action::PlaylistOpen,chosenName);
+                else if(mode==2)addJob(Action::PlaylistPlay,std::to_string(selected));
+                else addJob(Action::Select);
+            }
         }
         paint();return true;
     }
@@ -965,7 +1177,11 @@ private:
                 query=query_;
             }
         }
-        if(editing){if(submit){pl::input::hideKeyboard();addJob(Action::Search,query);}paint();}
+        if(editing){if(submit){
+            pl::input::hideKeyboard();
+            int mode;{std::lock_guard lock(mu_);mode=libraryMode_;}
+            addJob(mode==1?Action::PlaylistList:Action::Search,query);
+        }paint();}
         return editing;
     }
     bool key(const pl::input::KeyEvent& e){
@@ -982,7 +1198,11 @@ private:
                 query=query_;
             }
         }
-        if(editing&&e.isKeyDown){if(submit){pl::input::hideKeyboard();addJob(Action::Search,query);}paint();}
+        if(editing&&e.isKeyDown){if(submit){
+            pl::input::hideKeyboard();
+            int mode;{std::lock_guard lock(mu_);mode=libraryMode_;}
+            addJob(mode==1?Action::PlaylistCreate:Action::Search,query);
+        }paint();}
         return editing;
     }
     void paint(){
@@ -991,14 +1211,20 @@ private:
         if(!l.ok())return;
         std::string title,artist,info,query,lyric,coverImage;
         std::vector<Track> tracks;
+        std::vector<std::string> playlistNames;
+        std::string activePlaylist;
         std::vector<Lyric> timedLyrics;
         float lyricAge=100.f;
-        int current,page,elapsed,total,volume;
+        int current,page,elapsed,total,volume,libraryMode;
         bool open,showHud,playing,typing;
+        float panelAge=1.f;
         {
             std::lock_guard lock(mu_);
             title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";coverImage=coverImageId_;
-            tracks=results_;timedLyrics=lyrics_;
+            tracks=results_;playlistNames=playlistNames_;
+            activePlaylist=activePlaylist_;libraryMode=libraryMode_;
+            timedLyrics=lyrics_;
+            panelAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-panelToggled_).count();
             lyricAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-lyricChanged_).count();
             current=selected_;page=page_;
             elapsed=elapsed_;total=total_;volume=volume_;
@@ -1014,6 +1240,10 @@ private:
         out.reserve(110);
         const float u=l.s;
         const bool moving=animation_ && playing;
+        float panelProgress=std::clamp(panelAge/.24f,0.f,1.f);
+        panelProgress=panelProgress*panelProgress*(3.f-2.f*panelProgress);
+        const float panelFade=animation_?(open?panelProgress:1.f-panelProgress):1.f;
+        const bool panelVisible=open||(animation_&&panelAge<.24f);
         const bool streamingBridge=useBridge_.load();
         const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
         auto box=[&](Rect r,uint32_t color,float radius=9.f){
@@ -1060,7 +1290,7 @@ private:
             }
         };
         const float miniScale=std::clamp(hudSize_.load(),55,125)/100.f;
-        if(!open) {
+        if(!panelVisible) {
             if(showHud){
                 box({l.mini.x+2*u,l.mini.y+4*u,l.mini.w,l.mini.h},0x70000000U,15*miniScale);
                 box(l.mini,0xF11D2026U,15*miniScale);
@@ -1078,7 +1308,7 @@ private:
                 }
                 float x=l.mini.x+48*u*miniScale;
                 float fs=std::max(10.f,12.5f*u*miniScale);
-                text(x,l.mini.y+l.mini.h*.40f, title,fs,C_TEXT,31);
+                text(x,l.mini.y+l.mini.h*.40f,animation_?marqueeTitle(title,25,tick):title,fs,C_TEXT,125);
                 text(x,l.mini.y+l.mini.h*.72f, artist,fs*.77f,C_DIM,37);
                 equalizer(l.mini.x+l.mini.w-19*u*miniScale,l.mini.y+l.mini.h*.24f,
                           13*u*miniScale,l.mini.h*.47f);
@@ -1108,10 +1338,18 @@ private:
                         float fadeOut=end==INT32_MAX?1.f:std::clamp((end-elapsed)/160.f,0.f,1.f);
                         float alpha=std::clamp(fadeIn*fadeOut,0.f,1.f);
                         float subtitleY=lyricsBelow_?l.mini.y+l.mini.h+26*u:l.mini.y-16*u;
-                        if(subtitleY<25*u||subtitleY>l.h-12*u)
+                        float subtitleX=l.mini.x+3*u;
+                        if(floatingLyrics_){
+                            // Experimental 2D HUD motion, not anchored to Minecraft blocks.
+                            subtitleX=std::clamp(l.w*.45f+std::sin(tick*.68f)*33*u,
+                                                 22*u,std::max(22*u,l.w-480*u));
+                            subtitleY=std::clamp(l.h*.57f+std::cos(tick*.83f)*24*u,
+                                                 56*u,l.h-38*u);
+                        }
+                        if(!floatingLyrics_ && (subtitleY<25*u||subtitleY>l.h-12*u))
                             subtitleY=lyricsBelow_?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
                         if(subtitleY>23*u&&subtitleY<l.h-10*u)
-                            outlineText(l.mini.x+3*u,subtitleY,item.line,14.4f*u,alpha);
+                            outlineText(subtitleX,subtitleY,item.line,(floatingLyrics_?15.8f:14.4f)*u,alpha);
                     }
                 }
             }
@@ -1127,7 +1365,14 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.0.1",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.1.0 RC",10.0f*u,C_DIM);
+        if(streamingBridge){
+            box(l.pair,0xFF33363CU,9.f);
+            text(l.pair.x+8*u,l.pair.y+21*u,"PAIR",10.2f*u,C_TEXT,6);
+            box(l.library,0xFF33363CU,9.f);
+            text(l.library.x+10*u,l.library.y+21*u,
+                 libraryMode==0?"PLAYLISTS":"SEARCH",10.1f*u,C_TEXT,12);
+        }
         box(l.settings,0xFF32343AU,9.f);
         icon("settings-2",l.settings.x+6*u,l.settings.y+6*u,18*u);
         box(l.close,0xFF32343AU,9.f);
@@ -1151,7 +1396,7 @@ private:
         }
         const float ix=l.left.x+119*u;
         text(ix,l.left.y+37*u,"NOW PLAYING",10.5f*u,C_MINT,35);
-        text(ix,l.left.y+65*u,title,16*u,C_TEXT,41);
+        text(ix,l.left.y+65*u,animation_?marqueeTitle(title,27,tick):title,16*u,C_TEXT,160);
         text(ix,l.left.y+87*u,artist,12*u,C_DIM,43);
         // Compact status, no potentially huge text block overlapping seek.
         text(l.left.x+17*u,l.left.y+134*u,info,11*u,C_DIM,62);
@@ -1172,8 +1417,7 @@ private:
         if(total>0)disc(l.seek.x+l.seek.w*prog,lineY,4*u,C_MINT);
         text(l.seek.x,l.seek.y+l.seek.h+9*u,clockText(elapsed),10*u,C_DIM);
         text(l.seek.x+l.seek.w-42*u,l.seek.y+l.seek.h+9*u,clockText(total),10*u,C_DIM);
-        box(l.stop,0xFF294052U,10.f);
-        icon("square",l.stop.x+9*u,l.stop.y+13*u,18*u);
+        // One central Play/Pause button. Redundant Stop removed.
         box(l.prev,0xFF294052U,10.f);
         icon("skip-back",l.prev.x+12*u,l.prev.y+12*u,22*u);
         box(l.play,0xFF575B64U,13.f);
@@ -1185,7 +1429,58 @@ private:
         text(l.left.x+34*u,l.left.y+l.left.h-4*u,
              streamingBridge?("Spotify / YouTube Music • "+std::to_string(volume)+"%"):("Audius • "+std::to_string(volume)+"%"),10*u,C_DIM);
 
-        if(streamingBridge) {
+        if(streamingBridge && libraryMode==1){
+            box(l.searchBox,0xFF25272CU,9.f);
+            text(l.searchBox.x+12*u,l.searchBox.y+23*u,
+                 typing?("_ "+query):(query.empty()?"Find or name a playlist":query),
+                 12.2f*u,typing?C_TEXT:C_DIM,54);
+            box(l.searchGo,0xFF555860U,10.f);
+            icon("search",l.searchGo.x+13*u,l.searchGo.y+8*u,19*u);
+            box(l.addSong,0xFF41434AU,7.f);
+            text(l.addSong.x+11*u,l.addSong.y+20*u,"+",18*u,C_TEXT,4);
+            icon("list-music",l.right.x+14*u,l.right.y+54*u,16*u);
+            text(l.right.x+38*u,l.right.y+66*u,"YOUR PLAYLISTS",11*u,C_TEXT,37);
+            for(size_t i=0;i<l.rows.size();i++){
+                size_t n=static_cast<size_t>(page*6)+i;
+                if(n>=playlistNames.size())break;
+                const Rect r=l.rows[i];
+                box(r,0xFF292B31U,8.f);
+                text(r.x+12*u,r.y+std::min(25*u,r.h*.65f),
+                     std::to_string(n+1)+".  "+playlistNames[n],12.5f*u,C_TEXT,80);
+                icon("chevron-right",r.x+r.w-29*u,r.y+8*u,17*u);
+            }
+            box(l.pagePrev,0xFF41434AU,8.f);
+            icon("chevron-left",l.pagePrev.x+9*u,l.pagePrev.y+7*u,19*u);
+            box(l.pageNext,0xFF41434AU,8.f);
+            icon("chevron-right",l.pageNext.x+9*u,l.pageNext.y+7*u,19*u);
+            text(l.right.x+14*u,l.right.y+l.right.h-16*u,
+                 "Page "+std::to_string(page+1)+" / "+
+                  std::to_string(std::max<size_t>(1,(playlistNames.size()+5)/6)),
+                 10*u,C_DIM,60);
+        } else if(streamingBridge && libraryMode==2){
+            box(l.searchGo,0xFF555860U,10.f);
+            text(l.searchGo.x+3*u,l.searchGo.y+22*u,"BACK",10.6f*u,C_TEXT,8);
+            icon("list-music",l.right.x+14*u,l.right.y+54*u,16*u);
+            text(l.right.x+38*u,l.right.y+66*u,activePlaylist,12*u,C_TEXT,50);
+            for(size_t i=0;i<l.rows.size();i++){
+                size_t n=static_cast<size_t>(page*6)+i;
+                if(n>=tracks.size())break;
+                const Rect r=l.rows[i];
+                box(r,static_cast<int>(n)==current?0xFF42454CU:0xFF292B31U,8.f);
+                text(r.x+11*u,r.y+std::min(20*u,r.h*.45f),
+                    std::to_string(n+1)+".  "+tracks[n].title,12*u,C_TEXT,80);
+                text(r.x+11*u,r.y+std::min(38*u,r.h*.83f),tracks[n].artist,
+                     10*u,C_DIM,70);
+                if(static_cast<int>(n)==current)
+                    icon("play",r.x+r.w-25*u,r.y+7*u,16*u);
+            }
+            box(l.pagePrev,0xFF41434AU,8.f);
+            icon("chevron-left",l.pagePrev.x+9*u,l.pagePrev.y+7*u,19*u);
+            box(l.pageNext,0xFF41434AU,8.f);
+            icon("chevron-right",l.pageNext.x+9*u,l.pageNext.y+7*u,19*u);
+            text(l.right.x+14*u,l.right.y+l.right.h-16*u,
+                 "Playlist page "+std::to_string(page+1),11*u,C_DIM,50);
+        } else if(streamingBridge) {
             // Search is routed to the standalone Android engine over the local authenticated Bridge.
             box(l.searchBox,0xFF25272CU,9.f);
             text(l.searchBox.x+11*u,l.searchBox.y+22*u,
@@ -1193,6 +1488,10 @@ private:
             box(l.searchGo,0xFF555860U,10.f);
             icon("search",l.searchGo.x+13*u,l.searchGo.y+8*u,20*u);
             const bool showingSearch=!tracks.empty();
+            if(!activePlaylist.empty() && showingSearch){
+                box(l.addSong,0xFF41434AU,7.f);
+                text(l.addSong.x+11*u,l.addSong.y+20*u,"+",18*u,C_TEXT,4);
+            }
             icon(showingSearch?"list-music":"audio-lines",l.right.x+14*u,l.right.y+54*u,16*u);
             text(l.right.x+38*u,l.right.y+66*u,showingSearch?"SEARCH RESULTS":"LIVE LYRICS",11*u,C_TEXT,34);
             if(showingSearch){
@@ -1277,6 +1576,14 @@ private:
              "Page "+std::to_string(page+1)+" / "+std::to_string(std::max<size_t>(1,(tracks.size()+5)/6)),
              11*u,C_DIM);
         }
+        if(animation_ && panelFade<1.f){
+            for(size_t i=0;i<out.size();i++){
+                auto& c=out[i];
+                if(i>0)c.y+=(1.f-panelFade)*14*u;
+                uint32_t alpha=static_cast<uint32_t>(std::round(((c.color>>24)&255U)*panelFade));
+                c.color=(c.color&0x00FFFFFFU)|(alpha<<24);
+            }
+        }
         pl::modmenu::submitDrawCommands(MODULE,out);
     }
     void process(){
@@ -1339,6 +1646,96 @@ private:
                 if(hasJob) {
                     std::string action;
                     switch(job.action) {
+                        case Action::Pair: {
+                            const std::string candidate=clipboardToken(env);
+                            if(validToken(candidate) && !bridgeGet("/v1/health",candidate).empty()){
+                                try{
+                                    std::filesystem::create_directories(self_.getConfigDir());
+                                    std::ofstream file(self_.getConfigDir()/"bridge.token",std::ios::trunc);
+                                    if(file)file<<candidate;
+                                } catch(...) {}
+                                {std::lock_guard lock(mu_);bridgeKey_=candidate;}
+                                key=candidate;
+                                update("LeviMusic connected","Android Bridge",
+                                       "Pairing saved. Search and playlists ready.");
+                            }else{
+                                update("Pairing unsuccessful","LeviMusic Bridge",
+                                       "Copy key in the APK, then tap PAIR here");
+                            }
+                            break;
+                        }
+                        case Action::PlaylistList: {
+                            if(key.empty()){update("Bridge not paired","Playlists","Tap PAIR after copying from app");break;}
+                            const auto reply=bridgeGet("/v1/playlists"+
+                                (job.query.empty()?std::string{}:
+                                ("?query="+encode(env,job.query))),key);
+                            auto names=parsePlaylistNames(env,reply);
+                            {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                                libraryMode_=1;page_=0;selected_=-1;
+                                results_.clear();
+                            }
+                            if(reply.empty())update("Playlists unavailable","Bridge connection","Open companion and retry");
+                            break;
+                        }
+                        case Action::PlaylistOpen: {
+                            if(key.empty())break;
+                            auto reply=bridgeGet("/v1/playlist/tracks?name="+encode(env,job.query),key);
+                            auto songs=parseBridgeSearch(env,reply);
+                            {std::lock_guard lock(mu_);results_=std::move(songs);
+                                libraryMode_=2;activePlaylist_=job.query;
+                                page_=0;selected_=-1;
+                            }
+                            if(reply.empty())update("Playlist unavailable",job.query,"Check the Bridge app");
+                            break;
+                        }
+                        case Action::PlaylistPlay: {
+                            if(key.empty())break;
+                            std::string playlist;
+                            {std::lock_guard lock(mu_);playlist=activePlaylist_;}
+                            if(!playlist.empty()){
+                                auto reply=bridgeGet("/v1/playlist/play?name="+encode(env,playlist)
+                                           +"&index="+encode(env,job.query),key);
+                                auto root=makeJson(env,reply);
+                                bool accepted=root&&optString(env,root,"accepted")=="true";
+                                if(root)env->DeleteLocalRef(root);
+                                if(!accepted)update("Playlist play failed",playlist,"Retry from the app");
+                            }
+                            break;
+                        }
+                        case Action::PlaylistCreate: {
+                            if(key.empty())break;
+                            if(job.query.empty()){update("Name required","New playlist","Enter a name");break;}
+                            auto reply=bridgeGet("/v1/playlist/create?name="+encode(env,job.query),key);
+                            auto root=makeJson(env,reply);
+                            bool accepted=root&&optString(env,root,"accepted")=="true";
+                            if(root)env->DeleteLocalRef(root);
+                            if(!accepted)update("Playlist creation failed",job.query,"Check name or app");
+                            auto names=parsePlaylistNames(env,bridgeGet("/v1/playlists",key));
+                            {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                                libraryMode_=1;page_=0;query_.clear();selected_=-1;
+                            }
+                            break;
+                        }
+                        case Action::PlaylistAdd: {
+                            std::string name,id;
+                            {std::lock_guard lock(mu_);name=activePlaylist_;
+                                if(selected_>=0&&selected_<static_cast<int>(results_.size()))
+                                    id=results_[static_cast<size_t>(selected_)].id;
+                            }
+                            if(name.empty()||id.empty()){
+                                update("Choose a playlist and song","Playlists",
+                                       "Open a playlist once, then select a search song and tap +");
+                                break;
+                            }
+                            auto reply=bridgeGet("/v1/playlist/add?name="+encode(env,name)
+                                   +"&id="+encode(env,id),key);
+                            auto root=makeJson(env,reply);
+                            bool accepted=root&&optString(env,root,"accepted")=="true";
+                            if(root)env->DeleteLocalRef(root);
+                            update(accepted?"Added to playlist":"Add failed",name,
+                                   accepted?"Song saved":"Check the playlist and Bridge");
+                            break;
+                        }
                         case Action::PlayPause: {
                             bool currentlyPlaying;
                             {std::lock_guard lock(mu_);currentlyPlaying=playing_;}
@@ -1365,6 +1762,8 @@ private:
                                 {
                                     std::lock_guard lock(mu_);
                                     results_=std::move(found);
+                                    searchCache_=results_;
+                                    libraryMode_=0;
                                     selected_=-1;
                                     page_=0;
                                 }
@@ -1464,7 +1863,7 @@ private:
                         if(changed && !state.title.empty()) {
                             Track track;
                             track.title=state.title;track.artist=state.artist;
-                            auto found=searchLyrics(env,track,state.duration);
+                            auto found=searchLyrics(env,track,state.duration,key);
                             {
                                 std::lock_guard lock(mu_);
                                 lyrics_=std::move(found);
@@ -1539,6 +1938,9 @@ private:
                     }
                     case Action::Seek:
                         try{player.seek(env,std::stoi(job.query));}catch(...){}break;
+                    case Action::Pair:case Action::PlaylistList:case Action::PlaylistOpen:
+                    case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistAdd:
+                        break;
                 }
             }
             bool playing=player.isPlaying(env);

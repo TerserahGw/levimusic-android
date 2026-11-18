@@ -30,6 +30,7 @@ public final class MusicCatalog {
     private static boolean initialized=false;
     private static final Object INIT_LOCK=new Object();
     private static final ArrayList<Song> RESULTS=new ArrayList<>();
+    private static final ArrayList<Song> PLAY_QUEUE=new ArrayList<>();
     private static final OkHttpClient CLIENT=new OkHttpClient.Builder()
             .connectTimeout(12,TimeUnit.SECONDS)
             .readTimeout(18,TimeUnit.SECONDS)
@@ -88,14 +89,24 @@ public final class MusicCatalog {
     public static synchronized Song find(String id){
         if(id==null||id.isEmpty())return null;
         for(Song x:RESULTS)if(x.id.equals(id))return x;
+        for(Song x:PLAY_QUEUE)if(x.id.equals(id))return x;
         return null;
     }
     public static synchronized Song neighbor(String id,int direction){
+        ArrayList<Song> queue=PLAY_QUEUE.isEmpty()?RESULTS:PLAY_QUEUE;
         int at=-1;
-        for(int i=0;i<RESULTS.size();i++)if(RESULTS.get(i).id.equals(id)){at=i;break;}
-        if(RESULTS.size()<=1)return null;
-        if(at<0)return direction>=0?RESULTS.get(0):RESULTS.get(RESULTS.size()-1);
-        return RESULTS.get((at+direction+RESULTS.size())%RESULTS.size());
+        for(int i=0;i<queue.size();i++)if(queue.get(i).id.equals(id)){at=i;break;}
+        if(queue.size()<=1)return null;
+        if(at<0)return direction>=0?queue.get(0):queue.get(queue.size()-1);
+        return queue.get((at+direction+queue.size())%queue.size());
+    }
+    public static synchronized void activatePlaylistQueue(List<Song> tracks){
+        PLAY_QUEUE.clear();
+        if(tracks!=null)PLAY_QUEUE.addAll(tracks);
+    }
+    public static synchronized void activateSearchQueue(){
+        PLAY_QUEUE.clear();
+        PLAY_QUEUE.addAll(RESULTS);
     }
 
     public static List<Song> search(String keyword) throws Exception {
@@ -123,6 +134,7 @@ public final class MusicCatalog {
         synchronized(MusicCatalog.class){
             RESULTS.clear();
             RESULTS.addAll(found);
+            // Keep the active playlist queue unchanged while the user searches.
         }
         return found;
     }

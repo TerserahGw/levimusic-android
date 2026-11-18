@@ -49,6 +49,9 @@ public final class MainActivity extends Activity {
     private final ExecutorService artIo=Executors.newFixedThreadPool(3);
     private TextView currentTitle,currentArtist,timeLabel,trackCount,empty,headerStatus;
     private LinearLayout list;
+    private TextView libraryTitle;
+    private boolean showingPlaylists=false;
+    private java.util.List<MusicCatalog.Song> lastSearch=java.util.List.of();
     private EditText searchInput;
     private ImageButton playButton;
     private ImageView currentCover;
@@ -137,8 +140,20 @@ public final class MainActivity extends Activity {
 
         LinearLayout listTitle=new LinearLayout(this);
         listTitle.setGravity(Gravity.CENTER_VERTICAL);
-        TextView label=text("Discover",16,PRIMARY,true);
-        listTitle.addView(label,new LinearLayout.LayoutParams(0,-2,1));
+        libraryTitle=text("Discover",16,PRIMARY,true);
+        listTitle.addView(libraryTitle,new LinearLayout.LayoutParams(0,-2,1));
+        TextView playlistTab=text("Playlists",13,PRIMARY,true);
+        playlistTab.setPadding(dp(9),dp(10),dp(9),dp(10));
+        playlistTab.setOnClickListener(v->showPlaylists());
+        add(listTitle,playlistTab,-2,-2);
+        TextView createTab=text("+ New",13,SECONDARY,true);
+        createTab.setPadding(dp(8),dp(10),dp(8),dp(10));
+        createTab.setOnClickListener(v->createPlaylist());
+        add(listTitle,createTab,-2,-2);
+        TextView lrcTab=text("LRC",12,SECONDARY,true);
+        lrcTab.setPadding(dp(7),dp(10),dp(7),dp(10));
+        lrcTab.setOnClickListener(v->importLyrics());
+        add(listTitle,lrcTab,-2,-2);
         trackCount=text("",12,SECONDARY,false);
         add(listTitle,trackCount,-2,-2);
         LinearLayout.LayoutParams listTitleParams=new LinearLayout.LayoutParams(-1,dp(54));
@@ -241,6 +256,7 @@ public final class MainActivity extends Activity {
         return b;
     }
     private void search(){
+        showingPlaylists=false;libraryTitle.setText("Discover");
         String query=searchInput.getText().toString().trim();
         if(query.isEmpty()||searching)return;
         searching=true;
@@ -267,6 +283,8 @@ public final class MainActivity extends Activity {
     }
     private void render(List<MusicCatalog.Song> songs){
         searching=false;
+        lastSearch=new java.util.ArrayList<>(songs);
+        showingPlaylists=false;libraryTitle.setText("Discover");
         trackCount.setText(songs.size()+" results");
         list.removeAllViews();
         if(songs.isEmpty()){
@@ -298,7 +316,11 @@ public final class MainActivity extends Activity {
             row.addView(details,new LinearLayout.LayoutParams(0,-2,1));
             TextView length=text(format(song.durationMs),11,SOFT,false);
             add(row,length,-2,-2);
+            TextView addSong=text("  +  ",20,PRIMARY,true);
+            addSong.setOnClickListener(v->addToPlaylist(song));
+            add(row,addSong,42,46);
             row.setOnClickListener(v->{
+                MusicCatalog.activateSearchQueue();
                 if(!PlayerService.play(this,song))headerStatus.setText("Start playback from the app first.");
                 else headerStatus.setText("Connecting to stream...");
             });
@@ -306,6 +328,135 @@ public final class MainActivity extends Activity {
             params.bottomMargin=dp(7);
             list.addView(row,params);
         }
+    }
+
+    private static final int REQUEST_LRC=1201;
+    private void importLyrics(){
+        JSONObject current=PlayerService.getStatus();
+        if(current==null||current.optString("title").isEmpty()){
+            new AlertDialog.Builder(this).setTitle("Import synchronized lyrics")
+                .setMessage("Play a song first. The selected LRC file will be matched to the current title and artist.")
+                .setPositiveButton("OK",null).show();
+            return;
+        }
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("text/*");
+        startActivityForResult(intent,REQUEST_LRC);
+    }
+    @Override protected void onActivityResult(int request,int result,Intent data){
+        super.onActivityResult(request,result,data);
+        if(request!=REQUEST_LRC||result!=RESULT_OK||data==null||data.getData()==null)return;
+        JSONObject current=PlayerService.getStatus();
+        if(current==null)return;
+        String title=current.optString("title"),artist=current.optString("artist");
+        if(title.isEmpty())return;
+        try(java.io.InputStream in=getContentResolver().openInputStream(data.getData())){
+            if(in==null)return;
+            java.io.ByteArrayOutputStream out=new java.io.ByteArrayOutputStream();
+            byte[] buffer=new byte[4096];int count;
+            while((count=in.read(buffer))!=-1){
+                if(out.size()+count>250000)throw new java.io.IOException("LRC file too large");
+                out.write(buffer,0,count);
+            }
+            String lrc=out.toString("UTF-8");
+            boolean ok=LyricsStore.save(this,title,artist,lrc);
+            headerStatus.setText(ok?"Synced LRC imported for "+title:"Invalid LRC timestamps");
+        }catch(Exception ex){headerStatus.setText("Unable to import LRC file");}
+    }
+    private void createPlaylist(){
+        EditText name=new EditText(this);
+        name.setSingleLine(true);name.setHint("Playlist name");
+        name.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(48)});
+        name.setPadding(dp(18),dp(15),dp(18),dp(15));
+        new AlertDialog.Builder(this).setTitle("Create playlist")
+            .setView(name)
+            .setPositiveButton("Create",(dialog,which)->{
+                JSONObject result=PlaylistStore.create(this,name.getText().toString());
+                headerStatus.setText(result.optString("message"));
+                showPlaylists();
+            }).setNegativeButton("Cancel",null).show();
+    }
+    private void showPlaylists(){
+        showingPlaylists=true;libraryTitle.setText("My Playlists");
+        trackCount.setText("");
+        list.removeAllViews();
+        org.json.JSONArray items=PlaylistStore.list(this,"").optJSONArray("playlists");
+        if(items==null||items.length()==0){
+            TextView empty=text("No playlists yet. Tap + New to create one.",14,SECONDARY,false);
+            empty.setPadding(dp(10),dp(34),dp(10),dp(16));add(list,empty,-1,-2);
+            return;
+        }
+        for(int i=0;i<items.length();i++){
+            JSONObject entry=items.optJSONObject(i);
+            if(entry==null)continue;
+            String name=entry.optString("name");
+            TextView item=text("♫   "+name+"    ·    "+entry.optInt("count")+" songs",15,PRIMARY,true);
+            item.setBackground(bg(SURFACE,14));
+            item.setPadding(dp(18),dp(16),dp(12),dp(16));
+            item.setOnClickListener(v->showPlaylistSongs(name));
+            item.setOnLongClickListener(v->{
+                new AlertDialog.Builder(this).setTitle("Delete "+name+"?")
+                    .setMessage("Remove this playlist? Songs are not deleted from the service.")
+                    .setPositiveButton("Delete",(d,w)->{PlaylistStore.delete(this,name);showPlaylists();})
+                    .setNegativeButton("Cancel",null).show();
+                return true;
+            });
+            LinearLayout.LayoutParams row=new LinearLayout.LayoutParams(-1,-2);
+            row.bottomMargin=dp(8);list.addView(item,row);
+        }
+    }
+    private void showPlaylistSongs(String playlist){
+        showingPlaylists=true;libraryTitle.setText(playlist);
+        List<MusicCatalog.Song> songs=PlaylistStore.songs(this,playlist);
+        trackCount.setText(songs.size()+" songs");
+        list.removeAllViews();
+        TextView back=text("‹  All playlists",13,SECONDARY,true);
+        back.setPadding(dp(12),dp(10),0,dp(16));
+        back.setOnClickListener(v->showPlaylists());add(list,back,-1,-2);
+        for(int i=0;i<songs.size();i++){
+            final int index=i;
+            MusicCatalog.Song song=songs.get(i);
+            LinearLayout row=new LinearLayout(this);
+            row.setBackground(bg(SURFACE,12));
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            TextView item=text(String.format(Locale.ROOT,"%02d",i+1)+"   "+song.title+
+                "  ·  "+song.artist,13,PRIMARY,false);
+            item.setSingleLine(true);item.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            row.addView(item,new LinearLayout.LayoutParams(0,dp(54),1));
+            item.setGravity(Gravity.CENTER_VERTICAL);
+            item.setPadding(dp(12),0,dp(6),0);
+            TextView remove=text(" × ",18,SECONDARY,true);
+            remove.setPadding(dp(10),dp(8),dp(10),dp(8));
+            remove.setOnClickListener(v->{PlaylistStore.remove(this,playlist,song.id);showPlaylistSongs(playlist);});
+            add(row,remove,48,54);
+            row.setOnClickListener(v->{
+                JSONObject response=PlaylistStore.play(this,playlist,index);
+                headerStatus.setText(response.optString("message"));
+            });
+            LinearLayout.LayoutParams params=new LinearLayout.LayoutParams(-1,dp(54));
+            params.bottomMargin=dp(7);list.addView(row,params);
+        }
+    }
+    private void addToPlaylist(MusicCatalog.Song song){
+        org.json.JSONArray items=PlaylistStore.list(this,"").optJSONArray("playlists");
+        if(items==null||items.length()==0){
+            new AlertDialog.Builder(this).setTitle("No playlists yet")
+                .setMessage("Create a playlist first using + New.")
+                .setPositiveButton("Create",(d,w)->createPlaylist())
+                .setNegativeButton("Cancel",null).show();
+            return;
+        }
+        String[] names=new String[items.length()];
+        for(int i=0;i<items.length();i++){
+            JSONObject entry=items.optJSONObject(i);
+            names[i]=entry==null?"":entry.optString("name");
+        }
+        new AlertDialog.Builder(this).setTitle("Add to playlist")
+            .setItems(names,(d,index)->{
+                JSONObject result=PlaylistStore.add(this,names[index],song);
+                headerStatus.setText(result.optString("message"));
+            }).setNegativeButton("Cancel",null).show();
     }
     private static String format(long ms){
         long seconds=Math.max(0,ms/1000);
@@ -394,14 +545,14 @@ public final class MainActivity extends Activity {
         String token=BridgeService.getOrCreateToken(this);
         String info="Connect the Minecraft mod to this app.\n\n"
              +"1. Enable Notification Access for LeviMusic.\n"
-             +"2. Copy the key below into the LeviMusic Bridge Key setting in Minecraft.\n"
+             +"2. Tap Pair Minecraft and then the PAIR control in game. No typing needed.\n"
              +"3. Start a song here and return to Minecraft.\n\n"
              +"PAIRING KEY:\n"+token+"\n\n"
              +"Notification Access is a sensitive system permission. Only enable it if you trust the app.";
         new AlertDialog.Builder(this)
             .setTitle("Minecraft connection")
             .setMessage(info)
-            .setPositiveButton("Copy key",(dialog,which)->{
+            .setPositiveButton("Pair Minecraft (copy)",(dialog,which)->{
                 ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
                     .setPrimaryClip(ClipData.newPlainText("LeviMusic bridge key",token));
             })

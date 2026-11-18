@@ -201,7 +201,7 @@ public final class BridgeApi {
             if(parts.length<3||!"GET".equals(parts[0])) {
                 status=405;json=new JSONObject().put("error","GET only");
             }else if(path.equals("/v1/status"))json=state();
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.0.1").put("api",1);
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.1.0").put("api",2);
             else if(path.equals("/v1/queue"))json=MusicCatalog.queueJson();
             else if(path.startsWith("/v1/control?"))json=control(path);
             else if(path.startsWith("/v1/search?")){
@@ -209,9 +209,40 @@ public final class BridgeApi {
                 if(query.length()>160)query=query.substring(0,160);
                 json=MusicCatalog.searchJson(query);
             }
+            else if(path.equals("/v1/capabilities"))
+                json=new JSONObject().put("api",2).put("playlist",true).put("search",true)
+                    .put("player",true).put("pairing","local-clipboard");
+            else if(path.equals("/v1/playlists")||path.startsWith("/v1/playlists?")){
+                String filter=URLDecoder.decode(getParam(path,"query"),"UTF-8");
+                json=PlaylistStore.list(context,filter);
+            }
+            else if(path.startsWith("/v1/lyrics?")){
+                String title=URLDecoder.decode(getParam(path,"title"),"UTF-8");
+                String artist=URLDecoder.decode(getParam(path,"artist"),"UTF-8");
+                json=LyricsStore.response(context,title,artist);
+            }
+            else if(path.startsWith("/v1/playlist/")){
+                String op=path.substring("/v1/playlist/".length()).split("[?]")[0];
+                String name=URLDecoder.decode(getParam(path,"name"),"UTF-8");
+                String id=getParam(path,"id");
+                switch(op){
+                    case "create": json=PlaylistStore.create(context,name);break;
+                    case "add": json=PlaylistStore.add(context,name,MusicCatalog.find(id));break;
+                    case "tracks": json=PlaylistStore.tracks(context,name);break;
+                    case "remove": json=PlaylistStore.remove(context,name,id);break;
+                    case "delete": json=PlaylistStore.delete(context,name);break;
+                    case "play": {
+                        int index=0;
+                        try{index=Integer.parseInt(getParam(path,"index"));}catch(Exception ignored){}
+                        json=PlaylistStore.play(context,name,index);break;
+                    }
+                    default: status=404;json=new JSONObject().put("error","Unknown playlist operation");
+                }
+            }
             else if(path.startsWith("/v1/play?")){
                 String id=getParam(path,"id");
                 MusicCatalog.Song song=MusicCatalog.find(id);
+                MusicCatalog.activateSearchQueue();
                 boolean started=PlayerService.play(context,song);
                 json=new JSONObject().put("accepted",started)
                     .put("message",started?"Playback requested":"Open LeviMusic app first or search again");
