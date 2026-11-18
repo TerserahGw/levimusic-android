@@ -1,4 +1,4 @@
-# LeviMusic 1.2.2 RC — feature status
+# LeviMusic 1.2.3 RC — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.

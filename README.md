@@ -1,4 +1,4 @@
-# LeviMusic v1.2.2 — Release Candidate
+# LeviMusic v1.2.3 — Release Candidate
 
 Author: **ReaAurelis** | Android ARM64 Minecraft Bedrock via LeviLauncher.  
 **Status:** CI-compiled, game-runtime behavior NOT confirmed.
@@ -21,8 +21,8 @@ The full and standalone native .levipacks now contain `src/WorldLyrics3D.hpp`: a
 Enable: Mod Menu -> LeviMusic -> **Experimental true 3D world lyrics (native, risky)**. Leave the older `Legacy 2D lyric scatter` disabled. When disabled, the standard readable 2D lyric popup still works.
 
 ### Installation
-- **Full version:** install both LeviMusic Bridge APK and the full `LeviMusic-1.2.2-arm64-v8a.levipack` file. Existing Bridge pairing and playlist storage should persist on a regular in-place signed APK update.
-- **Standalone:** install `LeviMusic-Standalone-1.2.2-arm64-v8a.levipack` only. Requires a separately running **ChruPipe** self-hosted server (Ktor backend); configure server URL in LeviMusic. The separate built-in WebView remains an optional, visible browser experiment, not the native music backend. The editable 3-song radio queue requires the full Bridge variant.
+- **Full version:** install both LeviMusic Bridge APK and the full `LeviMusic-1.2.3-arm64-v8a.levipack` file. Existing Bridge pairing and playlist storage should persist on a regular in-place signed APK update.
+- **Standalone:** install `LeviMusic-Standalone-1.2.3-arm64-v8a.levipack` only. Requires a separately running **ChruPipe** self-hosted server (Ktor backend); configure server URL in LeviMusic. The separate built-in WebView remains an optional, visible browser experiment, not the native music backend. The editable 3-song radio queue requires the full Bridge variant.
 - **Never load both native .levipack variants simultaneously.**
 
 ### Troubleshooting

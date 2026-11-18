@@ -1222,7 +1222,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.2 RC loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.3 RC loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1680,7 +1680,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.2.2 • REAAURELIS",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.2.3 • REAAURELIS",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -1994,7 +1994,10 @@ private:
                     lm_world3d::tryInstall();
                 lm_world3d::enabled=lm_world3d::installed.load();
             }else if(lm_world3d::installed){
-                lm_world3d::shutdown();
+                // Do not unhook a live game render path on every settings toggle.
+                // Keep the detour inert; unhook only on module disable.
+                lm_world3d::enabled=false;
+                lm_world3d::publish("");
             }
             if(useBridge_) {
                 std::string key;
