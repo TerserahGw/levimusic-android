@@ -52,7 +52,7 @@ struct EnvScope {
     bool attached = false;
     explicit EnvScope(JavaVM* v) : vm(v) {
         if (!vm) return;
-        if (vm->GetEnv(&env, JNI_VERSION_1_6) == JNI_OK) return;
+        if (vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) return;
         if (vm->functions->AttachCurrentThread(vm, &env, nullptr) == JNI_OK) attached = true;
     }
     ~EnvScope() { if (attached && vm) vm->DetachCurrentThread(); }
