@@ -52,6 +52,17 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Version: v$version; previous: ${previous:-none}; already released: $already_released"
 
+      - name: Set Android versionCode and versionName
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          IFS='.' read -r major minor patch <<< "$VERSION"
+          code=$((major*10000 + minor*100 + patch))
+          [[ "$code" -gt 112 ]] || { echo 'Android versionCode must increase'; exit 1; }
+          echo "LEVIMUSIC_ANDROID_VERSION_CODE=$code" >> "$GITHUB_ENV"
+          echo "LEVIMUSIC_ANDROID_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
+          echo "APK versionName=$VERSION versionCode=$code"
       - name: Set package manifest version
         env:
           VERSION: ${{ steps.version.outputs.version }}
