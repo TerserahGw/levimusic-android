@@ -1,7 +1,7 @@
 # LeviMusic Online — LeviLauncher Android (Beta source 0.1.0)
 
-**Status: source project, syntax checked on host with interface stubs; NOT YET built as Android ARM64 `.so`, NOT yet tested inside Minecraft.**
-This source ZIP is **NOT** an installable `.levipack`. GitHub Actions builds an actual `.levipack` using Android NDK.
+**Status: Android ARM64 GitHub Actions build has succeeded; runtime inside Minecraft/LeviLauncher Android has NOT yet been tested.**
+This repository contains the source code. Download the installable `.levipack` from GitHub Releases after the release workflow succeeds.
 
 ## What it tries to do
 
@@ -28,10 +28,10 @@ This source ZIP is **NOT** an installable `.levipack`. GitHub Actions builds an 
    ```sh
    bash publish_termux.sh
    ```
-5. In your repository at github.com, open **Actions -> Build LeviMusic Android ARM64**. The push to main triggers a build automatically. On success: choose the build run -> **Artifacts -> LeviMusic-Android-levipack** and unzip the downloaded GitHub artifact ZIP. Inside it is `LeviMusic-0.1.0-arm64-v8a.levipack`.
+5. Open **GitHub -> repository -> Releases** (or Actions -> Build & Release LeviMusic Android ARM64). Each successful push to `main` creates a new versioned **pre-release** and attaches `LeviMusic-<version>-arm64-v8a.levipack` directly. You can also get the build artifact from Actions.
 6. Open LeviLauncher Android -> Mods -> Add Mod and select the `.levipack`. Start Minecraft. In-game open LeviLauncher Mod Menu -> LeviMusic Online -> edit `Search Query`, tap the `Cari` button. Find results automatically play their **first** match. Use `>>` and `<<` buttons to change among the 20 search results.
 
-IMPORTANT: GitHub Actions compilation or runtime load may still fail; this is a new untested mod. If it fails, the GitHub Actions log will show why. Do not import the source ZIP directly.
+IMPORTANT: GitHub Actions has compiled successfully, but actual runtime loading and music playback in LeviLauncher have not been validated. Later builds may still fail. Never import a source ZIP directly.
 
 ## Alternative: Build on Linux x86_64 with Android NDK
 
@@ -74,3 +74,14 @@ liblevimusic.so
 - LRCLIB: https://lrclib.net/
 
 No token, password, copyrighted song, or DRM bypass tool is included.
+
+
+## Automated versions and release notes
+
+Each successful push to `main` runs the Android ARM64 build and creates a GitHub **pre-release** with the actual `.levipack` file (unless the same commit has already been released). The first version is `v0.1.0`; subsequent pushes increment the patch number (`v0.1.1`, `v0.1.2`, ...). Failed builds do not publish releases.
+
+Release descriptions include the current feature list from [FEATURES.md](FEATURES.md) and a changelog automatically assembled from commit messages since the previous release tag. When adding or removing a feature, update `FEATURES.md` in the same commit and write a descriptive commit message. Mod `manifest.json` and the downloadable file name receive the generated version during the CI build.
+
+GitHub Releases: https://github.com/TerserahGw/levimusic-android/releases
+
+If release publishing fails with a permissions error, check **Repository Settings -> Actions -> General -> Workflow permissions** and allow read/write permissions for GitHub Actions.

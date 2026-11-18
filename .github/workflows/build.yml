@@ -1,33 +1,172 @@
-name: Build LeviMusic Android ARM64
+name: Build & Release LeviMusic Android ARM64
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: levimusic-release-main
+  cancel-in-progress: false
+
 jobs:
-  build:
+  build-and-release:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: android-actions/setup-android@v4
-      - name: Install NDK and build tools
+      - name: Checkout code and version tags
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Calculate release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --force --tags origin
+          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          if [[ -n "$existing" ]]; then
+            version="${existing#v}"
+            already_released=true
+          elif [[ -z "$previous" ]]; then
+            version="0.1.0"
+            already_released=false
+          else
+            IFS=. read -r major minor patch <<< "${previous#v}"
+            version="$major.$minor.$((patch + 1))"
+            already_released=false
+          fi
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+            echo "previous_tag=$previous"
+            echo "already_released=$already_released"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version: v$version; previous: ${previous:-none}; already released: $already_released"
+
+      - name: Set package manifest version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          path = Path("manifest.json")
+          obj = json.loads(path.read_text(encoding="utf-8"))
+          obj["version"] = os.environ["VERSION"]
+          path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+          print("Packaging LeviMusic version", obj["version"])
+          PY
+
+      - name: Install Android tools
+        uses: android-actions/setup-android@v4
+
+      - name: Install NDK and build dependencies
         run: |
           sdkmanager --install "ndk;28.2.13676358" "platforms;android-28"
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake
+
       - name: Configure ARM64 Android
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_HOME/ndk/28.2.13676358/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
             -DCMAKE_BUILD_TYPE=Release
+
       - name: Compile and package .levipack
         run: cmake --build build --target levipack --parallel 2
-      - name: Verify package
-        run: unzip -l build/LeviMusic-0.1.0-arm64-v8a.levipack
-      - uses: actions/upload-artifact@v4
+
+      - name: Name and verify the installable package
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file="build/LeviMusic-0.1.0-arm64-v8a.levipack"
+          release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
+          if [[ "$source_file" != "$release_file" ]]; then
+            mv "$source_file" "$release_file"
+          fi
+          unzip -t "$release_file"
+          unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
+          echo "file=$release_file" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact for every successful build
+        uses: actions/upload-artifact@v4
         with:
-          name: LeviMusic-Android-levipack
-          path: build/LeviMusic-0.1.0-arm64-v8a.levipack
+          name: LeviMusic-${{ steps.version.outputs.version }}-arm64-v8a
+          path: ${{ steps.package.outputs.file }}
           if-no-files-found: error
+
+      - name: Prepare version notes
+        if: steps.version.outputs.already_released != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          import subprocess
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          previous = os.environ.get("PREVIOUS_TAG", "")
+          revision_range = f"{previous}..HEAD" if previous else "HEAD"
+          result = subprocess.run(
+              ["git", "log", "--reverse", "--no-merges",
+               "--pretty=format:%s (%h)", revision_range],
+              check=True, text=True, capture_output=True
+          )
+          changes = [f"- {line.strip()}" for line in result.stdout.splitlines() if line.strip()]
+          if not changes:
+              changes = ["- Tidak ada perubahan kode baru."]
+          features = Path("FEATURES.md").read_text(encoding="utf-8").strip()
+          notes = "\n".join([
+              f"# LeviMusic Online v{version}",
+              "",
+              "Mod pemutar musik online untuk Minecraft Bedrock melalui LeviLauncher Android (ARM64).",
+              "",
+              "## Fitur yang tersedia dalam source",
+              features,
+              "",
+              "## Perubahan dibanding versi sebelumnya",
+              *(changes),
+              "",
+              "## Instalasi",
+              "Unduh berkas `.levipack` pada bagian **Assets**, lalu impor melalui menu Mods di LeviLauncher Android.",
+              "",
+              "## Catatan kompatibilitas",
+              "- Status **beta / belum diuji runtime dalam Minecraft**; berhasil dikompilasi tidak menjamin playback bekerja pada semua perangkat.",
+              "- Pencarian menggunakan Audius (bukan Spotify/YouTube Music); lagu dan lirik bergantung pada ketersediaan penyedia.",
+              "- Lirik dari LRCLIB hanya ditampilkan bila tersedia.",
+              "",
+          ])
+          Path("release-notes.md").write_text(notes, encoding="utf-8")
+          print(notes)
+          PY
+
+      - name: Publish GitHub Release
+        if: steps.version.outputs.already_released != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          PACKAGE: ${{ steps.package.outputs.file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" "$PACKAGE" \
+            --target "$GITHUB_SHA" \
+            --title "LeviMusic Online v$VERSION (Beta)" \
+            --notes-file release-notes.md \
+            --prerelease
+          echo "Published release $TAG with $PACKAGE."
