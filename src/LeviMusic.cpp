@@ -1,8 +1,10 @@
-// LeviMusic for LeviLauncher Android, source-only beta 0.1.0
+// LeviMusic for LeviLauncher Android, beta 0.1.2
 // Music discovery / playback: Audius public API (not Spotify/YouTube scraping).
 // Lyrics: optional LRCLIB synchronized lyrics, only when available.
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
+#include <pl/Input.hpp>
+#include <cmath>
 #include <jni.h>
 #include <android/log.h>
 
@@ -36,13 +38,14 @@ struct Lyric {
     std::string line;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
     if (!env->ExceptionCheck()) return false;
     env->ExceptionClear();
     __android_log_print(ANDROID_LOG_WARN, TAG, "Java exception at %s", step);
+    env->ExceptionDescribe();
     return true;
 }
 
@@ -230,11 +233,12 @@ jobject makeJson(JNIEnv* env, const std::string& text) {
     return result;
 }
 
-std::vector<Track> searchAudius(JNIEnv* env, const std::string& query) {
+std::vector<Track> searchAudiusFrom(JNIEnv* env, const std::string& query, const std::string& baseUrl, const std::string& key={}) {
     std::vector<Track> tracks;
     if (query.empty()) return tracks;
-    std::string text = getHttp(env, std::string(API) + "/tracks/search?query=" + encode(env, query) +
-                                    "&limit=20&app_name=" + APP_NAME);
+    std::string url=baseUrl+"/tracks/search?query="+encode(env,query)+"&limit=20&app_name="+APP_NAME;
+    if(!key.empty())url+="&api_key="+encode(env,key);
+    std::string text=getHttp(env,url);
     jobject root = makeJson(env, text);
     if (!root) return tracks;
     jobject array = optArray(env, root, "data");
@@ -254,7 +258,7 @@ std::vector<Track> searchAudius(JNIEnv* env, const std::string& query) {
             tr.artist = optString(env, user, "name");
             if (tr.artist.empty()) tr.artist = optString(env, user, "handle");
             if (user) env->DeleteLocalRef(user);
-            if (!tr.id.empty() && !tr.title.empty()) tracks.push_back(std::move(tr));
+            if (!tr.id.empty() && !tr.title.empty() && optString(env, obj, "is_streamable") != "false") tracks.push_back(std::move(tr));
             env->DeleteLocalRef(obj);
         }
         env->DeleteLocalRef(arrClass);
@@ -262,6 +266,10 @@ std::vector<Track> searchAudius(JNIEnv* env, const std::string& query) {
     }
     env->DeleteLocalRef(root);
     return tracks;
+}
+
+std::vector<Track> searchAudius(JNIEnv* env, const std::string& query) {
+    return searchAudiusFrom(env, query, API);
 }
 
 std::vector<Lyric> parseLrc(const std::string& raw) {
@@ -318,6 +326,64 @@ std::vector<Lyric> searchLyrics(JNIEnv* env, const Track& tr) {
     return result;
 }
 
+
+// Probe Audius redirects on the music worker (never on the game UI thread).
+// Android's MediaPlayer is more reliable when given the final HTTPS audio URL.
+std::string resolveStreamUrl(JNIEnv* env, const std::string& url) {
+    if(url.rfind("https://",0)!=0)return {};
+    jclass urlClass=env->FindClass("java/net/URL");
+    if(!urlClass||clearException(env,"stream URL class"))return {};
+    jmethodID ctor=env->GetMethodID(urlClass,"<init>","(Ljava/lang/String;)V");
+    jmethodID open=env->GetMethodID(urlClass,"openConnection","()Ljava/net/URLConnection;");
+    jstring jurl=toJava(env,url);
+    jobject addr=ctor&&jurl?env->NewObject(urlClass,ctor,jurl):nullptr;
+    jobject conn=addr&&open?env->CallObjectMethod(addr,open):nullptr;
+    if(clearException(env,"stream connection"))conn=nullptr;
+    std::string finalUrl;
+    if(conn){
+        jclass base=env->FindClass("java/net/URLConnection");
+        jclass http=env->FindClass("java/net/HttpURLConnection");
+        jmethodID ct=base?env->GetMethodID(base,"setConnectTimeout","(I)V"):nullptr;
+        jmethodID rt=base?env->GetMethodID(base,"setReadTimeout","(I)V"):nullptr;
+        jmethodID getUrl=base?env->GetMethodID(base,"getURL","()Ljava/net/URL;"):nullptr;
+        jmethodID getType=base?env->GetMethodID(base,"getContentType","()Ljava/lang/String;"):nullptr;
+        jmethodID follow=http?env->GetMethodID(http,"setInstanceFollowRedirects","(Z)V"):nullptr;
+        jmethodID response=http?env->GetMethodID(http,"getResponseCode","()I"):nullptr;
+        jmethodID disconnect=http?env->GetMethodID(http,"disconnect","()V"):nullptr;
+        if(ct)env->CallVoidMethod(conn,ct,7000);
+        if(rt)env->CallVoidMethod(conn,rt,7000);
+        if(follow)env->CallVoidMethod(conn,follow,JNI_TRUE);
+        jint status=response?env->CallIntMethod(conn,response):0;
+        if(clearException(env,"stream HTTP headers"))status=0;
+        if(status>=200&&status<300) {
+            jobject redirected=getUrl?env->CallObjectMethod(conn,getUrl):nullptr;
+            jstring mime=getType?(jstring)env->CallObjectMethod(conn,getType):nullptr;
+            std::string mimeType=fromJava(env,mime);
+            if(redirected){
+                jmethodID toString=env->GetMethodID(urlClass,"toString","()Ljava/lang/String;");
+                jstring str=toString?(jstring)env->CallObjectMethod(redirected,toString):nullptr;
+                if(!clearException(env,"stream redirect"))finalUrl=fromJava(env,str);
+                if(str)env->DeleteLocalRef(str);
+                env->DeleteLocalRef(redirected);
+            }
+            if(mime)env->DeleteLocalRef(mime);
+            __android_log_print(ANDROID_LOG_INFO,TAG,"Stream HTTP %d type %s",status,mimeType.c_str());
+            if(mimeType.find("json")!=std::string::npos)finalUrl.clear();
+        } else {
+            __android_log_print(ANDROID_LOG_WARN,TAG,"Audius stream HTTP status %d",status);
+        }
+        if(disconnect)env->CallVoidMethod(conn,disconnect);
+        clearException(env,"stream disconnect");
+        if(base)env->DeleteLocalRef(base);
+        if(http)env->DeleteLocalRef(http);
+        env->DeleteLocalRef(conn);
+    }
+    if(addr)env->DeleteLocalRef(addr);
+    if(jurl)env->DeleteLocalRef(jurl);
+    env->DeleteLocalRef(urlClass);
+    return finalUrl.rfind("https://",0)==0?finalUrl:std::string{};
+}
+
 // All MediaPlayer method calls occur on a single attached worker thread.
 class AndroidPlayer {
     jobject player_ = nullptr;
@@ -335,6 +401,8 @@ public:
     }
     bool startUrl(JNIEnv* env, const std::string& url, int volume) {
         release(env);
+        const std::string playableUrl=resolveStreamUrl(env,url);
+        if(playableUrl.empty())return false;
         jclass cls = env->FindClass("android/media/MediaPlayer");
         if (!cls || clearException(env, "MediaPlayer class")) return false;
         jmethodID ctor = env->GetMethodID(cls, "<init>", "()V");
@@ -346,7 +414,7 @@ public:
         jmethodID setDataSource = env->GetMethodID(cls, "setDataSource", "(Ljava/lang/String;)V");
         jmethodID prepare = env->GetMethodID(cls, "prepare", "()V");
         jmethodID start = env->GetMethodID(cls, "start", "()V");
-        jstring jurl = toJava(env, url);
+        jstring jurl = toJava(env, playableUrl);
         if (setAudioStreamType) env->CallVoidMethod(player_, setAudioStreamType, 3); // STREAM_MUSIC
         if (setDataSource && jurl) env->CallVoidMethod(player_, setDataSource, jurl);
         bool ok = !clearException(env, "setDataSource") && prepare && start;
@@ -396,263 +464,474 @@ public:
         clearException(env, "volume");
         env->DeleteLocalRef(cls);
     }
+    int duration(JNIEnv* env) {
+        if(!player_) return 0;
+        jclass cls=env->GetObjectClass(player_);
+        jmethodID m=env->GetMethodID(cls,"getDuration","()I");
+        jint n=m?env->CallIntMethod(player_,m):0;
+        if(clearException(env,"duration")) n=0;
+        env->DeleteLocalRef(cls);
+        return std::max(0,static_cast<int>(n));
+    }
+    void seek(JNIEnv* env,int ms) {
+        if(!player_)return;
+        jclass cls=env->GetObjectClass(player_);
+        jmethodID m=env->GetMethodID(cls,"seekTo","(I)V");
+        if(m)env->CallVoidMethod(player_,m,std::max(0,ms));
+        clearException(env,"seek");
+        env->DeleteLocalRef(cls);
+    }
+
 };
 
-std::string shorten(const std::string& s, size_t max) {
-    if (s.size() <= max) return s;
-    return s.substr(0, max > 3 ? max-3 : max) + "...";
+
+// A lightweight, in-game UI rendered by the official preloader HUD primitives.
+// No external LeviLauncher buttons are registered.
+std::string shorten(const std::string& value,size_t bytes) {
+    if(value.size()<=bytes)return value;
+    size_t n=bytes>3?bytes-3:bytes;
+    while(n>0 && (static_cast<unsigned char>(value[n])&0xC0u)==0x80u)--n;
+    return value.substr(0,n)+"...";
 }
+std::string clockText(int ms) {
+    int n=std::max(0,ms/1000);
+    return std::to_string(n/60)+":"+(n%60<10?"0":"")+std::to_string(n%60);
+}
+struct Rect {
+    float x{},y{},w{},h{};
+    bool contains(float a,float b)const{return a>=x&&b>=y&&a<=x+w&&b<=y+h;}
+};
+struct UI {
+    float w{},h{},s{};
+    Rect mini,outer,left,right,close,searchBox,searchGo,prev,play,next,stop,seek,pagePrev,pageNext;
+    std::vector<Rect> rows;
+    bool ok()const{return w>0&&h>0;}
+};
+UI measure() {
+    UI p;
+    const auto surface=pl::modmenu::getHudSurfaceSize();
+    p.w=surface.width;p.h=surface.height;
+    if(!p.ok())return p;
+    p.s=std::clamp(p.h/540.f,.65f,2.5f);
+    const float s=p.s;
+    p.mini={18*s,p.h-83*s,std::min(335*s,p.w*.4f),64*s};
+    p.outer={p.w*.05f,p.h*.07f,p.w*.90f,p.h*.86f};
+    const float contentY=p.outer.y+63*s;
+    const float contentH=p.outer.h-76*s;
+    const float contentX=p.outer.x+22*s;
+    const float contentW=p.outer.w-44*s;
+    p.left={contentX,contentY,contentW*.445f-6*s,contentH};
+    p.right={contentX+contentW*.445f+6*s,contentY,contentW*.555f-6*s,contentH};
+    p.close={p.outer.x+p.outer.w-51*s,p.outer.y+12*s,33*s,34*s};
+    p.searchBox={p.right.x+12*s,p.right.y+12*s,p.right.w-112*s,42*s};
+    p.searchGo={p.right.x+p.right.w-91*s,p.right.y+12*s,79*s,42*s};
+    const float b=p.left.y+p.left.h-91*s, center=p.left.x+p.left.w*.5f;
+    p.stop={p.left.x+10*s,b,39*s,52*s};
+    p.prev={center-102*s,b,53*s,52*s};
+    p.play={center-40*s,b,80*s,52*s};
+    p.next={center+49*s,b,53*s,52*s};
+    p.seek={p.left.x+20*s,b-54*s,p.left.w-40*s,18*s};
+    float rowY=p.right.y+80*s;
+    float rowsBottom=p.right.y+p.right.h-57*s;
+    float rowH=std::min(53*s,std::max(28*s,(rowsBottom-rowY)/6));
+    for(int i=0;i<6;i++)p.rows.push_back({p.right.x+12*s,rowY+i*rowH,p.right.w-24*s,rowH-3*s});
+    p.pagePrev={p.right.x+p.right.w*.45f,p.right.y+p.right.h-48*s,39*s,35*s};
+    p.pageNext={p.right.x+p.right.w*.45f+48*s,p.right.y+p.right.h-48*s,39*s,35*s};
+    return p;
+}
+constexpr uint32_t C_BG=0xEA0C1522U;
+constexpr uint32_t C_PANEL=0xEC1B2A3CU;
+constexpr uint32_t C_BORDER=0xFF455D73U;
+constexpr uint32_t C_TEXT=0xFFFFFFFFU;
+constexpr uint32_t C_DIM=0xFFB6C5D6U;
+constexpr uint32_t C_MINT=0xFF7DE2D4U;
 
 class LeviMusic {
     ll::mod::NativeMod& self_;
-    JavaVM* vm_ = nullptr;
+    JavaVM* vm_=nullptr;
     std::thread worker_;
     std::mutex mu_;
     std::condition_variable cv_;
     std::deque<Job> jobs_;
     std::vector<Track> results_;
     std::vector<Lyric> lyrics_;
-    std::string query_ = "lofi";
-    std::string title_ = "LeviMusic | Cari musik melalui Mod Menu";
-    std::string message_ = "Ketik judul, lalu tekan Cari";
-    std::string lyricLine_;
-    int index_ = -1;
-    int volume_ = 75;
-    bool hud_ = true;
-    bool lyricsOn_ = true;
-    bool stopping_ = false;
-
+    std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
+    std::string info_="Tap to search songs", lyric_, apiKey_;
+    int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
+    bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
+    std::atomic<bool> enabled_{false};
 public:
-    LeviMusic() : self_(*ll::mod::NativeMod::current()) {}
-    static LeviMusic& instance() { static LeviMusic app; return app; }
-    bool load() {
-        vm_ = self_.getJavaVM();
-        __android_log_print(ANDROID_LOG_INFO, TAG, "LeviMusic loaded; VM=%p", static_cast<void*>(vm_));
-        return vm_ != nullptr;
+    LeviMusic():self_(*ll::mod::NativeMod::current()){}
+    static LeviMusic& instance(){static LeviMusic mod;return mod;}
+    bool load(){
+        vm_=self_.getJavaVM();
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v0.1.2 loaded, vm=%p",(void*)vm_);
+        return vm_!=nullptr;
     }
-    bool enable() {
+    bool enable(){
         {
             std::lock_guard lock(mu_);
-            stopping_ = false;
+            shutdown_=false;open_=false;typing_=false;
         }
-        worker_ = std::thread([this]() { run(); });
-        bool ok = pl::modmenu::ModuleBuilder(MODULE, "LeviMusic Online")
-            .modId(self_.getId())
-            .description("Audius online search & streaming. Edit Search Query, then tap Cari. Lyrics via LRCLIB when available.")
-            .defaultEnabled(true)
-            .config("searchQuery", "Search Query / Judul Lagu", pl::modmenu::ConfigType::Text, "lofi")
-            .config("volume", "Volume Musik", pl::modmenu::ConfigType::SliderInt, "75", "0", "100")
-            .config("hud", "Tampilkan HUD", pl::modmenu::ConfigType::Toggle, "true")
-            .config("lyrics", "Lirik Sinkron", pl::modmenu::ConfigType::Toggle, "true")
-            .onConfigChanged([](std::string_view, std::string_view key, std::string_view value) {
-                instance().onConfig(key, value);
-            })
-            .registerModule();
-        auto button = [this](const char* id, const char* name, const char* label, Action action) {
-            return pl::modmenu::ButtonBuilder(id, name).moduleId(MODULE)
-                .modId(self_.getId()).label(label)
-                .stylePreset(pl::modmenu::ButtonStylePreset::Accent)
-                .styleColors(0xD0182538U, 0xFF50C8E8U, 0x8049CDDCU)
-                .textColor(0xFFFFFFFFU).sizeScale(1.5f)
-                .behavior(pl::modmenu::ButtonBehavior::Click)
-                .onEvent([action](std::string_view, pl::modmenu::ButtonEvent event, float) {
-                    if (event == pl::modmenu::ButtonEvent::Click) instance().enqueue(action);
-                }).registerButton();
-        };
-        if (ok) ok = button("levimusic.search", "Cari lagu", "Cari", Action::Search) && ok;
-        if (ok) ok = button("levimusic.prev", "Lagu sebelumnya", "<<", Action::Previous) && ok;
-        if (ok) ok = button("levimusic.play", "Play / Pause", "Play", Action::PlayPause) && ok;
-        if (ok) ok = button("levimusic.next", "Lagu berikutnya", ">>", Action::Next) && ok;
-        if (ok) ok = button("levimusic.stop", "Stop musik", "Stop", Action::Stop) && ok;
-        if (!ok) { disable(); return false; }
-        drawHud();
-        __android_log_print(ANDROID_LOG_INFO, TAG, "LeviMusic enabled");
+        bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic Online")
+            .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(true)
+            .description("Touch the LeviMusic mini-player at the bottom left to open the full panel.")
+            .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,"75","0","100")
+            .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,"")
+            .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,"true")
+            .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,"true")
+            .onConfigChanged([](std::string_view,std::string_view k,std::string_view v){
+                instance().setConfig(k,v);
+            }).registerModule();
+        if(!ok)return false;
+        static std::once_flag registered;
+        std::call_once(registered,[](){
+            pl::input::registerTouchCallback([](const pl::input::TouchEvent& e){return instance().touch(e);});
+            pl::input::registerTextInputCallback([](const pl::input::TextInputEvent& e){return instance().input(e);});
+            pl::input::registerKeyCallback([](const pl::input::KeyEvent& e){return instance().key(e);});
+        });
+        enabled_=true;
+        worker_=std::thread([this](){process();});
+        paint();
         return true;
     }
-    bool disable() {
-        for (auto id : {"levimusic.search", "levimusic.prev", "levimusic.play", "levimusic.next", "levimusic.stop"})
-            pl::modmenu::unregisterButton(id);
-        pl::modmenu::submitDrawCommands(MODULE, std::span<const pl::modmenu::DrawCommand>{});
-        pl::modmenu::unregisterModule(MODULE);
-        {
-            std::lock_guard lock(mu_);
-            stopping_ = true;
-            jobs_.clear();
-        }
+    bool disable(){
+        enabled_=false;
+        {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();}
         cv_.notify_all();
-        if (worker_.joinable()) worker_.join();
+        if(worker_.joinable())worker_.join();
+        pl::modmenu::submitDrawCommands(MODULE,std::span<const pl::modmenu::DrawCommand>{});
+        pl::modmenu::unregisterModule(MODULE);
         return true;
     }
-    bool unload() { return true; }
-
+    bool unload(){return true;}
 private:
-    void enqueue(Action action) {
+    void setConfig(std::string_view k,std::string_view v){
         std::lock_guard lock(mu_);
-        if (!stopping_) {
-            jobs_.push_back({action, action == Action::Search ? query_ : std::string{}});
-            cv_.notify_one();
+        if(k=="apiKey")apiKey_=std::string(v).substr(0,200);
+        else if(k=="hud")hud_=v=="1"||v=="true";
+        else if(k=="lyrics")lyricsOn_=v=="1"||v=="true";
+        else if(k=="volume"){
+            try{volume_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
+            jobs_.push_back({Action::SetVolume,{}});cv_.notify_one();
         }
     }
-    void onConfig(std::string_view key, std::string_view value) {
+    void addJob(Action action,std::string arg={}){
         std::lock_guard lock(mu_);
-        if (key == "searchQuery") query_ = std::string(value).substr(0, 160);
-        if (key == "volume") {
-            try { volume_ = std::clamp(std::stoi(std::string(value)), 0, 100); } catch (...) {}
-            jobs_.push_back({Action::SetVolume, {}});
-            cv_.notify_one();
-        }
-        if (key == "hud") hud_ = (value == "1" || value == "true");
-        if (key == "lyrics") lyricsOn_ = (value == "1" || value == "true");
+        if(!shutdown_&&jobs_.size()<30){jobs_.push_back({action,std::move(arg)});cv_.notify_one();}
     }
-    void status(std::string t, std::string msg) {
+    void update(std::string title,std::string artist,std::string message){
         {
             std::lock_guard lock(mu_);
-            title_ = std::move(t);
-            message_ = std::move(msg);
+            title_=std::move(title);artist_=std::move(artist);info_=std::move(message);
         }
-        drawHud();
+        paint();
     }
-    void drawHud() {
-        std::string top, desc, lyric;
-        bool visible;
+    bool touch(const pl::input::TouchEvent& e){
+        if(!enabled_ || (e.action!=0&&e.action!=1))return false;
+        UI l=measure();if(!l.ok())return false;
+        bool opened,hud;
+        {std::lock_guard lock(mu_);opened=open_;hud=hud_;}
+        if(e.action==0) return opened || (hud&&l.mini.contains(e.x,e.y));
+        if(!opened){
+            if(hud&&l.mini.contains(e.x,e.y)){
+                {std::lock_guard lock(mu_);open_=true;}
+                paint();return true;
+            }
+            return false;
+        }
+        if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
+            {std::lock_guard lock(mu_);open_=false;typing_=false;}
+            pl::input::hideKeyboard();
+        } else if(l.searchBox.contains(e.x,e.y)){
+            {std::lock_guard lock(mu_);if(!typing_)query_.clear();typing_=true;}
+            pl::input::showKeyboard();
+        } else if(l.searchGo.contains(e.x,e.y)){
+            std::string q;
+            {std::lock_guard lock(mu_);q=query_;typing_=false;page_=0;}
+            pl::input::hideKeyboard();addJob(Action::Search,q);
+        } else if(l.prev.contains(e.x,e.y))addJob(Action::Previous);
+        else if(l.play.contains(e.x,e.y))addJob(Action::PlayPause);
+        else if(l.next.contains(e.x,e.y))addJob(Action::Next);
+        else if(l.stop.contains(e.x,e.y))addJob(Action::Stop);
+        else if(l.seek.contains(e.x,e.y)){
+            int duration;
+            {std::lock_guard lock(mu_);duration=total_;}
+            if(duration>0){
+                float ratio=std::clamp((e.x-l.seek.x)/l.seek.w,0.f,1.f);
+                addJob(Action::Seek,std::to_string(static_cast<int>(duration*ratio)));
+            }
+        } else if(l.pagePrev.contains(e.x,e.y)){
+            {std::lock_guard lock(mu_);page_=std::max(0,page_-1);}
+        } else if(l.pageNext.contains(e.x,e.y)){
+            {std::lock_guard lock(mu_);if(static_cast<size_t>((page_+1)*6)<results_.size())++page_;}
+        } else {
+            bool tapped=false;
+            {
+                std::lock_guard lock(mu_);
+                for(size_t i=0;i<l.rows.size();++i){
+                    int n=page_*6+static_cast<int>(i);
+                    if(n<static_cast<int>(results_.size()) && l.rows[i].contains(e.x,e.y)){
+                        selected_=n;tapped=true;break;
+                    }
+                }
+            }
+            if(tapped)addJob(Action::Select);
+        }
+        paint();return true;
+    }
+    bool input(const pl::input::TextInputEvent& e){
+        if(!enabled_)return false;
+        bool editing=false,submit=false;std::string query;
         {
             std::lock_guard lock(mu_);
-            top = title_; desc = message_;
-            lyric = lyricsOn_ ? lyricLine_ : std::string{};
-            visible = hud_;
+            editing=open_&&typing_;
+            if(editing){
+                for(char ch:e.text){
+                    if(ch=='\n'||ch=='\r'){submit=true;break;}
+                    if(query_.size()<160)query_+=ch;
+                }
+                if(submit)typing_=false;
+                query=query_;
+            }
         }
-        std::vector<pl::modmenu::DrawCommand> cmds;
-        if (visible) {
-            pl::modmenu::DrawCommand rect;
-            rect.type = pl::modmenu::DrawCommandType::RectFilled;
-            rect.x = 15; rect.y = 55; rect.w = 420; rect.h = lyric.empty() ? 64 : 91;
-            rect.color = 0xC0162230U;
-            cmds.push_back(rect);
-            auto line = [&cmds](const std::string& msg, float y, float size, uint32_t color) {
-                pl::modmenu::DrawCommand cmd;
-                cmd.type = pl::modmenu::DrawCommandType::Text;
-                cmd.x = 27; cmd.y = y; cmd.size = size;
-                cmd.color = color; cmd.text = shorten(msg, 67);
-                cmds.push_back(std::move(cmd));
-            };
-            line(top, 75, 17, 0xFFFFFFFFU);
-            line(desc, 102, 13, 0xFFC5D8E7U);
-            if (!lyric.empty()) line(lyric, 129, 14, 0xFF78E7DEU);
-        }
-        pl::modmenu::submitDrawCommands(MODULE, cmds);
+        if(editing){if(submit){pl::input::hideKeyboard();addJob(Action::Search,query);}paint();}
+        return editing;
     }
-    void run() {
-        EnvScope scope(vm_);
-        if (!scope) { status("LeviMusic", "Tidak dapat mengakses JavaVM"); return; }
-        JNIEnv* env = scope.env;
-        AndroidPlayer player;
-        auto playIndex = [this, &player, env]() {
-            Track tr;
-            int vol = 75;
-            {
-                std::lock_guard lock(mu_);
-                if (index_ < 0 || index_ >= static_cast<int>(results_.size())) return;
-                tr = results_[static_cast<size_t>(index_)];
-                vol = volume_;
-                lyrics_.clear(); lyricLine_.clear();
+    bool key(const pl::input::KeyEvent& e){
+        if(!enabled_)return false;
+        bool editing=false,submit=false;std::string query;
+        {
+            std::lock_guard lock(mu_);
+            editing=open_&&typing_;
+            if(editing&&e.isKeyDown){
+                if(e.keyCode==67&&!query_.empty()){
+                    query_.pop_back();
+                    while(!query_.empty() && (static_cast<unsigned char>(query_.back())&0xC0u)==0x80u)query_.pop_back();
+                }else if(e.keyCode==66){submit=true;typing_=false;}
+                query=query_;
             }
-            status(tr.title, "Memuat " + tr.artist + " dari Audius...");
-            const std::string streamUrl = std::string(API) + "/tracks/" + encode(env, tr.id) + "/stream?app_name=" + APP_NAME;
-            if (!player.startUrl(env, streamUrl, vol)) {
-                status(tr.title, "Gagal streaming. Coba lagu lain atau periksa internet.");
-                return;
-            }
-            status(tr.title + " - " + tr.artist, "Sedang diputar secara online");
-            auto found = searchLyrics(env, tr);
-            {
-                std::lock_guard lock(mu_);
-                lyrics_ = std::move(found);
-                lyricLine_ = lyrics_.empty() ? "Lirik sinkron tidak tersedia" : "...";
-            }
-            drawHud();
+        }
+        if(editing&&e.isKeyDown){if(submit){pl::input::hideKeyboard();addJob(Action::Search,query);}paint();}
+        return editing;
+    }
+    void paint(){
+        if(!enabled_)return;
+        UI l=measure();if(!l.ok())return;
+        std::string name,artist,info,query,lyric;
+        std::vector<Track> tracks;
+        int current,page,elapsed,total,volume;
+        bool open,showHud,playing,typing;
+        {
+            std::lock_guard lock(mu_);
+            name=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";
+            tracks=results_;current=selected_;page=page_;elapsed=elapsed_;total=total_;
+            volume=volume_;open=open_;showHud=hud_;playing=playing_;typing=typing_;
+        }
+        std::vector<pl::modmenu::DrawCommand> out;
+        const float u=l.s;
+        auto rectangle=[&](Rect r,uint32_t color){
+            pl::modmenu::DrawCommand c;c.type=pl::modmenu::DrawCommandType::RectFilled;
+            c.x=r.x;c.y=r.y;c.w=r.w;c.h=r.h;c.x3=8*u;c.color=color;out.push_back(std::move(c));
         };
-        int lastLyricMs = -1000;
-        while (true) {
-            Job job{};
-            bool hasJob = false;
+        auto text=[&](float x,float y,std::string v,float size,uint32_t color,size_t max=60){
+            pl::modmenu::DrawCommand c;c.type=pl::modmenu::DrawCommandType::Text;
+            c.x=x;c.y=y;c.size=size;c.color=color;c.text=shorten(v,max);out.push_back(std::move(c));
+        };
+        auto circle=[&](float x,float y,float radius,uint32_t color){
+            pl::modmenu::DrawCommand c;c.type=pl::modmenu::DrawCommandType::CircleFilled;
+            c.x=x;c.y=y;c.size=radius;c.color=color;out.push_back(std::move(c));
+        };
+        if(!open){
+            if(showHud){
+                rectangle({l.mini.x-2*u,l.mini.y-2*u,l.mini.w+4*u,l.mini.h+4*u},C_BORDER);
+                rectangle(l.mini,C_BG);
+                rectangle({l.mini.x,l.mini.y,l.mini.w,4*u},C_MINT);
+                circle(l.mini.x+30*u,l.mini.y+33*u,18*u,0xFF3E5368U);
+                circle(l.mini.x+30*u,l.mini.y+33*u,7*u,C_MINT);
+                text(l.mini.x+58*u,l.mini.y+23*u,name,15*u,C_TEXT,42);
+                text(l.mini.x+58*u,l.mini.y+44*u,artist+"  •  Tap to open",11*u,C_DIM,51);
+                if(total>0)rectangle({l.mini.x,l.mini.y+l.mini.h-3*u,
+                    l.mini.w*std::clamp(float(elapsed)/total,0.f,1.f),3*u},C_MINT);
+            }
+            pl::modmenu::submitDrawCommands(MODULE,out);
+            return;
+        }
+        rectangle({l.outer.x-2*u,l.outer.y-2*u,l.outer.w+4*u,l.outer.h+4*u},C_BORDER);
+        rectangle(l.outer,C_BG);
+        rectangle({l.outer.x,l.outer.y,5*u,l.outer.h},C_MINT);
+        text(l.outer.x+24*u,l.outer.y+37*u,"LEVI MUSIC",22*u,C_TEXT);
+        text(l.outer.x+211*u,l.outer.y+35*u,"ONLINE PLAYER • v0.1.2",12*u,C_MINT);
+        rectangle(l.close,0xFF344558U);
+        text(l.close.x+9*u,l.close.y+25*u,"X",20*u,C_TEXT);
+        rectangle(l.left,C_PANEL);
+        rectangle(l.right,C_PANEL);
+        const float cx=l.left.x+l.left.w*.5f;
+        const float discY=l.left.y+std::min(84*u,l.left.h*.22f);
+        circle(cx,discY,58*u,0xFF40536CU);
+        circle(cx,discY,48*u,0xFF142237U);
+        circle(cx,discY,34*u,0xFF486074U);
+        circle(cx,discY,10*u,C_MINT);
+        const float ty=l.left.y+std::min(174*u,l.left.h*.44f);
+        text(l.left.x+16*u,ty,name,18*u,C_TEXT,50);
+        text(l.left.x+16*u,ty+26*u,artist,13*u,C_MINT,50);
+        text(l.left.x+16*u,ty+46*u,info,11*u,C_DIM,56);
+        if(!lyric.empty())text(l.left.x+16*u,ty+67*u,lyric,12*u,C_DIM,55);
+        rectangle(l.seek,0xFF35465CU);
+        if(total>0)rectangle({l.seek.x,l.seek.y,
+            l.seek.w*std::clamp(float(elapsed)/total,0.f,1.f),l.seek.h},C_MINT);
+        text(l.seek.x,l.seek.y+l.seek.h+17*u,clockText(elapsed),12*u,C_DIM);
+        text(l.seek.x+l.seek.w-58*u,l.seek.y+l.seek.h+17*u,clockText(total),12*u,C_DIM);
+        rectangle(l.stop,0xFF3A5268U);text(l.stop.x+8*u,l.stop.y+33*u,"[]",15*u,C_TEXT);
+        rectangle(l.prev,0xFF3A5268U);text(l.prev.x+7*u,l.prev.y+33*u,"|<<",17*u,C_TEXT);
+        rectangle(l.play,C_MINT);text(l.play.x+12*u,l.play.y+33*u,playing?"PAUSE":"PLAY",15*u,0xFF10232AU);
+        rectangle(l.next,0xFF3A5268U);text(l.next.x+8*u,l.next.y+33*u,">>|",17*u,C_TEXT);
+        text(l.left.x+12*u,l.left.y+l.left.h-15*u,"Volume "+std::to_string(volume)+"%   •   Audius",11*u,C_DIM);
+        rectangle(l.searchBox,0xFF0B1929U);
+        text(l.searchBox.x+12*u,l.searchBox.y+28*u,(typing?"_ ":"")+query,14*u,typing?C_MINT:C_TEXT,43);
+        rectangle(l.searchGo,C_MINT);text(l.searchGo.x+8*u,l.searchGo.y+28*u,"SEARCH",13*u,0xFF0B2730U);
+        text(l.right.x+14*u,l.right.y+75*u,"SEARCH RESULTS   /   "+std::to_string(tracks.size()),12*u,C_DIM);
+        for(size_t i=0;i<l.rows.size();i++){
+            size_t n=static_cast<size_t>(page*6)+i;
+            if(n>=tracks.size())break;
+            Rect r=l.rows[i];
+            rectangle(r,static_cast<int>(n)==current?0xFF2D5261U:0xFF2A394BU);
+            text(r.x+10*u,r.y+std::min(22*u,r.h*.47f),
+                std::to_string(n+1)+". "+tracks[n].title,13*u,C_TEXT,42);
+            text(r.x+10*u,r.y+std::min(39*u,r.h*.83f),tracks[n].artist,11*u,C_DIM,48);
+        }
+        rectangle(l.pagePrev,0xFF34495DU);rectangle(l.pageNext,0xFF34495DU);
+        text(l.pagePrev.x+13*u,l.pagePrev.y+25*u,"<",18*u,C_TEXT);
+        text(l.pageNext.x+13*u,l.pageNext.y+25*u,">",18*u,C_TEXT);
+        text(l.right.x+12*u,l.right.y+l.right.h-23*u,
+            std::to_string(page+1)+" / "+std::to_string(std::max<size_t>(1,(tracks.size()+5)/6)),12*u,C_DIM);
+        pl::modmenu::submitDrawCommands(MODULE,out);
+    }
+    void process(){
+        EnvScope scope(vm_);
+        if(!scope){update("LeviMusic","Android","Java VM unavailable");return;}
+        JNIEnv* env=scope.env;
+        AndroidPlayer player;
+        auto playSelected=[this,&player,env](){
+            Track tr;int vol;std::string key;
+            {
+                std::lock_guard lock(mu_);
+                if(selected_<0||selected_>=static_cast<int>(results_.size()))return;
+                tr=results_[static_cast<size_t>(selected_)];
+                vol=volume_;key=apiKey_;playing_=false;elapsed_=0;total_=0;
+                lyrics_.clear();lyric_.clear();
+            }
+            update(tr.title,tr.artist,"Opening Audius stream...");
+            std::string base=std::string(API)+"/tracks/"+encode(env,tr.id)+"/stream?app_name="+APP_NAME;
+            if(!key.empty())base+="&api_key="+encode(env,key);
+            bool ok=player.startUrl(env,base,vol);
+            if(!ok){
+                update(tr.title,tr.artist,"Retrying backup Audius discovery node...");
+                std::string mirror="https://discoveryprovider.audius.co/v1/tracks/"+encode(env,tr.id)
+                      +"/stream?app_name="+APP_NAME;
+                if(!key.empty())mirror+="&api_key="+encode(env,key);
+                ok=player.startUrl(env,mirror,vol);
+            }
+            if(!ok){update(tr.title,tr.artist,"Stream error - try another song or API key");return;}
+            {
+                std::lock_guard lock(mu_);
+                playing_=true;total_=player.duration(env);
+            }
+            update(tr.title,tr.artist,"Streaming online (Audius)");
+            std::vector<Lyric> found=searchLyrics(env,tr);
+            {
+                std::lock_guard lock(mu_);
+                lyrics_=std::move(found);
+                lyric_=lyrics_.empty()?"No synchronized lyrics":"...";
+            }
+        };
+        auto lastPaint=std::chrono::steady_clock::now();
+        while(true){
+            Job job{};bool hasJob=false;
             {
                 std::unique_lock lock(mu_);
-                cv_.wait_for(lock, std::chrono::milliseconds(400), [this] { return stopping_ || !jobs_.empty(); });
-                if (stopping_) break;
-                if (!jobs_.empty()) { job = std::move(jobs_.front()); jobs_.pop_front(); hasJob = true; }
-            }
-            if (hasJob) {
-                switch (job.action) {
-                case Action::Search: {
-                    if (job.query.empty()) { status("LeviMusic", "Isi Search Query di Mod Menu"); break; }
-                    status("Cari: " + job.query, "Menghubungi katalog Audius...");
-                    auto found = searchAudius(env, job.query);
-                    {
-                        std::lock_guard lock(mu_);
-                        results_ = std::move(found);
-                        index_ = results_.empty() ? -1 : 0;
-                    }
-                    // Immediately play first result: zero manual downloads, zero local import.
-                    if (index_ >= 0) playIndex();
-                    else status("Pencarian", "Tidak ada hasil. Coba kata kunci lain.");
-                    break;
+                cv_.wait_for(lock,std::chrono::milliseconds(350),
+                    [this]{return shutdown_||!jobs_.empty();});
+                if(shutdown_)break;
+                if(!jobs_.empty()){
+                    job=std::move(jobs_.front());
+                    jobs_.pop_front();hasJob=true;
                 }
-                case Action::PlayPause:
-                    if (player.isPlaying(env)) { player.toggle(env); status(title_, "Dijeda"); }
-                    else if (player.position(env) > 0) { player.toggle(env); status(title_, "Diputar"); }
-                    else playIndex();
-                    break;
-                case Action::Next:
-                case Action::Previous: {
-                    {
-                        std::lock_guard lock(mu_);
-                        if (!results_.empty()) {
-                            const int count = static_cast<int>(results_.size());
-                            index_ = (index_ + (job.action == Action::Next ? 1 : count - 1)) % count;
+            }
+            if(hasJob){
+                switch(job.action){
+                    case Action::Search:{
+                        if(job.query.empty()){update("Search","Empty query","Tap search and enter a title");break;}
+                        update("Searching",job.query,"Contacting Audius...");
+                        std::string key;
+                        {std::lock_guard lock(mu_);key=apiKey_;}
+                        auto found=searchAudiusFrom(env,job.query,API,key);
+                        if(found.empty())
+                            found=searchAudiusFrom(env,job.query,"https://discoveryprovider.audius.co/v1",key);
+                        {
+                            std::lock_guard lock(mu_);
+                            results_=std::move(found);
+                            selected_=results_.empty()?-1:0;
+                            page_=0;
                         }
+                        if(selected_>=0)playSelected();
+                        else update("No results",job.query,"Please check internet/API key");
+                        break;
                     }
-                    playIndex();
-                    break;
-                }
-                case Action::Stop:
-                    player.release(env);
-                    {
-                        std::lock_guard lock(mu_);
-                        lyrics_.clear(); lyricLine_.clear();
-                    }
-                    status("LeviMusic", "Pemutaran dihentikan");
-                    break;
-                case Action::SetVolume: {
-                    int vol;
-                    { std::lock_guard lock(mu_); vol = volume_; }
-                    player.setVolume(env, vol);
-                    break;
-                }
-                }
-            }
-            if (player.isPlaying(env)) {
-                const int pos = player.position(env);
-                if (pos > lastLyricMs + 300) {
-                    lastLyricMs = pos;
-                    std::string line;
-                    {
-                        std::lock_guard lock(mu_);
-                        if (!lyrics_.empty()) {
-                            for (const auto& l : lyrics_) {
-                                if (l.ms > pos) break;
-                                line = l.line;
+                    case Action::Select:playSelected();break;
+                    case Action::PlayPause:
+                        if(player.isPlaying(env)){
+                            player.toggle(env);{std::lock_guard lock(mu_);playing_=false;}
+                        }else if(player.position(env)>0){
+                            player.toggle(env);{std::lock_guard lock(mu_);playing_=true;}
+                        }else playSelected();
+                        break;
+                    case Action::Previous:
+                    case Action::Next:{
+                        {
+                            std::lock_guard lock(mu_);
+                            if(!results_.empty()){
+                                int n=static_cast<int>(results_.size());
+                                selected_=(selected_+(job.action==Action::Next?1:n-1))%n;
+                                page_=selected_/6;
                             }
-                            if (line != lyricLine_) lyricLine_ = line;
-                            else line.clear();
                         }
+                        playSelected();break;
                     }
-                    if (!line.empty()) drawHud();
+                    case Action::Stop:
+                        player.release(env);
+                        {std::lock_guard lock(mu_);
+                            playing_=false;elapsed_=0;total_=0;lyrics_.clear();lyric_.clear();
+                        }
+                        update("LeviMusic","Stopped","Choose a song to play");break;
+                    case Action::SetVolume:{
+                        int v;{std::lock_guard lock(mu_);v=volume_;}
+                        player.setVolume(env,v);break;
+                    }
+                    case Action::Seek:
+                        try{player.seek(env,std::stoi(job.query));}catch(...){}break;
                 }
+            }
+            bool playing=player.isPlaying(env);
+            int pos=player.position(env),dur=player.duration(env);
+            {
+                std::lock_guard lock(mu_);
+                playing_=playing;elapsed_=pos;
+                if(dur>0)total_=dur;
+                if(playing&&!lyrics_.empty()){
+                    for(const auto& line:lyrics_){
+                        if(line.ms>pos)break;
+                        lyric_=line.line;
+                    }
+                }
+            }
+            const auto now=std::chrono::steady_clock::now();
+            if(now-lastPaint>std::chrono::milliseconds(400)){
+                paint();lastPaint=now;
             }
         }
         player.release(env);
     }
 };
-
 } // namespace
 PL_REGISTER_MOD(LeviMusic, LeviMusic::instance())

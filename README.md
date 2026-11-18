@@ -1,97 +1,65 @@
-# LeviMusic Online — LeviLauncher Android (Beta source 0.1.0)
+# LeviMusic Online v0.1.2 — LeviLauncher Android
 
-**Status: Android ARM64 GitHub Actions build has succeeded; runtime inside Minecraft/LeviLauncher Android has NOT yet been tested.**
-This repository contains the source code. Download the installable `.levipack` from GitHub Releases after the release workflow succeeds.
+LeviMusic is a **development beta** native C++ music mod for **real Minecraft Bedrock Android**, running through **LeviLauncher**. It supports **Audius** as its online music source and optional synced lyrics from **LRCLIB**.
 
-## What it tries to do
+**Compiled does not mean confirmed compatible.** We have not verified startup stability, touch/input mapping, audio playback or performance on a physical Android device after this update. If the game stalls, disable LeviMusic and collect the launch logs.
 
-- **100% Bedrock** through LeviLauncher Android native Preloader SDK (not Minecraft Java).
-- Search songs by title/artist **in the game's Mod Menu**: enter *Search Query*, tap the *Cari* HUD button.
-- Stream **original song recordings** from the **Audius public catalog**, no local MP3 import.
-- Play/Pause, Next, Previous, Stop, Volume.
-- Optional lyrics synced from LRCLIB if provided for the chosen song; one current line on HUD.
-- Built for **arm64-v8a Android**, including Android 16.
+## v0.1.2 changes
 
-**Limitations**: Not Spotify/YouTube Music; their catalogs are not provided by Audius. Many mainstream copyrighted songs will not be available, and tracks, endpoints, lyrics, or playback may fail. The Android MediaPlayer is controlled from a worker thread. There has been no runtime validation on LeviLauncher, so this is a development prototype, not a guaranteed working release. Online streams require Minecraft/LeviLauncher to have internet permissions, and must comply with the provider's terms.
+1. Removed all old **LeviMusic on-screen external control buttons**.
+2. Moved the compact **music HUD to the lower-left corner**.
+3. Reworked the HUD with a dark rounded card, disc icon, mint accents, title, artist and progress.
+4. Tap the mini-player to open the **full music interface**: left = player, playback, duration and seek; right = search and scrollable pages of results.
+5. Search field uses the Android soft keyboard. Tap the field to clear the old query, type a new song, then tap **SEARCH** or press Enter. Tap a result to play it.
+6. Added Audius stream redirect/HTTP-response probing, fallback host and optional API key. Audio playback is still **not guaranteed** until runtime testing on device.
 
-## Android-only workflow: Build through GitHub Actions from Termux (NO PC required)
+### Why not Kuro as the engine?
 
-1. Install Termux, `pkg update && pkg install git gh unzip -y`.
-2. Extract the **source ZIP** under Termux home (not a path with executable restrictions):
-   ```sh
-   cd ~
-   unzip /sdcard/Download/LeviMusic-Android-Source.zip
-   cd LeviMusic-Android-Source
-   ```
-3. Login to GitHub via `gh auth login` (browser flow).
-4. Publish a **private** repository with:
-   ```sh
-   bash publish_termux.sh
-   ```
-5. Open **GitHub -> repository -> Releases** (or Actions -> Build & Release LeviMusic Android ARM64). Each successful push to `main` creates a new versioned **pre-release** and attaches `LeviMusic-<version>-arm64-v8a.levipack` directly. You can also get the build artifact from Actions.
-6. Open LeviLauncher Android -> Mods -> Add Mod and select the `.levipack`. Start Minecraft. In-game open LeviLauncher Mod Menu -> LeviMusic Online -> edit `Search Query`, tap the `Cari` button. Find results automatically play their **first** match. Use `>>` and `<<` buttons to change among the 20 search results.
+[Kuro](https://github.com/ayashiiiyo/kuro) uses **NewPipeExtractor + AndroidX Media3/ExoPlayer**, tied to Kotlin/Java Android dependencies and a full Android app's configuration. A \`.levipack\` consists of a native \`.so\` and metadata; it cannot just import Kuro's application libraries as-is. To reuse a Kuro-like engine, a **separate Android companion / Java bridge** would be needed, including dependency and licensing review. v0.1.2 does **not** include or claim to use Kuro, YouTube Music, or NewPipeExtractor.
 
-IMPORTANT: GitHub Actions has compiled successfully, but actual runtime loading and music playback in LeviLauncher have not been validated. Later builds may still fail. Never import a source ZIP directly.
+## Install
 
-## Alternative: Build on Linux x86_64 with Android NDK
+1. Download \`LeviMusic-0.1.2-arm64-v8a.levipack\` from the repository's **Releases** after the GitHub Actions workflow completes successfully.
+2. Open **LeviLauncher Android → Mods / Package Management** and install the downloaded \`.levipack\`.
+3. Use LeviLauncher **v1.7.1** for the best SDK ABI match. Earlier versions may not be compatible.
+4. Start Minecraft with **only LeviMusic** enabled initially.
+5. In game, tap the **LeviMusic HUD in the lower-left corner**, tap the search field, type, and search.
+6. If both public Audius endpoints fail to stream, try a different Audius track and configure your own Audius API key under **Mod Menu → LeviMusic Online → Audius API Key**. Never share the key or commit it to GitHub.
 
-Requires Android NDK r28.2, CMake 3.22+, Ninja, Git, internet.
+## Features
 
-```sh
-export ANDROID_NDK_HOME="$HOME/Android/Sdk/ndk/28.2.13676358"
-./build.sh
-```
+See [FEATURES.md](FEATURES.md).
 
-Expected output: `build/LeviMusic-0.1.0-arm64-v8a.levipack`.
+## Limits & known issues
 
-## Package format
+- The catalogue is restricted to **public Audius tracks**, not every commercial song.
+- A registered Audius API key may be needed depending on provider requirements. The free API key can be obtained from Audius developer plans.
+- The app does not download/import individual MP3s, but uses internet connectivity for streaming and search.
+- About 20 results per search; six results appear per page.
+- LRC lyrics only when the lyric service returns a suitable timestamped match.
+- The in-game HUD is rendered with Preloader primitives; **no true blur**, advanced native text widget, or album cover yet.
+- Music controls depend on the Android media stack. Some codecs, network conditions and redirects may still fail.
+- Touch interaction is not yet validated at every display resolution or Minecraft GUI scale.
+- Disabling native mods while loading or on an unstable build may be unsafe; stop the game before replacing old versions.
+- Full end-to-end mobile tests are still necessary. GitHub Actions only verifies compile/package.
 
-After compiling, the levipack has files at the ZIP root, as in LiteLDev's official `examples/full-cpp-mod`:
+## Development / Building
 
-```
-manifest.json
-liblevimusic.so
-```
+Android NDK r28.2, CMake, Ninja, Git needed. GitHub Actions builds ARM64 and publishes each successful push to main as a versioned pre-release, with features from \`FEATURES.md\` and changelog from Git history.
 
-`type` = `preload-native`. It uses Preloader SDK tag `0.2.3`, which includes the Mod Menu Text configuration type.
+In Termux, synchronize your previously created working directory:
 
-## Known engineering TODO / security & reliability
+\`\`\`sh
+cd ~/LeviMusic-Android-Source
+git pull --ff-only origin main
+\`\`\`
 
-- Verify **ABI** against the exact version of LeviLauncher Android on device. Preloader 0.2.3 uses a different API from 0.2.2; menu text input depends on matching launcher support.
-- Thoroughly test Android MediaPlayer behavior for HTTP redirects, TLS, errors, network latency and `prepare()` stalls, including Android 16 and MC version differences.
-- Add a real search results list rather than immediately playing the first result; current `>>`/`<<` navigates results.
-- Robust retry/failover for Audius API hosts and filtering inaccessible/unsupported streams.
-- Real UI panel and album art, keyboard focus / touch interactions, draggable HUD.
-- Better lyrics synchronization with duration/artist matching, user settings persistence, and line wrapping.
-- Load-time dependency behavior: verify bundled launcher `libpreloader.so` matches the one linked at build time. The mod contains only its library, not a second preloader.
+Build source and package details: [CMakeLists.txt](CMakeLists.txt). Latest artifacts: [Releases](https://github.com/TerserahGw/levimusic-android/releases).
 
-## APIs and references
+### API references
+- [LeviLauncher Android](https://github.com/LiteLDev/LeviLauncher-Android)
+- [Preloader Android Input API](https://github.com/LiteLDev/preloader-android)
+- [Audius API Docs](https://docs.audius.co/api/)
+- [LRCLIB](https://lrclib.net/)
 
-- LeviLauncher Android: https://github.com/LiteLDev/LeviLauncher-Android
-- Official full C++ mod example: https://github.com/LiteLDev/LeviLauncher-Android/tree/main/examples/full-cpp-mod
-- Preloader SDK: https://github.com/LiteLDev/preloader-android
-- Audius API docs: https://docs.audius.co/api/
-- LRCLIB: https://lrclib.net/
-
-No token, password, copyrighted song, or DRM bypass tool is included.
-
-
-## Automated versions and release notes
-
-Each successful push to `main` runs the Android ARM64 build and creates a GitHub **pre-release** with the actual `.levipack` file (unless the same commit has already been released). The first version is `v0.1.0`; subsequent pushes increment the patch number (`v0.1.1`, `v0.1.2`, ...). Failed builds do not publish releases.
-
-Release descriptions include the current feature list from [FEATURES.md](FEATURES.md) and a changelog automatically assembled from commit messages since the previous release tag. When adding or removing a feature, update `FEATURES.md` in the same commit and write a descriptive commit message. Mod `manifest.json` and the downloadable file name receive the generated version during the CI build.
-
-GitHub Releases: https://github.com/TerserahGw/levimusic-android/releases
-
-If release publishing fails with a permissions error, check **Repository Settings -> Actions -> General -> Workflow permissions** and allow read/write permissions for GitHub Actions.
-
-## Compatibility note — black screen on v0.1.0
-
-A user reported that Minecraft does not progress past a black screen when LeviMusic v0.1.0 is enabled; without the mod, Minecraft boots normally. **Do not use v0.1.0 if it prevents launch.**
-
-Investigation found that v0.1.0 built against Preloader SDK `0.2.3`, while the official LeviLauncher Android v1.7.1 embeds preloader commit `cc08b40a31471d3e2dedb267f5f17b28da2b0604` with a different C++ `ModuleInfo` ABI. ABI mismatch can corrupt callbacks at Mod Menu registration and cause freezes or crashes.
-
-Starting with v0.1.1, builds use the **same preloader commit as LeviLauncher Android v1.7.1**. This is a compatibility correction, **not a confirmed runtime fix**. We still need an on-device test and Android logcat to confirm. Earlier launcher versions may require a separate SDK-targeted build.
-
-If the newest release still causes a black screen, disable the mod and provide the Android LeviLauncher version, Minecraft version, and native logcat entries containing `LeviMusic`, `preloader`, `linker`, or `liblevimusic`.
+Copyright notice: Kuro and NewPipeExtractor are **not included** in this codebase.
