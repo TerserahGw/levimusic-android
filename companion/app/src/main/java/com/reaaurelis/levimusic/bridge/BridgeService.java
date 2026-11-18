@@ -16,6 +16,9 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.URLDecoder;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
@@ -28,6 +31,7 @@ public final class BridgeService extends NotificationListenerService {
     private volatile boolean running=false;
     private volatile ServerSocket serverSocket;
     private Thread listenerThread;
+    private final ExecutorService clients=Executors.newFixedThreadPool(3);
 
     public static String getOrCreateToken(Context c) {
         android.content.SharedPreferences prefs=c.getSharedPreferences("bridge",Context.MODE_PRIVATE);
@@ -60,6 +64,7 @@ public final class BridgeService extends NotificationListenerService {
     private void stopListening(){
         running=false;
         getSharedPreferences("bridge",MODE_PRIVATE).edit().putBoolean("service_ready",false).apply();
+        clients.shutdownNow();
         ServerSocket socket=serverSocket;
         if(socket!=null)try{socket.close();}catch(Exception ignored){}
     }
@@ -67,10 +72,15 @@ public final class BridgeService extends NotificationListenerService {
         try(ServerSocket server=new ServerSocket(PORT,10,InetAddress.getByName("127.0.0.1"))){
             serverSocket=server;
             while(running){
-                try(Socket client=server.accept()){
-                    client.setSoTimeout(1200);
-                    client.setTcpNoDelay(true);
-                    serve(client);
+                try {
+                    final Socket client=server.accept();
+                    clients.execute(()->{
+                        try(Socket socket=client){
+                            socket.setSoTimeout(30000);
+                            socket.setTcpNoDelay(true);
+                            serve(socket);
+                        }catch(Exception e){if(running)Log.w(TAG,"Client failed",e);}
+                    });
                 } catch(Exception e){ if(running)Log.w(TAG,"Client failed",e); }
             }
         } catch(Exception e){
@@ -97,6 +107,8 @@ public final class BridgeService extends NotificationListenerService {
         } catch(SecurityException e){Log.w(TAG,"Notification access denied",e);return null;}
     }
     private JSONObject state(){
+        JSONObject own=PlayerService.getStatus();
+        if(own!=null)return own;
         JSONObject o=new JSONObject();
         MediaController m=controller();
         try{
@@ -132,6 +144,14 @@ public final class BridgeService extends NotificationListenerService {
     }
     private JSONObject control(String path){
         JSONObject o=new JSONObject();
+        if(PlayerService.getStatus()!=null){
+            String action=getParam(path,"action");
+            long seek=0;
+            try{seek=Long.parseLong(getParam(path,"position"));}catch(Exception ignored){}
+            boolean ok=PlayerService.command(action,seek);
+            try{return o.put("accepted",ok).put("note",ok?"Internal player command queued":"Unavailable");}
+            catch(Exception ignored){return new JSONObject();}
+        }
         try{
             MediaController m=controller();
             if(m==null)return o.put("accepted",false).put("error","No active music session");
@@ -189,6 +209,18 @@ public final class BridgeService extends NotificationListenerService {
                 status=405;json=new JSONObject().put("error","GET only");
             }else if(path.equals("/v1/status"))json=state();
             else if(path.startsWith("/v1/control?"))json=control(path);
+            else if(path.startsWith("/v1/search?")){
+                String query=URLDecoder.decode(getParam(path,"query"),"UTF-8");
+                if(query.length()>160)query=query.substring(0,160);
+                json=MusicCatalog.searchJson(query);
+            }
+            else if(path.startsWith("/v1/play?")){
+                String id=getParam(path,"id");
+                MusicCatalog.Song song=MusicCatalog.find(id);
+                boolean started=PlayerService.play(this,song);
+                json=new JSONObject().put("accepted",started)
+                    .put("message",started?"Playback requested":"Open LeviMusic app first or search again");
+            }
             else{status=404;json=new JSONObject().put("error","Unknown endpoint");}
         }
         byte[] content=json.toString().getBytes(StandardCharsets.UTF_8);

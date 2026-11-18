@@ -7,11 +7,20 @@ android {
         applicationId 'com.reaaurelis.levimusic.bridge'
         minSdk 28
         targetSdk 35
-        versionCode 30
-        versionName '0.3.0-beta'
+        versionCode 100
+        versionName '1.0.0-rc1'
     }
-    compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
-    buildTypes {
-        release { minifyEnabled false }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
+    buildTypes { release { minifyEnabled false } }
+}
+dependencies {
+    def mediaVersion = '1.11.1'
+    implementation "androidx.media3:media3-common:$mediaVersion"
+    implementation "androidx.media3:media3-exoplayer:$mediaVersion"
+    implementation "androidx.media3:media3-session:$mediaVersion"
+    implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.5'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
 }

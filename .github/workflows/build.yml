@@ -122,7 +122,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-0.3.0-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.0.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
@@ -178,7 +178,7 @@ jobs:
           notes = "\n".join([
               f"# LeviMusic Online v{version}",
               "",
-              "Mod pemutar musik online untuk Minecraft Bedrock melalui LeviLauncher Android (ARM64).",
+              "LeviMusic Android independent player + native Minecraft Bedrock mod (ARM64).",
               "",
               "## Fitur yang tersedia dalam source",
               features,
@@ -191,7 +191,7 @@ jobs:
               "",
               "## Catatan kompatibilitas",
               "- Status **beta / belum diuji runtime dalam Minecraft**; berhasil dikompilasi tidak menjamin playback bekerja pada semua perangkat.",
-              "- Pencarian menggunakan Audius (bukan Spotify/YouTube Music); lagu dan lirik bergantung pada ketersediaan penyedia.",
+              "- Music search uses unofficial NewPipeExtractor YouTube access; provider restrictions apply, not guaranteed unlimited or official Spotify.",
               "- Lirik dari LRCLIB hanya ditampilkan bila tersedia.",
               "",
           ])
@@ -212,7 +212,7 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" "$PACKAGE" "$APK" \
             --target "$GITHUB_SHA" \
-            --title "LeviMusic Online v$VERSION (Beta)" \
+            --title "LeviMusic Online v$VERSION (Release Candidate)" \
             --notes-file release-notes.md \
             --prerelease
           echo "Published release $TAG with $PACKAGE."

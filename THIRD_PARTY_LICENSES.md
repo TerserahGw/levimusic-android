@@ -56,3 +56,11 @@ SOFTWARE.
 Source: https://github.com/sammycage/lunasvg
 
 LunaSVG is distributed under the MIT License. See its upstream repository for the complete notice and third-party dependencies.
+
+
+## NewPipeExtractor and Media3 (APK)
+NewPipeExtractor: https://github.com/TeamNewPipe/NewPipeExtractor (GPL-3.0)
+The companion APK includes NewPipeExtractor and is distributed under GNU GPL v3; the license text and source are available in LICENSE.
+AndroidX Media3: https://developer.android.com/media/media3 (Apache License 2.0).
+OkHttp: https://github.com/square/okhttp (Apache License 2.0).
+The app icon is original vector artwork, not Apple or Spotify branding.
