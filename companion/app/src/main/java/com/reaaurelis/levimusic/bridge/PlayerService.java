@@ -26,6 +26,9 @@ import androidx.media3.session.MediaSessionService;
 import org.json.JSONObject;
 
 import java.util.concurrent.ExecutorService;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.Executors;
 
 public final class PlayerService extends MediaSessionService {
@@ -43,6 +46,10 @@ public final class PlayerService extends MediaSessionService {
     private volatile long positionMs=0L,durationMs=0L;
     private volatile boolean playing=false,loading=false;
     private volatile String statusMessage="Choose a song";
+    private final ArrayDeque<String> recentSongs=new ArrayDeque<>();
+    private volatile boolean autoplay=true;
+    private int navigationGeneration=0;
+    private boolean endQueued=false;
 
     public static boolean isActive(){return active!=null;}
     public static JSONObject getStatus() {
@@ -79,6 +86,8 @@ public final class PlayerService extends MediaSessionService {
                     case "pause": instance.player.pause();break;
                     case "seek": instance.player.seekTo(Math.max(0,seek));break;
                     case "next": instance.advance(1);break;
+                    case "autoplay_on": instance.autoplay=true;break;
+                    case "autoplay_off": instance.autoplay=false;break;
                     case "previous": instance.advance(-1);break;
                     default:break;
                 }
@@ -90,7 +99,32 @@ public final class PlayerService extends MediaSessionService {
         MusicCatalog.Song current=song;
         if(current==null)return;
         MusicCatalog.Song neighbor=MusicCatalog.neighbor(current.id,direction);
-        if(neighbor!=null)startTrack(neighbor);
+        if(neighbor!=null){startTrack(neighbor);return;}
+        if(direction<0 || MusicCatalog.isPlaylistQueue()) {
+            statusMessage="No previous/next playlist track";
+            return;
+        }
+        // End of the search queue: extend it from actual YouTube related items.
+        final int generation=++navigationGeneration;
+        final List<String> exclude=new ArrayList<>(recentSongs);
+        statusMessage="Finding related music...";
+        loading=true;
+        resolver.execute(()->{
+            MusicCatalog.Song recommended=null;
+            try{recommended=MusicCatalog.recommendAfter(current,exclude);}
+            catch(Exception error){Log.w(TAG,"Could not recommend next song",error);}
+            final MusicCatalog.Song next=recommended;
+            handler.post(()->{
+                if(player==null || generation!=navigationGeneration || song!=current)return;
+                loading=false;
+                if(next==null){
+                    statusMessage="No related track available; search for another song";
+                    return;
+                }
+                MusicCatalog.appendRecommendation(next);
+                startTrack(next);
+            });
+        });
     }
     @Override public void onCreate(){
         super.onCreate();
@@ -111,7 +145,17 @@ public final class PlayerService extends MediaSessionService {
             @Override public void onIsPlayingChanged(boolean value){playing=value;}
             @Override public void onPlaybackStateChanged(int state){
                 if(state==Player.STATE_READY)loading=false;
-                if(state==Player.STATE_ENDED)playing=false;
+                if(state==Player.STATE_ENDED){
+                    playing=false;loading=false;
+                    if(autoplay && !endQueued){
+                        endQueued=true;
+                        handler.post(()->{
+                            endQueued=false;
+                            if(player!=null && player.getPlaybackState()==Player.STATE_ENDED)
+                                advance(1);
+                        });
+                    }
+                }
             }
             @Override public void onPlayerError(PlaybackException error){
                 loading=false;playing=false;
@@ -164,6 +208,11 @@ public final class PlayerService extends MediaSessionService {
     }
     private void startTrack(MusicCatalog.Song selected){
         if(selected==null||player==null)return;
+        navigationGeneration++;
+        if(recentSongs.isEmpty() || !selected.id.equals(recentSongs.peekLast())){
+            recentSongs.addLast(selected.id);
+            while(recentSongs.size()>16)recentSongs.removeFirst();
+        }
         song=selected;
         loading=true;playing=false;positionMs=0L;durationMs=selected.durationMs;
         statusMessage="Resolving stream...";
@@ -210,6 +259,8 @@ public final class PlayerService extends MediaSessionService {
                 .put("artist",current==null?"":current.artist)
                 .put("playing",playing)
                 .put("loading",loading)
+                .put("autoplay",autoplay)
+                .put("queueMode",MusicCatalog.isPlaylistQueue()?"playlist":"recommendations")
                 .put("positionMs",positionMs)
                 .put("durationMs",durationMs)
                 .put("message",statusMessage);

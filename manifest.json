@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "LeviMusic - Standalone Music Player",
   "author": "ReaAurelis",
-  "version": "1.1.1-rc",
+  "version": "1.1.2-rc",
   "entry": "liblevimusic.so",
   "minecraft_versions": []
 }

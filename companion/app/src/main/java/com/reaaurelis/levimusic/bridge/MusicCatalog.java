@@ -31,6 +31,7 @@ public final class MusicCatalog {
     private static final Object INIT_LOCK=new Object();
     private static final ArrayList<Song> RESULTS=new ArrayList<>();
     private static final ArrayList<Song> PLAY_QUEUE=new ArrayList<>();
+    private static boolean playlistQueueMode=false;
     private static final OkHttpClient CLIENT=new OkHttpClient.Builder()
             .connectTimeout(12,TimeUnit.SECONDS)
             .readTimeout(18,TimeUnit.SECONDS)
@@ -96,15 +97,31 @@ public final class MusicCatalog {
         ArrayList<Song> queue=PLAY_QUEUE.isEmpty()?RESULTS:PLAY_QUEUE;
         int at=-1;
         for(int i=0;i<queue.size();i++)if(queue.get(i).id.equals(id)){at=i;break;}
-        if(queue.size()<=1)return null;
+        if(queue.isEmpty())return null;
         if(at<0)return direction>=0?queue.get(0):queue.get(queue.size()-1);
+        if(direction>0 && at==queue.size()-1 && !playlistQueueMode)return null;
+        if(queue.size()==1 && !playlistQueueMode)return null;
         return queue.get((at+direction+queue.size())%queue.size());
     }
+    public static synchronized boolean isPlaylistQueue(){return playlistQueueMode;}
+    /** Add an individually recommended track without losing search or playlist data. */
+    public static synchronized void appendRecommendation(Song song){
+        if(song==null||playlistQueueMode)return;
+        if(PLAY_QUEUE.isEmpty())PLAY_QUEUE.addAll(RESULTS);
+        for(Song existing:PLAY_QUEUE)if(song.id.equals(existing.id))return;
+        if(PLAY_QUEUE.size()>=120)PLAY_QUEUE.remove(0);
+        PLAY_QUEUE.add(song);
+    }
+    public static synchronized List<Song> queueSnapshot(){
+        return new ArrayList<>(PLAY_QUEUE.isEmpty()?RESULTS:PLAY_QUEUE);
+    }
     public static synchronized void activatePlaylistQueue(List<Song> tracks){
+        playlistQueueMode=true;
         PLAY_QUEUE.clear();
         if(tracks!=null)PLAY_QUEUE.addAll(tracks);
     }
     public static synchronized void activateSearchQueue(){
+        playlistQueueMode=false;
         PLAY_QUEUE.clear();
         PLAY_QUEUE.addAll(RESULTS);
     }
@@ -179,6 +196,55 @@ public final class MusicCatalog {
             catch(Exception ignored){}
         }
         return reply;
+    }
+
+
+    /**
+     * Related-track discovery is best-effort: NewPipeExtractor can stop working
+     * when the upstream service changes. This never bypasses a provider quota.
+     */
+    public static Song recommendAfter(Song previous,List<String> recentlyPlayed) throws Exception {
+        if(previous==null)return null;
+        initialize();
+        final java.util.Set<String> seen=new java.util.HashSet<>();
+        if(recentlyPlayed!=null)seen.addAll(recentlyPlayed);
+        seen.add(previous.id);
+        try {
+            StreamInfo info=StreamInfo.getInfo(ServiceList.YouTube,previous.url);
+            List<InfoItem> related=info.getRelatedItems();
+            Song chosen=firstEligible(related,seen);
+            if(chosen!=null)return chosen;
+        } catch(Exception error){
+            Log.i(TAG,"Related tracks unavailable; trying artist search",error);
+        }
+        // Fallback is artist/title-keyword similarity, not YouTube's actual recommendations.
+        String query=(previous.artist==null?"":previous.artist)
+                   +" music "+(previous.title==null?"":previous.title);
+        SearchExtractor extractor=ServiceList.YouTube.getSearchExtractor(
+                query.trim(),List.of("videos"),"");
+        extractor.fetchPage();
+        return firstEligible(extractor.getInitialPage().getItems(),seen);
+    }
+    private static Song firstEligible(List<? extends InfoItem> items,
+                                      java.util.Set<String> excluded){
+        if(items==null)return null;
+        for(InfoItem item:items){
+            if(!(item instanceof StreamInfoItem))continue;
+            StreamInfoItem stream=(StreamInfoItem)item;
+            String url=stream.getUrl();
+            String id=idFromUrl(url);
+            if(id.isEmpty()||excluded.contains(id))continue;
+            long duration=stream.getDuration();
+            // Avoid live streams, 8-hour playlists, Shorts and tracks under 45 s.
+            if(duration<45||duration>900)continue;
+            String art="";
+            if(stream.getThumbnails()!=null&&!stream.getThumbnails().isEmpty())
+                art=stream.getThumbnails().get(stream.getThumbnails().size()-1).getUrl();
+            if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
+            return new Song(id,stream.getName(),stream.getUploaderName(),url,art,
+                            duration*1000L);
+        }
+        return null;
     }
 
     public static String resolveAudio(Song song) throws Exception {
