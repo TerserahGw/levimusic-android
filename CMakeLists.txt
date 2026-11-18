@@ -26,7 +26,7 @@ foreach(target IN ITEMS levimusic levimusic_standalone)
 endforeach()
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.1.0-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.1.1-arm64-v8a.levipack")
 add_custom_target(levipack
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
@@ -40,7 +40,7 @@ add_custom_target(levipack
 # Optional separate native-only build. This plays public Audius streams, NOT
 # YouTube/Spotify via a hidden WebView. Never enable both mods simultaneously.
 set(STANDALONE_DIR "${CMAKE_CURRENT_BINARY_DIR}/standalone_pack")
-set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.1.0-arm64-v8a.levipack")
+set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.1.1-arm64-v8a.levipack")
 add_custom_target(levipack_standalone
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${STANDALONE_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${STANDALONE_DIR}"

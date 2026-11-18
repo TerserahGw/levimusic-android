@@ -544,7 +544,7 @@ public final class MainActivity extends Activity {
     private void showBridgeSettings(){
         String token=BridgeService.getOrCreateToken(this);
         String info="Connect the Minecraft mod to this app.\n\n"
-             +"1. Enable Notification Access for LeviMusic.\n"
+             +"1. Notification Access is optional for the built-in music player.\n"
              +"2. Tap Pair Minecraft and then the PAIR control in game. No typing needed.\n"
              +"3. Start a song here and return to Minecraft.\n\n"
              +"PAIRING KEY:\n"+token+"\n\n"

@@ -972,7 +972,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.1.0 RC loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.1.1 RC loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1088,7 +1088,8 @@ private:
             pl::input::hideKeyboard();
             pl::modmenu::requestOpenMenu();
         } else if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
-            {std::lock_guard lock(mu_);open_=false;typing_=false;}
+            {std::lock_guard lock(mu_);open_=false;typing_=false;
+                panelToggled_=std::chrono::steady_clock::now();}
             pl::input::hideKeyboard();
         } else if(l.pair.contains(e.x,e.y)&&useBridge_){
             addJob(Action::Pair);
@@ -1365,7 +1366,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.1.0 RC",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.1.1 RC",10.0f*u,C_DIM);
         if(streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
             text(l.pair.x+8*u,l.pair.y+21*u,"PAIR",10.2f*u,C_TEXT,6);
