@@ -302,9 +302,9 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
     return lines;
 }
 
-std::vector<Lyric> searchLyrics(JNIEnv* env, const Track& tr, int trackDurationMs=0) {
-    const std::string url = "https://lrclib.net/api/search?track_name=" + encode(env, tr.title) +
-                            "&artist_name=" + encode(env, tr.artist);
+std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, const std::string& songArtist, int trackDurationMs) {
+    const std::string url = "https://lrclib.net/api/search?track_name=" + encode(env, songTitle) +
+                            (songArtist.empty()?"":"&artist_name="+encode(env,songArtist));
     const std::string text = getHttp(env, url);
     if (text.empty()) return {};
     jclass arrayClass = env->FindClass("org/json/JSONArray");
@@ -330,7 +330,7 @@ std::vector<Lyric> searchLyrics(JNIEnv* env, const Track& tr, int trackDurationM
                     int seconds = static_cast<int>(std::stod(optString(env,obj,"duration")));
                     int delta = std::abs(seconds * 1000 - trackDurationMs);
                     score = 100000 - delta;
-                    if(delta > 12000)score -= 100000;
+                    if(delta > 15000) {env->DeleteLocalRef(obj);continue;}
                 } catch(...) { score = -100000; }
             }
             env->DeleteLocalRef(obj);
@@ -349,6 +349,57 @@ std::vector<Lyric> searchLyrics(JNIEnv* env, const Track& tr, int trackDurationM
     return result;
 }
 
+
+
+// Different uploads often append "[Official Audio]", "(Music Video)", uploader "- Topic",
+// or use "Artist - Song" for the recording title. Never substitute a lyric with a
+// substantially different duration when the real duration is known.
+std::string cleanLyricTitle(const std::string& original) {
+    std::string out=original;
+    auto lower=[](std::string v){
+        for(char& c:v)if(c>='A'&&c<='Z')c=static_cast<char>(c+32);
+        return v;
+    };
+    for(const auto& tag:{"official","music video","visualizer","lyrics","lyric video","audio","4k"}) {
+        std::string current=lower(out);
+        size_t where=current.find(tag);
+        if(where!=std::string::npos) {
+            auto open=current.rfind('(',where);
+            auto close=current.find(')',where);
+            if(open!=std::string::npos && close!=std::string::npos && open<where) {
+                out.erase(open,close-open+1);continue;
+            }
+            open=current.rfind('[',where);
+            close=current.find(']',where);
+            if(open!=std::string::npos&&close!=std::string::npos&&open<where)
+                out.erase(open,close-open+1);
+        }
+    }
+    auto start=out.find_first_not_of(" \t-");
+    if(start==std::string::npos)return {};
+    auto end=out.find_last_not_of(" \t-");
+    return out.substr(start,end-start+1);
+}
+
+std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0) {
+    if(tr.title.empty())return {};
+    auto first=searchLyricsRaw(env,tr.title,tr.artist,duration);
+    if(!first.empty())return first;
+    std::string cleaned=cleanLyricTitle(tr.title);
+    if(cleaned.empty())return {};
+    if(cleaned!=tr.title) {
+        auto improved=searchLyricsRaw(env,cleaned,tr.artist,duration);
+        if(!improved.empty())return improved;
+    }
+    const auto split=cleaned.find(" - ");
+    if(split!=std::string::npos && split+3<cleaned.size()) {
+        auto withoutPrefix=cleanLyricTitle(cleaned.substr(split+3));
+        auto result=searchLyricsRaw(env,withoutPrefix,tr.artist,duration);
+        if(!result.empty())return result;
+        return searchLyricsRaw(env,withoutPrefix,"",duration);
+    }
+    return searchLyricsRaw(env,cleaned,"",duration);
+}
 
 // Probe Audius redirects on the music worker (never on the game UI thread).
 // Android's MediaPlayer is more reliable when given the final HTTPS audio URL.

@@ -59,12 +59,12 @@ public final class BridgeService extends NotificationListenerService {
     }
     @Override public void onDestroy(){
         stopListening();
+        clients.shutdownNow();
         super.onDestroy();
     }
     private void stopListening(){
         running=false;
         getSharedPreferences("bridge",MODE_PRIVATE).edit().putBoolean("service_ready",false).apply();
-        clients.shutdownNow();
         ServerSocket socket=serverSocket;
         if(socket!=null)try{socket.close();}catch(Exception ignored){}
     }
