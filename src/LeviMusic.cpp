@@ -48,7 +48,7 @@ struct Lyric {
     std::string line;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, OpenBrowser };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
@@ -849,6 +849,74 @@ std::string clipboardToken(JNIEnv* env) {
     clearException(env,"clipboard cleanup");
     return validToken(token)?token:std::string{};
 }
+
+/**
+ * Loads a Java WebView panel directly from browser.dex bundled in the standalone
+ * .levipack. No companion APK is needed. This is experimental and opt-in; it
+ * uses Android ActivityThread reflection and cannot assume every launcher
+ * exposes an Activity. Never loads arbitrary downloaded dex or a remote APK.
+ */
+bool openEmbeddedBrowser(JNIEnv* env,const std::filesystem::path& modDir){
+    const auto file=modDir/"browser.dex";
+    if(!std::filesystem::is_regular_file(file)) {
+        __android_log_print(ANDROID_LOG_WARN,TAG,
+            "Standalone browser.dex missing from package: %s",file.c_str());
+        return false;
+    }
+    jclass threadClass=env->FindClass("java/lang/Thread");
+    if(!threadClass||clearException(env,"WebView Thread"))return false;
+    jmethodID current=env->GetStaticMethodID(threadClass,"currentThread",
+                                              "()Ljava/lang/Thread;");
+    jobject thread=current?env->CallStaticObjectMethod(threadClass,current):nullptr;
+    jmethodID getLoader=env->GetMethodID(threadClass,"getContextClassLoader",
+                                          "()Ljava/lang/ClassLoader;");
+    jobject parent=thread&&getLoader?env->CallObjectMethod(thread,getLoader):nullptr;
+    if(clearException(env,"WebView parent class loader")||!parent) {
+        if(thread)env->DeleteLocalRef(thread);
+        env->DeleteLocalRef(threadClass);
+        return false;
+    }
+    jclass loaderClass=env->FindClass("dalvik/system/DexClassLoader");
+    if(!loaderClass||clearException(env,"DexClassLoader")) {
+        env->DeleteLocalRef(parent);env->DeleteLocalRef(thread);
+        env->DeleteLocalRef(threadClass);return false;
+    }
+    jmethodID ctor=env->GetMethodID(loaderClass,"<init>",
+          "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/ClassLoader;)V");
+    jstring dexPath=toJava(env,file.string());
+    jstring optimized=toJava(env,modDir.string());
+    jobject loader=ctor?env->NewObject(loaderClass,ctor,dexPath,optimized,nullptr,parent):nullptr;
+    bool ok=false;
+    if(loader && !clearException(env,"WebView DexClassLoader init")){
+        jmethodID load=env->GetMethodID(loaderClass,"loadClass",
+                                         "(Ljava/lang/String;)Ljava/lang/Class;");
+        jstring className=toJava(env,"com.reaaurelis.levimusic.standalone.NativeBrowser");
+        jobject loaded=load?env->CallObjectMethod(loader,load,className):nullptr;
+        if(loaded && !clearException(env,"WebView loadClass")){
+            jclass c=static_cast<jclass>(loaded);
+            jmethodID open=env->GetStaticMethodID(c,"open","()V");
+            if(open){
+                env->CallStaticVoidMethod(c,open);
+                ok=!clearException(env,"NativeBrowser.open");
+            }else clearException(env,"NativeBrowser.open missing");
+            env->DeleteLocalRef(loaded);
+        }
+        env->DeleteLocalRef(className);
+    }else{
+        clearException(env,"DexClassLoader init failed");
+    }
+    if(loader)env->DeleteLocalRef(loader);
+    if(dexPath)env->DeleteLocalRef(dexPath);
+    if(optimized)env->DeleteLocalRef(optimized);
+    env->DeleteLocalRef(loaderClass);
+    env->DeleteLocalRef(parent);
+    env->DeleteLocalRef(thread);
+    env->DeleteLocalRef(threadClass);
+    __android_log_print(ok?ANDROID_LOG_INFO:ANDROID_LOG_WARN,TAG,
+        "Embedded Android WebView open request %s",ok?"posted":"failed");
+    return ok;
+}
+
 std::string marqueeTitle(const std::string& value,size_t width,float seconds) {
     std::vector<std::string> symbols;
     for(size_t i=0;i<value.size();) {
@@ -959,6 +1027,7 @@ class LeviMusic {
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{26};
     std::atomic<bool> animation_{true};
+    std::atomic<bool> browserEnabled_{false};
 #if defined(LEVI_STANDALONE)
     std::atomic<bool> useBridge_{false},lyricsBelow_{false},floatingLyrics_{false};
 #else
@@ -979,7 +1048,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.1.2 RC loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.0 Experimental loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -999,6 +1068,9 @@ public:
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,"false")
             .config("floatingLyrics","Legacy 2D lyric scatter (not world-space 3D)",pl::modmenu::ConfigType::Toggle,"false")
+#if defined(LEVI_STANDALONE)
+            .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,"false")
+#endif
             .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,"")
             .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,"true")
             .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,"true")
@@ -1035,7 +1107,9 @@ public:
     bool unload(){return true;}
 private:
     void setConfig(std::string_view k,std::string_view v){
-        if(k=="floatingLyrics") {
+        if(k=="embeddedBrowser") {
+            browserEnabled_=v=="true"||v=="1";
+        } else if(k=="floatingLyrics") {
             floatingLyrics_=v=="true"||v=="1";
         } else if(k=="useBridge") {
             useBridge_=v=="true"||v=="1";
@@ -1098,6 +1172,12 @@ private:
             {std::lock_guard lock(mu_);open_=false;typing_=false;
                 panelToggled_=std::chrono::steady_clock::now();}
             pl::input::hideKeyboard();
+#if defined(LEVI_STANDALONE)
+        } else if(l.pair.contains(e.x,e.y)&&!useBridge_){
+            if(browserEnabled_) addJob(Action::OpenBrowser);
+            else update("WebView disabled","Standalone Browser",
+                        "Enable Embedded WebView in LeviMusic settings first");
+#endif
         } else if(l.pair.contains(e.x,e.y)&&useBridge_){
             addJob(Action::Pair);
         } else if(l.library.contains(e.x,e.y)&&useBridge_){
@@ -1380,7 +1460,13 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.1.2 RC",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"REAAURELIS • v1.2.0 Experimental",10.0f*u,C_DIM);
+#if defined(LEVI_STANDALONE)
+        if(!streamingBridge){
+            box(l.pair,0xFF33363CU,9.f);
+            text(l.pair.x+8*u,l.pair.y+21*u,"WEB",10.2f*u,C_TEXT,8);
+        }
+#endif
         if(streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
             text(l.pair.x+8*u,l.pair.y+21*u,"PAIR",10.2f*u,C_TEXT,6);
@@ -1844,6 +1930,7 @@ private:
                             }
                             break;
                         }
+                        case Action::OpenBrowser: break;
                         case Action::SetVolume: break;
                     }
                     if(!action.empty() && !key.empty()) {
@@ -1992,6 +2079,11 @@ private:
                     }
                     case Action::Seek:
                         try{player.seek(env,std::stoi(job.query));}catch(...){}break;
+                    case Action::OpenBrowser:
+#if defined(LEVI_STANDALONE)
+                        if(browserEnabled_) openEmbeddedBrowser(env,self_.getModDir());
+#endif
+                        break;
                     case Action::Pair:case Action::PlaylistList:case Action::PlaylistOpen:
                     case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistAdd:
                         break;

@@ -81,6 +81,26 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build cmake
 
+      - name: Set up Java 17 for embedded standalone WebView
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Compile browser Java into self-contained DEX
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/browser-classes build/browser-dex
+          javac -encoding UTF-8 -source 8 -target 8 \
+            -bootclasspath "$ANDROID_HOME/platforms/android-35/android.jar" \
+            -d build/browser-classes \
+            standalone_browser/src/com/reaaurelis/levimusic/standalone/NativeBrowser.java
+          "$ANDROID_HOME/build-tools/35.0.0/d8" --min-api 28 \
+            --lib "$ANDROID_HOME/platforms/android-35/android.jar" \
+            --output build/browser-dex \
+            $(find build/browser-classes -name '*.class' -type f)
+          test -s build/browser-dex/classes.dex
       - name: Configure ARM64 Android
         run: |
           cmake -S . -B build -G Ninja \
@@ -102,15 +122,55 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
-      - name: Build notification-access media companion APK
-        run: gradle -p companion :app:assembleDebug --no-daemon
+      - name: Restore permanent Android release signing key
+        id: signing
+        env:
+          KEY_B64: ${{ secrets.LEVIMUSIC_KEYSTORE_B64 }}
+          PASSWORD: ${{ secrets.LEVIMUSIC_SIGNING_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$KEY_B64" || -z "$PASSWORD" ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Permanent APK signing is not configured. Test APK only; release will be blocked."
+            echo 'Run: bash scripts/setup_apk_signing_termux.sh (from authenticated Termux)' >> "$GITHUB_STEP_SUMMARY"
+          else
+            file="$RUNNER_TEMP/levimusic-release.jks"
+            printf '%s' "$KEY_B64" | base64 --decode > "$file"
+            chmod 600 "$file"
+            keytool -list -keystore "$file" -storetype PKCS12 -storepass "$PASSWORD" -alias levimusic >/dev/null
+            echo "LEVIMUSIC_KEYSTORE_FILE=$file" >> "$GITHUB_ENV"
+            echo "LEVIMUSIC_SIGNING_PASSWORD=$PASSWORD" >> "$GITHUB_ENV"
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo 'Release keystore restored securely from GitHub Actions Secrets.' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
-      - name: Prepare companion APK
+      - name: Build Android companion APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.signing.outputs.enabled }}" == 'true' ]]; then
+            gradle -p companion :app:assembleRelease --no-daemon
+          else
+            gradle -p companion :app:assembleDebug --no-daemon
+          fi
+
+      - name: Prepare and verify companion APK
+        shell: bash
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cp companion/app/build/outputs/apk/debug/app-debug.apk "build/LeviMusic-Bridge-${VERSION}.apk"
-          ls -lh "build/LeviMusic-Bridge-${VERSION}.apk"
+          set -euo pipefail
+          if [[ "${{ steps.signing.outputs.enabled }}" == 'true' ]]; then
+            file="companion/app/build/outputs/apk/release/app-release.apk"
+            output="build/LeviMusic-Bridge-${VERSION}.apk"
+          else
+            file="companion/app/build/outputs/apk/debug/app-debug.apk"
+            output="build/LeviMusic-Bridge-UNSIGNED-TEST-${VERSION}.apk"
+          fi
+          cp "$file" "$output"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$output"
+          ls -lh "$output"
 
       - name: Upload companion APK artifact
         uses: actions/upload-artifact@v4
@@ -126,14 +186,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.1.2-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.2.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.1.2-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.2.0-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -152,6 +212,11 @@ jobs:
             ${{ steps.package.outputs.standalone }}
           if-no-files-found: error
 
+      - name: Require permanent APK signing before publishing
+        if: steps.signing.outputs.enabled != 'true'
+        run: |
+          echo '::error::Release blocked. Configure permanent APK signing with scripts/setup_apk_signing_termux.sh in Termux.'
+          exit 1
       - name: Check whether the GitHub Release exists
         id: release_check
         env:
@@ -166,7 +231,7 @@ jobs:
           fi
 
       - name: Prepare version notes
-        if: steps.release_check.outputs.exists != 'true'
+        if: steps.release_check.outputs.exists != 'true' && steps.signing.outputs.enabled == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
@@ -214,7 +279,7 @@ jobs:
           PY
 
       - name: Publish GitHub Release
-        if: steps.release_check.outputs.exists != 'true'
+        if: steps.release_check.outputs.exists != 'true' && steps.signing.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}

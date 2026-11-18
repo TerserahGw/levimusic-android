@@ -135,6 +135,70 @@ public final class PlaylistStore {
         catch(Exception ignored){}
         return result;
     }
+
+    /** Stable, explicit backup format for migration across APK signing changes. */
+    public static synchronized String exportJson(Context context) {
+        JSONObject root=new JSONObject();
+        try{
+            root.put("format","levimusic-playlists-1");
+            root.put("playlists",read(context));
+        }catch(Exception ignored){}
+        return root.toString();
+    }
+    public static synchronized JSONObject importBackup(Context context,String json) {
+        if(json==null || json.length()>4_000_000)
+            return result(false,"Backup exceeds 4 MB limit");
+        try {
+            JSONObject root=new JSONObject(json);
+            if(!"levimusic-playlists-1".equals(root.optString("format")))
+                return result(false,"Unrecognized LeviMusic playlist backup format");
+            JSONArray source=root.optJSONArray("playlists");
+            if(source==null||source.length()>MAX_PLAYLISTS)
+                return result(false,"Invalid playlist count");
+            JSONArray clean=new JSONArray();
+            java.util.HashSet<String> names=new java.util.HashSet<>();
+            int totalSongs=0;
+            for(int i=0;i<source.length();i++){
+                JSONObject item=source.optJSONObject(i);
+                if(item==null)return result(false,"Malformed playlist");
+                String name=cleanName(item.optString("name"));
+                if(name.isEmpty()||!names.add(name.toLowerCase(Locale.ROOT)))
+                    return result(false,"Duplicate or invalid playlist name");
+                JSONArray songs=item.optJSONArray("tracks");
+                if(songs==null||songs.length()>MAX_TRACKS)
+                    return result(false,"Playlist exceeds 300 songs");
+                JSONArray valid=new JSONArray();
+                for(int j=0;j<songs.length();j++){
+                    JSONObject song=songs.optJSONObject(j);
+                    if(song==null)return result(false,"Invalid song data");
+                    String id=song.optString("id");
+                    if(!id.matches("[A-Za-z0-9_-]{11}"))continue;
+                    String title=song.optString("title");
+                    String artist=song.optString("artist");
+                    String art=song.optString("art");
+                    if(title.length()>200||artist.length()>160||art.length()>600)
+                        return result(false,"Invalid song metadata length");
+                    if(!art.isEmpty()&&!art.startsWith("https://"))art="";
+                    JSONObject cleanSong=new JSONObject();
+                    cleanSong.put("id",id);
+                    cleanSong.put("title",title);
+                    cleanSong.put("artist",artist);
+                    cleanSong.put("art",art);
+                    cleanSong.put("durationMs",Math.min(Math.max(0,song.optLong("durationMs")),86400000L));
+                    valid.put(cleanSong);
+                    totalSongs++;
+                }
+                JSONObject p=new JSONObject();
+                p.put("name",name).put("tracks",valid);
+                clean.put(p);
+            }
+            write(context,clean);
+            return result(true,"Imported "+clean.length()+" playlists / "+totalSongs+" tracks");
+        } catch(Exception error) {
+            return result(false,"Invalid JSON backup");
+        }
+    }
+
     public static synchronized JSONObject play(Context context,String name,int index) {
         List<MusicCatalog.Song> songs=songs(context,name);
         if(songs.isEmpty())return result(false,"Playlist is empty");

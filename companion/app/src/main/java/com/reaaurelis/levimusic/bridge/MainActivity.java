@@ -331,6 +331,23 @@ public final class MainActivity extends Activity {
     }
 
     private static final int REQUEST_LRC=1201;
+    private static final int REQUEST_PLAYLIST_EXPORT=1202;
+    private static final int REQUEST_PLAYLIST_IMPORT=1203;
+
+    private void exportPlaylists(){
+        Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        intent.putExtra(Intent.EXTRA_TITLE,"LeviMusic-playlists-backup.json");
+        startActivityForResult(intent,REQUEST_PLAYLIST_EXPORT);
+    }
+    private void importPlaylists(){
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("application/json");
+        startActivityForResult(intent,REQUEST_PLAYLIST_IMPORT);
+    }
+
     private void importLyrics(){
         JSONObject current=PlayerService.getStatus();
         if(current==null||current.optString("title").isEmpty()){
@@ -346,7 +363,34 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
-        if(request!=REQUEST_LRC||result!=RESULT_OK||data==null||data.getData()==null)return;
+        if(result!=RESULT_OK||data==null||data.getData()==null)return;
+        if(request==REQUEST_PLAYLIST_EXPORT){
+            try(java.io.OutputStream out=getContentResolver().openOutputStream(data.getData())){
+                if(out==null)throw new java.io.IOException("No output stream");
+                out.write(PlaylistStore.exportJson(this).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                out.flush();
+                headerStatus.setText("Playlist backup saved successfully");
+            }catch(Exception error){headerStatus.setText("Could not export playlists");}
+            return;
+        }
+        if(request==REQUEST_PLAYLIST_IMPORT){
+            try(java.io.InputStream in=getContentResolver().openInputStream(data.getData())){
+                if(in==null)throw new java.io.IOException("No input stream");
+                java.io.ByteArrayOutputStream output=new java.io.ByteArrayOutputStream();
+                byte[] buffer=new byte[8192];
+                int read;
+                while((read=in.read(buffer))>=0){
+                    if(output.size()+read>4_000_000)throw new java.io.IOException("Backup too large");
+                    if(read>0)output.write(buffer,0,read);
+                }
+                String json=output.toString("UTF-8");
+                JSONObject response=PlaylistStore.importBackup(this,json);
+                headerStatus.setText(response.optString("message"));
+                if(response.optBoolean("success"))showPlaylists();
+            }catch(Exception error){headerStatus.setText("Unable to import playlist backup");}
+            return;
+        }
+        if(request!=REQUEST_LRC)return;
         JSONObject current=PlayerService.getStatus();
         if(current==null)return;
         String title=current.optString("title"),artist=current.optString("artist");
@@ -381,6 +425,29 @@ public final class MainActivity extends Activity {
         showingPlaylists=true;libraryTitle.setText("My Playlists");
         trackCount.setText("");
         list.removeAllViews();
+        LinearLayout backupControls=new LinearLayout(this);
+        backupControls.setOrientation(LinearLayout.HORIZONTAL);
+        backupControls.setGravity(Gravity.CENTER_VERTICAL);
+        TextView save=text("Export backup",12,PRIMARY,true);
+        save.setGravity(Gravity.CENTER);
+        save.setBackground(bg(SURFACE,12));
+        save.setOnClickListener(v->exportPlaylists());
+        LinearLayout.LayoutParams saveParams=new LinearLayout.LayoutParams(0,dp(45),1);
+        saveParams.setMargins(0,0,dp(7),0);
+        backupControls.addView(save,saveParams);
+        TextView restore=text("Import backup",12,PRIMARY,true);
+        restore.setGravity(Gravity.CENTER);
+        restore.setBackground(bg(SURFACE,12));
+        restore.setOnClickListener(v->{
+            new AlertDialog.Builder(this).setTitle("Restore playlist backup?")
+                .setMessage("This replaces the playlists currently saved in LeviMusic. Export a backup first if needed.")
+                .setPositiveButton("Choose file",(d,w)->importPlaylists())
+                .setNegativeButton("Cancel",null).show();
+        });
+        backupControls.addView(restore,new LinearLayout.LayoutParams(0,dp(45),1));
+        LinearLayout.LayoutParams backupMargin=new LinearLayout.LayoutParams(-1,dp(48));
+        backupMargin.bottomMargin=dp(12);
+        list.addView(backupControls,backupMargin);
         org.json.JSONArray items=PlaylistStore.list(this,"").optJSONArray("playlists");
         if(items==null||items.length()==0){
             TextView empty=text("No playlists yet. Tap + New to create one.",14,SECONDARY,false);

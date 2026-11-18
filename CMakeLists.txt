@@ -26,7 +26,7 @@ foreach(target IN ITEMS levimusic levimusic_standalone)
 endforeach()
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.1.2-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.2.0-arm64-v8a.levipack")
 add_custom_target(levipack
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
@@ -37,16 +37,24 @@ add_custom_target(levipack
     DEPENDS levimusic
     VERBATIM)
 
-# Optional separate native-only build. This plays public Audius streams, NOT
-# YouTube/Spotify via a hidden WebView. Never enable both mods simultaneously.
+# Optional native-only build. In addition to Audius, this variant bundles an
+# experimental, VISIBLE Android WebView panel as browser.dex. Browser playback
+# remains controlled by the website; no audio extraction or hidden video.
+# This standalone variant does not have a full Bridge music API.
+# Never enable both native variants simultaneously.
 set(STANDALONE_DIR "${CMAKE_CURRENT_BINARY_DIR}/standalone_pack")
-set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.1.2-arm64-v8a.levipack")
+set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.2.0-arm64-v8a.levipack")
+set(BROWSER_DEX "${CMAKE_CURRENT_BINARY_DIR}/browser-dex/classes.dex")
+if(NOT EXISTS "${BROWSER_DEX}")
+    message(FATAL_ERROR "Standalone browser.dex missing. Compile standalone_browser Java with d8 before CMake build.")
+endif()
 add_custom_target(levipack_standalone
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${STANDALONE_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${STANDALONE_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest-standalone.json" "${STANDALONE_DIR}/manifest.json"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:levimusic_standalone>" "${STANDALONE_DIR}/liblevimusic_standalone.so"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_LICENSES.md" "${STANDALONE_DIR}/THIRD_PARTY_LICENSES.md"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${STANDALONE_DIR}" ${CMAKE_COMMAND} -E tar cf "${STANDALONE_FILE}" --format=zip manifest.json liblevimusic_standalone.so THIRD_PARTY_LICENSES.md
+    COMMAND ${CMAKE_COMMAND} -E copy "${BROWSER_DEX}" "${STANDALONE_DIR}/browser.dex"
+    COMMAND ${CMAKE_COMMAND} -E chdir "${STANDALONE_DIR}" ${CMAKE_COMMAND} -E tar cf "${STANDALONE_FILE}" --format=zip manifest.json liblevimusic_standalone.so THIRD_PARTY_LICENSES.md browser.dex
     DEPENDS levimusic_standalone
     VERBATIM)

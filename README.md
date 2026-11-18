@@ -1,29 +1,49 @@
-# LeviMusic v1.1.2 Release Candidate
+# LeviMusic v1.2.0 RC
 
-Author: **ReaAurelis** | ARM64 Minecraft Bedrock via LeviLauncher Android v1.7.1.
+**Author:** ReaAurelis  
+**Platform:** Minecraft Bedrock via LeviLauncher Android (ARM64).
 
-This release is a **Release Candidate**: successful automated compilation is not sufficient to confirm stable Android/Minecraft gameplay.
+v1.2.0 contains a new optional embedded Standalone WebView browser and a permanent APK release-signing process. Actual Android 16 runtime compatibility remains unverified.
 
-## Install
+## IMPORTANT: one-time signing setup in Termux
 
-Full version: download both the **LeviMusic-Bridge-1.1.2.apk** Android music app and **LeviMusic-1.1.2-arm64-v8a.levipack** from [Releases](https://github.com/TerserahGw/levimusic-android/releases). Install the APK, start it, import the mod into LeviLauncher, copy the Pair Minecraft key in the app and tap PAIR in the in-game music player. The verified key is stored locally for later reconnects.
+Previous builds were APKs signed with GitHub Actions debug certificates, which can change between runs. Android requires the same signing certificate for in-place APK upgrades. This cannot be fixed retroactively without the earlier private signing key. See Android documentation.
 
-Standalone: install only **LeviMusic-Standalone-1.1.2-arm64-v8a.levipack**. It uses the public Audius catalog, not a built-in browser or licensed Spotify/YouTube Music streaming. Never activate two LeviMusic variants at once.
+1. **Before uninstalling an old app**, if you use playlists, keep the old Bridge running. In Termux run: bash scripts/backup_playlists_old_termux.sh. Paste the Bridge Key from the installed app. The script writes LeviMusic-playlists-backup.json to Downloads if available.
+2. Sync latest project source: git pull --ff-only origin main (inside your LeviMusic repository folder).
+3. Termux dependencies: pkg install gh openjdk-17 openssl.
+4. Run: bash scripts/setup_apk_signing_termux.sh.
+5. This command creates/reuses a PKCS12 signing keystore in Termux's **private home directory**, sets two protected GitHub Actions Secrets, then triggers a GitHub Actions build.
+6. KEEP A PRIVATE BACKUP of the keystore and password. Never commit either file or send them in chat.
+7. Once a signed GitHub Release appears, if Android rejects the update due to the previous debug certificate, this specific transition requires a ONE-TIME removal of the old APK. Make sure playlist backup exists first.
+8. Install the new signed Bridge APK, open **My Playlists -> Import backup**, choose the JSON file. Future updates should install on top of this new build if the signing key remains unchanged and versionCode increases.
 
-## 1.1.2 changes
+Without the GitHub signing secrets, Actions deliberately **does not publish a new release**. This prevents distributing another APK that needs uninstalling on the next version. Debug artifacts may still be generated only for compiler testing.
 
-### Three clear areas
-The main menu now separates **Now Playing** (cover, title/artist, duration/seek, playback controls) on the left, **Synced Lyrics** (highlighted current LRC line and the neighboring lines) in the center, and **Search/Playlists/Music List** on the right. Lyrics remain visible while searching or opening playlists. Controls and playlist Add button have dedicated layout slots to reduce overlapping elements in landscape mode.
+## Full mod / Standalone
 
-### Automatic next and recommendations
-The Android companion now responds to Media3 PLAYER_STATE_ENDED. In playlist mode it advances to the next saved song, looping from the final song back to the first. Outside a playlist it follows the current search queue, then tries YouTube related items from NewPipeExtractor. If necessary, it falls back to a similarity search using the current title and artist. It excludes the current and recently played tracks, and can stop with a clear status if no recommendation is available. This is a best-effort unofficial engine, not a Spotify/YouTube subscription bypass or a guarantee of unlimited playback.
+Full setup: LeviMusic Bridge APK and LeviMusic ARM64 .levipack. This has searchable catalog (via unofficial NewPipeExtractor YouTube results), playlist queue, player controls, artwork and lyrics through the authenticated local bridge. It still depends on unofficial provider access; Spotify Premium/YouTube Music Premium is not unlocked.
 
-### Important distinction: world-space vs 2D lyrics
-The user's requested floating lyrics are *real 3D text in the Minecraft world*, locally visible only, with a **new world location per line**. The pinned Preloader HUD API is 2D; it does not expose a documented stable world-render text hook or camera projection. **True 3D lyrics are not implemented in v1.1.2.** The existing optional 2D scatter is renamed to *Legacy 2D lyric scatter*, OFF by default. Its text jumps to a different screen location on each timestamped lyric, not a world coordinate. Real client-only 3D rendering needs tested Minecraft-version-specific native hooks.
+Standalone: LeviMusic-Standalone arm64 .levipack. The existing built-in music HUD still uses Audius, with an optional **WEB** control which embeds Android System WebView directly in the Minecraft Activity. Enable **Experimental embedded WebView (visible video)** in Mod Menu, then tap WEB. This mode needs no separate APK, but WebView may fail if Android 16 blocks the ActivityThread reflection used to find Minecraft Activity.
 
-## Notes and limitations
-- Lyrics need matching timestamped LRC from LRCLIB or local import.
-- NewPipeExtractor uses unofficial YouTube endpoints and can fail after service changes.
-- Animation, search, playlist UI, audio focus, and backdrop overlay interactions require on-device tests.
-- Playlist data is in the companion app's private data: avoid uninstalling without backing it up.
-- Source GPL-3.0 with dependency credits in THIRD_PARTY_LICENSES.md.
+WebView is not an audio-extraction API and does not replace the native player's metadata/search/playlist backend. It opens a visible interactive browser UI, defaulting to https://m.youtube.com. User actions, website permissions, DRM, ads, and playback policies apply. Closing the browser destroys WebView. Browser rendering into the 3D world is not included. See docs/STANDALONE_BROWSER.md.
+
+## Floating Lyrics in true 3D
+
+The two uploaded reference .levipack mods were inspected without executing them: WebScreen uses native Android WebView/GL texture concepts; LHolo has native world projection/render hooks. That architecture can inform a version-matched, locally rendered 3D lyric billboard.
+
+**NOT INCLUDED IN v1.2.0:** client-only world-space 3D lyric quads with new random world positions each line. These require safe camera and world-renderer hooks for the exact game version; using binary offsets from other mods without testing could cause black screens/crashes. There is a documented development plan in docs/WORLD_LYRICS_3D.md. The existing 2D lyric scatter remains separate, optional and off by default.
+
+## Previous v1.1.2 features preserved
+
+Three-column UI (player / synced lyrics / search and playlists), autoplay next and best-effort related-track recommendations, HUD config and cover art, lyric match by timestamps, Bridge pairing, playlist editing and Lucide icons.
+
+## Troubleshooting
+
+- APK update rejected: check package name and certificate; a one-time migration away from the old debug cert may be necessary.
+- New signed release missing: run the signing setup script, then inspect GitHub Actions for failed checks.
+- WEB fails to open: ensure Standalone mod, experiment ON, WebView installed; inspect Android logcat for LeviMusicWebView and NativeBrowser.open.
+- 3D lyric absent: that experimental renderer has not been implemented. Do not confuse it with 2D scatter.
+- Back up playlists before app uninstall; uninstall may erase private app data.
+
+Resources: docs/STANDALONE_BROWSER.md, docs/WORLD_LYRICS_3D.md, FEATURES.md, THIRD_PARTY_LICENSES.md.
