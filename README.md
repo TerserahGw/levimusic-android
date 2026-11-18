@@ -85,3 +85,13 @@ Release descriptions include the current feature list from [FEATURES.md](FEATURE
 GitHub Releases: https://github.com/TerserahGw/levimusic-android/releases
 
 If release publishing fails with a permissions error, check **Repository Settings -> Actions -> General -> Workflow permissions** and allow read/write permissions for GitHub Actions.
+
+## Compatibility note — black screen on v0.1.0
+
+A user reported that Minecraft does not progress past a black screen when LeviMusic v0.1.0 is enabled; without the mod, Minecraft boots normally. **Do not use v0.1.0 if it prevents launch.**
+
+Investigation found that v0.1.0 built against Preloader SDK `0.2.3`, while the official LeviLauncher Android v1.7.1 embeds preloader commit `cc08b40a31471d3e2dedb267f5f17b28da2b0604` with a different C++ `ModuleInfo` ABI. ABI mismatch can corrupt callbacks at Mod Menu registration and cause freezes or crashes.
+
+Starting with v0.1.1, builds use the **same preloader commit as LeviLauncher Android v1.7.1**. This is a compatibility correction, **not a confirmed runtime fix**. We still need an on-device test and Android logcat to confirm. Earlier launcher versions may require a separate SDK-targeted build.
+
+If the newest release still causes a black screen, disable the mod and provide the Android LeviLauncher version, Minecraft version, and native logcat entries containing `LeviMusic`, `preloader`, `linker`, or `liblevimusic`.

@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 include(FetchContent)
 FetchContent_Declare(preloader_android
     GIT_REPOSITORY https://github.com/LiteLDev/preloader-android.git
-    GIT_TAG 0.2.3
+    GIT_TAG cc08b40a31471d3e2dedb267f5f17b28da2b0604 # matches LeviLauncher Android v1.7.1 embedded preloader
 )
 FetchContent_MakeAvailable(preloader_android)
 

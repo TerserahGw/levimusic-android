@@ -106,8 +106,21 @@ jobs:
           path: ${{ steps.package.outputs.file }}
           if-no-files-found: error
 
+      - name: Check whether the GitHub Release exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        shell: bash
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Prepare version notes
-        if: steps.version.outputs.already_released != 'true'
+        if: steps.release_check.outputs.exists != 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
@@ -155,7 +168,7 @@ jobs:
           PY
 
       - name: Publish GitHub Release
-        if: steps.version.outputs.already_released != 'true'
+        if: steps.release_check.outputs.exists != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
