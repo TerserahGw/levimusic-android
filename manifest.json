@@ -1,0 +1,8 @@
+{
+  "type": "preload-native",
+  "name": "LeviMusic - Online Music Player",
+  "author": "Community prototype",
+  "version": "0.1.0-beta",
+  "entry": "liblevimusic.so",
+  "minecraft_versions": []
+}
