@@ -1,8 +1,8 @@
 {
   "type": "preload-native",
-  "name": "LeviMusic - Online Music Player",
+  "name": "LeviMusic - Official App Music Bridge",
   "author": "ReaAurelis",
-  "version": "0.2.0-beta",
+  "version": "0.3.0-beta",
   "entry": "liblevimusic.so",
   "minecraft_versions": []
 }

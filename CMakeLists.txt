@@ -22,7 +22,7 @@ find_library(ANDROID_LOG_LIB log REQUIRED)
 target_link_libraries(levimusic PRIVATE preloader fmt::fmt lunasvg::lunasvg ${ANDROID_LOG_LIB})
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-0.2.0-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-0.3.0-arm64-v8a.levipack")
 add_custom_target(levipack
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
