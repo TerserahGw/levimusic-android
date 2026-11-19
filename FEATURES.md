@@ -1,4 +1,4 @@
-# LeviMusic 1.2.4 — feature status
+# LeviMusic 1.2.5 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -17,12 +17,16 @@
 
 ## Floating lyrics safety update
 
-The native world renderer is suspended in v1.2.4 because version-specific hooks can freeze Minecraft. The option uses the safe, client-only 2D lyric scatter. True world-space 3D rendering is unavailable in this release.
+The opt-in native renderer draws lyrics as camera-facing glyphs at a fixed position in the Minecraft world. A new timestamp chooses a new nearby location. Rendering is local to LeviLauncher; there are no blocks, entities, world packs or packets, so multiplayer players do not see it. The audio playback worker does not scan Minecraft signatures or wait for game-render calls.
+
+This experimental path is enabled only when the game ELF Build ID and seven native function patterns match the audited World Analysis 1.26.52 or 1.26.60 profiles. Unknown versions or altered hooks keep the 2D floating lyrics active. The mod displays the 3D status in its player card. A compiled build cannot establish that it works on a real device; test both the visuals and Play/Pause/Next in game.
 
 
 ## Other
 - The full mod retains the Android Bridge APK with Search, Media3 playback, ChruPipe-free remote controls, saved playlists, artwork, and online LRCLIB lyrics.
 - Standalone retains its externally hosted ChruPipe backend requirement and optional visible WebView; it does not provide full Bridge queue editing.
 - Signed APK update chain retained from 1.2.0. Do not load full and standalone .levipacks together.
-- Release Candidate until successfully tested in game; GitHub Actions compile success does not confirm runtime stability.
+- The standard release remains stable; the 3D setting is individually labeled Experimental and defaults OFF. GitHub Actions compilation does not confirm runtime stability.
 - v1.2.4: Android Home/Playlists/Settings, mini and expanded player, song options, ICU romanization default-on. Native 3D hook suspended; floating 2D fallback is client-only.
+- v1.2.5: World Analysis-style native billboard glyph renderer, exact game-build checks, asynchronous preparation, client-only world positioning, 2D fallback on unsupported builds.
+

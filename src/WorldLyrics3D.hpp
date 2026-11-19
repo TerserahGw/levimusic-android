@@ -1,70 +1,86 @@
 #pragma once
-// LeviMusic client-local 3D lyric experiment.
-// World-render hook inspired by the open GPL-3.0 BedrockTools project:
-// https://github.com/QYCottage/BedrockTools/tree/main/src/modules/visual
-// This file reimplements a small renderer; no LHolo or WebScreen binary is reused.
-// Requires exact matching game signatures and current Bedrock layout offsets.
+// World renderer adapted from World Analysis (Copyright 2026 Ekowat),
+// itself derived from BedrockTools by RadiantByte. GPL-3.0-only.
+#include "WorldLyricsBindings.hpp"
 #include <pl/memory/Hook.hpp>
-#include <pl/memory/Signature.hpp>
 #include <android/log.h>
-#include <array>
+#include <link.h>
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
-#include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
-
+#include <thread>
+#include <vector>
 namespace lm_world3d {
-constexpr char LOG_TAG[]="LeviMusicWorld3D";
+using Clock=std::chrono::steady_clock;
+inline int64_t nowMs(){return std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now().time_since_epoch()).count();}
 struct Vec3 {float x=0,y=0,z=0;};
 inline Vec3 operator+(Vec3 a,Vec3 b){return {a.x+b.x,a.y+b.y,a.z+b.z};}
 inline Vec3 operator-(Vec3 a,Vec3 b){return {a.x-b.x,a.y-b.y,a.z-b.z};}
-inline Vec3 operator*(Vec3 a,float v){return {a.x*v,a.y*v,a.z*v};}
-inline Vec3 cross(Vec3 a,Vec3 b){
-    return {a.y*b.z-a.z*b.y,a.z*b.x-a.x*b.z,a.x*b.y-a.y*b.x};
-}
-inline Vec3 normalized(Vec3 a){
-    float m=std::sqrt(a.x*a.x+a.y*a.y+a.z*a.z);
-    return m<.0001f?Vec3{1,0,0}:a*(1.f/m);
-}
-inline std::atomic<bool> enabled{false},attempted{false},installed{false};
-inline std::atomic<void*> client{nullptr};
-inline std::mutex textMutex;
+inline Vec3 operator*(Vec3 a,float s){return {a.x*s,a.y*s,a.z*s};}
+inline float magnitude2(Vec3 a){return a.x*a.x+a.y*a.y+a.z*a.z;}
+inline Vec3 normalized(Vec3 a){float d=std::sqrt(magnitude2(a));return d>.00001f?a*(1.f/d):Vec3{1,0,0};}
+inline bool valid(void* ptr){auto n=reinterpret_cast<uintptr_t>(ptr);return n>0x10000 && n%8==0;}
+template<class T> inline T read(void* ptr,size_t offset){T value{};std::memcpy(&value,static_cast<char*>(ptr)+offset,sizeof(T));return value;}
+enum class State {Idle,Preparing,Ready,Unsupported,BindingMismatch,HookFailed};
+inline std::atomic<State> state{State::Idle};
+inline std::atomic<bool> enabled{false},installed{false};
+inline std::atomic<int64_t> lastDraw{0};
+inline std::atomic<uint64_t> generation{0};
+inline std::mutex lifecycle,lyricsMutex,poseMutex;
+inline std::thread installer;
+inline const Profile* profile=nullptr;
+struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;};
+inline Pose pose;
 inline std::string currentLine;
-inline uint64_t lyricSerial=0,positionedSerial=0;
-inline Vec3 worldAnchor{};
-inline std::chrono::steady_clock::time_point lyricTime=std::chrono::steady_clock::now();
-
+inline uint64_t lyricSerial=0;
+using TickFn=void(*)(void*);
 using RenderFn=void(*)(void*,void*,void*);
-using UpdateFn=void*(*)(void*,bool);
-using GetPlayerFn=void*(*)(void*);
 using TessBegin=void(*)(void*,void*,int,int,int);
 using TessColor=void(*)(void*,float,float,float,float);
 using TessVertex=void(*)(void*,float,float,float);
 using RenderMesh=void(*)(void*,void*,void*,char*);
+inline TickFn originalTick=nullptr;
 inline RenderFn originalRender=nullptr;
-inline UpdateFn originalUpdate=nullptr;
-inline GetPlayerFn getLocalPlayer=nullptr;
 inline TessBegin tessBegin=nullptr;
 inline TessColor tessColor=nullptr;
 inline TessVertex tessVertex=nullptr;
 inline RenderMesh renderMesh=nullptr;
-inline void* targetRender=nullptr;
-inline void* targetUpdate=nullptr;
-
-// Known BedrockTools Android offsets; THEY ARE VERSION-SPECIFIC.
-constexpr size_t LEVEL_RENDERER_PLAYER=0x430;
-constexpr size_t CAMERA_POSITION=0x614;
-constexpr size_t SELECTION_MATERIAL=0x10A0;
-constexpr size_t SCREEN_TESSELLATOR=0xB0;
-constexpr size_t SCREEN_COLOR_HOLDER=0x30;
-constexpr size_t ACTOR_ROTATION=0x238;
-
+inline void* tickTarget=nullptr;
+inline void* renderTarget=nullptr;
+inline void* materialGroup=nullptr;
+inline bool tickHooked=false,renderHooked=false;
+struct HashedString {
+    uint64_t hash=0;std::string value;mutable const HashedString* lastMatch=nullptr;
+    explicit HashedString(std::string_view s):value(s){
+        if(s.empty())return;
+        hash=0xCBF29CE484222325ULL;
+        for(unsigned char c:s)hash=static_cast<uint64_t>(c)^(hash*0x100000001B3ULL);
+    }
+};
+using MaterialPtr=std::shared_ptr<void>;
+inline MaterialPtr material;
+inline int64_t materialRetry=0;
+inline void resolveMaterial(int64_t now){
+    if(material||now<materialRetry||!valid(materialGroup))return;
+    materialRetry=now+1000;
+    auto** table=read<void**>(materialGroup,0);
+    if(!valid(table)||!table[2])return;
+    using Fn=MaterialPtr(*)(void*,const HashedString*);
+    auto fn=reinterpret_cast<Fn>(table[2]);
+    for(const char* name:{"name_tag_depth_tested","name_tag_depth_tested_with_backface","selection_box"}){
+        HashedString key(name);
+        material=fn(materialGroup,&key);
+        if(material)break;
+    }
+}
 using Rows=std::array<std::string_view,7>;
 // Original minimal 5x7 Latin glyphs; non-Latin characters currently use '?'.
 inline Rows bitmap(char c){
@@ -117,185 +133,226 @@ inline Rows bitmap(char c){
     default:return {" ### ","#   #","    #","   # ","  #  ","     ","  #  "};
     }
 }
-inline std::string latinDisplay(std::string_view input){
-    std::string result;
-    for(unsigned char c:input){
-        if(result.size()>=42)break;
-        if(c>=128){if(result.empty()||result.back()!='?')result.push_back('?');continue;}
-        if(c>='a'&&c<='z')result.push_back(static_cast<char>(c-32));
-        else if(c>=32&&c<127)result.push_back(static_cast<char>(c));
+inline std::string latinDisplay(std::string_view s){
+    std::string out;
+    for(unsigned char c:s){
+        if(out.size()>=96)break;
+        if(c>=128){if((c&0xC0)!=0x80)out+='?';continue;}
+        if(c=='\n'||c=='\r'||c=='\t')out+=' ';
+        else if(c>='a'&&c<='z')out+=static_cast<char>(c-32);
+        else if(c>=32&&c<127)out+=static_cast<char>(c);
+    }
+    return out;
+}
+struct Pixel{float x,y;};
+inline std::vector<Pixel> glyphs(std::string_view text){
+    std::vector<Pixel> result;result.reserve(2200);
+    // Two bounded rows, up to 32 Latin glyphs in each.
+    for(int row=0;row<2&&!text.empty();++row){
+        size_t n=std::min<size_t>(32,text.size());
+        if(text.size()>n){auto space=text.rfind(' ',n);if(space!=text.npos&&space>12)n=space;}
+        const auto slice=text.substr(0,n);
+        const float left=-float(slice.size()*6-1)*.5f;
+        for(size_t k=0;k<slice.size();++k){
+            auto map=bitmap(slice[k]);
+            for(int y=0;y<7;++y)for(int x=0;x<5;++x)
+                if(map[y][x]=='#')result.push_back({left+float(k*6+x),float(row?-8:2)+float(6-y)});
+        }
+        text.remove_prefix(n);
+        while(!text.empty()&&text.front()==' ')text.remove_prefix(1);
     }
     return result;
 }
-inline uint32_t random32(uint32_t v){
-    v^=v>>16;v*=0x7FEB352Du;v^=v>>15;v*=0x846CA68Bu;v^=v>>16;return v;
+inline void publish(std::string_view value){
+    std::lock_guard lock(lyricsMutex);
+    auto bounded=value.substr(0,512);
+    if(currentLine==bounded)return;
+    currentLine=bounded;++lyricSerial;lastDraw=0;
 }
-inline float random01(uint32_t v){return static_cast<float>(random32(v)%10000)/10000.f;}
-
-inline void* clientUpdateHook(void* self,bool v){
-    client.store(self,std::memory_order_relaxed);
-    return originalUpdate?originalUpdate(self,v):nullptr;
+inline void tickHook(void* player){
+    if(originalTick)originalTick(player);
+    if(!enabled.load(std::memory_order_relaxed)||!profile||!valid(player))return;
+    auto* rotation=read<void*>(player,profile->rotation);
+    if(!valid(rotation))return;
+    const float pitch=read<float>(rotation,0),yaw=read<float>(rotation,4);
+    if(!std::isfinite(pitch)||!std::isfinite(yaw)||std::abs(pitch)>180.f)return;
+    Pose next{pitch,std::remainder(yaw,360.f),reinterpret_cast<uintptr_t>(player),
+              read<uintptr_t>(player,profile->level),nowMs()};
+    std::unique_lock lock(poseMutex,std::try_to_lock);
+    if(lock)pose=next;
 }
+struct Scene{
+    uint64_t serial=0,generation=0;
+    uintptr_t world=0,player=0,renderer=0;
+    Vec3 anchor{};
+    int64_t appeared=0,lastFrame=0;
+    std::vector<Pixel> pixels;
+};
+inline Scene scene; // render thread only
+struct ColorGuard{
+    float* holder;std::array<float,4> saved;
+    explicit ColorGuard(float* p):holder(p){std::memcpy(saved.data(),p,16);for(int i=0;i<4;++i)p[i]=1.f;}
+    ~ColorGuard(){std::memcpy(holder,saved.data(),16);}
+};
 inline void renderHook(void* renderer,void* ctx,void* arg){
     if(originalRender)originalRender(renderer,ctx,arg);
-    if(!enabled.load(std::memory_order_relaxed)||!ctx||!renderer||
-       !tessBegin||!tessColor||!tessVertex||!renderMesh||!getLocalPlayer)return;
-    auto* gameClient=client.load(std::memory_order_relaxed);
-    if(!gameClient)return;
-    auto* player=getLocalPlayer(gameClient);
-    if(!player)return;
-    const uintptr_t base=reinterpret_cast<uintptr_t>(renderer);
-    const uintptr_t p=reinterpret_cast<uintptr_t>(player);
-    auto* lrp=*reinterpret_cast<void**>(base+LEVEL_RENDERER_PLAYER);
-    if(!lrp)return;
-    auto* rotation=*reinterpret_cast<void**>(p+ACTOR_ROTATION);
-    if(!rotation)return;
-    auto* tessel=*reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(ctx)+SCREEN_TESSELLATOR);
-    auto* colors=*reinterpret_cast<unsigned char**>(reinterpret_cast<uintptr_t>(ctx)+SCREEN_COLOR_HOLDER);
-    auto* material=reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(lrp)+SELECTION_MATERIAL);
-    if(!tessel||!colors||!(*reinterpret_cast<void**>(material)))return;
-    auto* camera=reinterpret_cast<float*>(reinterpret_cast<uintptr_t>(lrp)+CAMERA_POSITION);
-    Vec3 cam{camera[0],camera[1],camera[2]};
-    const float pitch=reinterpret_cast<float*>(rotation)[0];
-    const float yaw=reinterpret_cast<float*>(rotation)[1];
-    if(!std::isfinite(pitch)||!std::isfinite(yaw) ||
-       std::abs(pitch)>360||std::abs(yaw)>360 ||
-       !std::isfinite(cam.x)||!std::isfinite(cam.y)||!std::isfinite(cam.z))return;
-    constexpr float DEG=0.01745329251994f;
-    Vec3 forward=normalized({-std::sin(yaw*DEG)*std::cos(pitch*DEG),
-                             -std::sin(pitch*DEG),
-                             std::cos(yaw*DEG)*std::cos(pitch*DEG)});
-    Vec3 right=normalized(cross(forward,{0,1,0}));
-    Vec3 up=normalized(cross(right,forward));
-    std::string line;
-    Vec3 anchor{};
-    float alpha=1.f;
-    {
-        std::lock_guard lock(textMutex);
-        if(currentLine.empty())return;
-        if(lyricSerial!=positionedSerial){
-            const uint32_t seed=random32(static_cast<uint32_t>(lyricSerial)*2654435761U);
-            const float across=(random01(seed)-.5f)*3.6f;
-            const float height=(random01(seed+31)-.5f)*2.f;
-            anchor=cam+forward*4.6f+right*across+up*height;
-            worldAnchor=anchor;
-            positionedSerial=lyricSerial;
-        }else anchor=worldAnchor;
-        line=latinDisplay(currentLine);
-        alpha=std::clamp(std::chrono::duration<float>(
-               std::chrono::steady_clock::now()-lyricTime).count()/.23f,0.f,1.f);
+    if(!enabled.load(std::memory_order_relaxed)||!installed.load(std::memory_order_acquire)
+       ||!profile||!valid(renderer)||!valid(ctx))return;
+    const int64_t now=nowMs();
+    Pose view;
+    {std::unique_lock lock(poseMutex,std::try_to_lock);if(!lock)return;view=pose;}
+    if(!view.world||!view.time||now-view.time>1500)return;
+    std::string text;uint64_t serial;
+    {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;text=currentLine;serial=lyricSerial;}
+    if(text.empty())return;
+    auto* rp=read<void*>(renderer,profile->rendererPlayer);
+    auto* tess=read<void*>(ctx,profile->tessellator);
+    auto* colors=read<float*>(ctx,0x30);
+    if(!valid(rp)||!valid(tess)||!valid(colors))return;
+    const Vec3 cam=read<Vec3>(rp,profile->camera);
+    if(!std::isfinite(cam.x)||!std::isfinite(cam.y)||!std::isfinite(cam.z))return;
+    resolveMaterial(now);
+    if(!material)return;
+    const uint64_t gen=generation.load();
+    const bool reset=scene.generation!=gen||scene.world!=view.world||scene.player!=view.player
+        ||scene.renderer!=reinterpret_cast<uintptr_t>(rp)||now-scene.lastFrame>1500
+        ||magnitude2(cam-scene.anchor)>1024.f;
+    if(scene.serial!=serial||reset){
+        scene.pixels=glyphs(latinDisplay(text));
+        constexpr float deg=.01745329251994f;
+        const float yaw=view.yaw*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
+        const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
+        const Vec3 side{-std::cos(yaw),0,-std::sin(yaw)};
+        scene.anchor=cam+forward*4.6f+side*(float(int(serial%3)-1)*.65f)+Vec3{0,.25f,0};
+        scene.serial=serial;scene.generation=gen;scene.world=view.world;
+        scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
+        scene.appeared=now;
     }
-    if(line.empty())return;
-    const Vec3 facing=normalized(cam-anchor);
-    Vec3 glyphRight=normalized(cross(facing,{0,1,0}));
-    Vec3 glyphUp=normalized(cross(glyphRight,facing));
-    const float scale=.023f;
-    const float center=static_cast<float>(line.size())*3.f*scale;
-    int lit=0;
-    for(char ch:line){
-        Rows rows=bitmap(ch);
-        for(int y=0;y<7;y++)for(int x=0;x<5;x++)
-            if(rows[static_cast<size_t>(y)][static_cast<size_t>(x)]=='#')lit++;
-    }
-    if(lit==0)return;
-    // Five layers, two vertices per on-pixel dash. World coordinates are
-    // camera-relative, as in the native BedrockTools Tessellator world path.
-    const int vertices=lit*10;
-    if(vertices<=0 || vertices>20000)return;
-    std::array<unsigned char,16> savedColor{};
-    std::memcpy(savedColor.data(),colors,savedColor.size());
-    const float neutral[4]{1.f,1.f,1.f,1.f};
-    std::memcpy(colors,neutral,sizeof(neutral));
-    colors[16]=1;
-    tessBegin(tessel,nullptr,4,vertices,0);
-    const float offset=scale*.25f;
-    for(int pass=0;pass<5;pass++){
-        bool outline=pass<4;
-        tessColor(tessel,outline?0.f:1.f,outline?0.f:1.f,
-                  outline?0.f:1.f,alpha*(outline?.95f:1.f));
-        const float dx=(pass==0?-offset:pass==1?offset:0.f);
-        const float dy=(pass==2?-offset:pass==3?offset:0.f);
-        for(size_t n=0;n<line.size();n++){
-            Rows rows=bitmap(line[n]);
-            for(int y=0;y<7;y++)for(int x=0;x<5;x++){
-                if(rows[static_cast<size_t>(y)][static_cast<size_t>(x)]!='#')continue;
-                const float px=(static_cast<float>(n)*6.f+x)*scale-center+dx;
-                const float py=(6.f-y)*scale+dy;
-                Vec3 position=anchor+glyphRight*px+glyphUp*py-cam;
-                tessVertex(tessel,position.x,position.y,position.z);
-                Vec3 target=position+glyphRight*(scale*.7f);
-                tessVertex(tessel,target.x,target.y,target.z);
-            }
-        }
-    }
-    char pad[0x58]{};
-    renderMesh(ctx,tessel,material,pad);
-    std::memcpy(colors,savedColor.data(),savedColor.size());
-    colors[16]=1;
-}
-
-inline void publish(std::string_view value){
-    std::lock_guard lock(textMutex);
-    if(value==currentLine)return;
-    currentLine=std::string(value.substr(0,250));
-    ++lyricSerial;
-    lyricTime=std::chrono::steady_clock::now();
-}
-
-inline bool tryInstall(){
-    if(installed)return true;
-    if(attempted.exchange(true))return false;
-    // BedrockTools public GPL signatures. Resolve only when the user
-    // explicitly enables this experimental local client renderer.
-    const auto sig=[](const char* pattern)->uintptr_t{
-        return pl::memory::resolveSignature(pattern,"libminecraftpe.so");
+    scene.lastFrame=now;
+    if(scene.pixels.empty())return;
+    const Vec3 facing=normalized(cam-scene.anchor);
+    const Vec3 right=normalized({facing.z,0,-facing.x}),up{0,1,0};
+    constexpr float scale=.022f;
+    ColorGuard guard(colors);
+    auto quad=[&](Vec3 tl){
+        auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
+        for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
     };
-    const uintptr_t render=sig("? ? ? D1 ? ? ? FD ? ? ? 6D ? ? ? 6D ? ? ? 6D ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 57 D0 3B D5");
-    const uintptr_t update=sig("? ? ? FC ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 ? ? ? D1 59 D0 3B D5 ? ? ? 52 F5 03 02 2A");
-    const uintptr_t getPlayer=sig("? ? ? D1 ? ? ? A9 ? ? ? F9 ? ? ? 91 53 D0 3B D5 E8 03 00 AA ? ? ? 91 ? ? ? F9 ? ? ? 91 ? ? ? F8 ? ? ? ? ? ? ? 91 ? ? ? ? ? ? ? 36 ? ? ? 91 ? ? ? 52 ? ? ? ? ? ? ? ? E0 03 1F AA ? ? ? F9 ? ? ? F8 1F 01 09 EB ? ? ? 54 ? ? ? A9 ? ? ? F9 ? ? ? 91 C0 03 5F D6 ? ? ? ? C0 03 5F D6");
-    const uintptr_t begin=sig("? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 FD 03 00 91 ? ? ? 39 ? ? ? 39 08 01 09 2A");
-    const uintptr_t color=sig("? ? ? 52 ? ? ? 39 04 01 27 1E 00 08 24 1E 21 08 24 1E 42 08 24 1E 63 08 24 1E 08 00 38 1E");
-    const uintptr_t vertex=sig("? ? ? D1 ? ? ? FD ? ? ? 6D ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 5B D0 3B D5 ? ? ? F9 ? ? ? F9");
-    const uintptr_t mesh=sig("? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 FD 03 00 91 ? ? ? D1 57 D0 3B D5 F6 03 00 AA E0 03 01 AA ? ? ? F9 F4 03 03 AA");
-    if(!render||!update||!getPlayer||!begin||!color||!vertex||!mesh){
-        __android_log_print(ANDROID_LOG_WARN,LOG_TAG,
-             "World 3D renderer incompatible: one or more Minecraft signatures unavailable");
+    tessBegin(tess,nullptr,1,int(scene.pixels.size()*20),0);
+    for(int pass=0;pass<5;++pass){
+        const bool outline=pass<4;
+        const float alpha=std::clamp(float(now-scene.appeared)/180.f,.05f,1.f);
+        tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha);
+        const float dx=pass==0?-.22f:pass==1?.22f:0.f;
+        const float dy=pass==2?-.22f:pass==3?.22f:0.f;
+        auto origin=scene.anchor-cam+facing*(outline?0.f:.001f);
+        for(const auto& p:scene.pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
+    }
+    alignas(8) char texture[0x58]{};
+    renderMesh(ctx,tess,&material,texture);
+    if(enabled.load()&&gen==generation.load())lastDraw=now;
+}
+inline bool active(){int64_t n=lastDraw.load();return enabled.load()&&n>0&&nowMs()-n<500;}
+inline const char* status(){
+    if(!enabled.load())return "3D off";
+    switch(state.load()){
+        case State::Idle:case State::Preparing:return "Preparing 3D renderer";
+        case State::Unsupported:return "3D unsupported on this Minecraft build (2D)";
+        case State::BindingMismatch:return "3D signature conflict (2D)";
+        case State::HookFailed:return "3D renderer hook failed (2D)";
+        case State::Ready:return active()?"3D lyrics active":"3D ready / waiting for world lyrics";
+    }
+    return "";
+}
+struct Image{
+    uintptr_t base=0;const ElfW(Phdr)* headers=nullptr;size_t count=0;const Profile* selected=nullptr;
+    bool contains(uintptr_t at,size_t size,unsigned flags)const{
+        for(size_t i=0;i<count;++i){const auto& h=headers[i];
+            if(h.p_type!=PT_LOAD||(h.p_flags&flags)!=flags)continue;
+            auto start=base+h.p_vaddr;
+            if(at>=start&&at-start<=h.p_memsz&&size<=h.p_memsz-(at-start))return true;
+        }
         return false;
     }
-    getLocalPlayer=reinterpret_cast<GetPlayerFn>(getPlayer);
-    tessBegin=reinterpret_cast<TessBegin>(begin);
-    tessColor=reinterpret_cast<TessColor>(color);
-    tessVertex=reinterpret_cast<TessVertex>(vertex);
-    renderMesh=reinterpret_cast<RenderMesh>(mesh);
-    targetRender=reinterpret_cast<void*>(render);
-    targetUpdate=reinterpret_cast<void*>(update);
-    if(pl::memory::hook(targetUpdate,reinterpret_cast<void*>(&clientUpdateHook),
-                         reinterpret_cast<void**>(&originalUpdate))!=0){
-        __android_log_print(ANDROID_LOG_WARN,LOG_TAG,"Cannot hook Minecraft client update");
-        return false;
+};
+inline Image findImage(){
+    Image result;
+    dl_iterate_phdr([](dl_phdr_info* info,size_t,void* arg){
+        if(!info->dlpi_name)return 0;
+        std::string_view name(info->dlpi_name);
+        if(name.substr(name.find_last_of('/')+1)!="libminecraftpe.so")return 0;
+        auto& image=*static_cast<Image*>(arg);
+        image={info->dlpi_addr,info->dlpi_phdr,info->dlpi_phnum,nullptr};
+        for(size_t i=0;i<image.count;++i){const auto& h=image.headers[i];
+            auto start=image.base+h.p_vaddr;
+            if(h.p_type!=PT_NOTE||!image.contains(start,h.p_memsz,PF_R))continue;
+            for(const auto& prof:profiles)
+                if(matchesBuildId({reinterpret_cast<const uint8_t*>(start),size_t(h.p_memsz)},prof.buildId))
+                    image.selected=&prof;
+        }
+        return 1;
+    },&result);
+    return result;
+}
+inline void prepare(){
+    auto image=findImage();
+    if(!image.selected){state=State::Unsupported;return;}
+    std::array<uintptr_t,BindingCount> addresses{};
+    for(size_t i=0;i<addresses.size();++i){
+        const auto& binding=image.selected->bindings[i];auto at=image.base+binding.rva;
+        if(!image.contains(at,binding.pattern.size(),PF_R|PF_X)
+           ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern)){
+            state=State::BindingMismatch;return;
+        }
+        addresses[i]=at;
     }
-    if(pl::memory::hook(targetRender,reinterpret_cast<void*>(&renderHook),
-                         reinterpret_cast<void**>(&originalRender))!=0){
-        pl::memory::unhook(targetUpdate,reinterpret_cast<void*>(&clientUpdateHook));
-        originalUpdate=nullptr;
-        __android_log_print(ANDROID_LOG_WARN,LOG_TAG,"Cannot hook Minecraft level renderer");
-        return false;
-    }
-    installed=true;
-    __android_log_print(ANDROID_LOG_INFO,LOG_TAG,
-        "Experimental client-only world-space 3D lyrics rendering activated");
-    return true;
+    // World Analysis resolves the material group from ADRP x0 / ADD x0
+    // at the verified common-material function, then skips 32 bytes.
+    auto at=addresses[MaterialGroup];uint32_t a=0,b=0;
+    std::memcpy(&a,reinterpret_cast<void*>(at),4);std::memcpy(&b,reinterpret_cast<void*>(at+4),4);
+    if((a&0x9F00001F)!=0x90000000||(b&0xFF8003FF)!=0x91000000){state=State::BindingMismatch;return;}
+    int64_t imm=((a>>5)&0x7FFFF)*4+((a>>29)&3);
+    if(imm&(1<<20))imm-=(1<<21);
+    auto group=uintptr_t(int64_t(at&~uintptr_t(0xfff))+imm*4096)
+        +(((b>>10)&0xfff)<<((b&0x400000)?12:0))+32;
+    if(!image.contains(group,sizeof(void*),PF_R)){state=State::BindingMismatch;return;}
+    profile=image.selected;materialGroup=reinterpret_cast<void*>(group);
+    tessBegin=reinterpret_cast<TessBegin>(addresses[Begin]);
+    tessColor=reinterpret_cast<TessColor>(addresses[Color]);
+    tessVertex=reinterpret_cast<TessVertex>(addresses[Vertex]);
+    renderMesh=reinterpret_cast<RenderMesh>(addresses[Mesh]);
+    tickTarget=reinterpret_cast<void*>(addresses[Tick]);
+    renderTarget=reinterpret_cast<void*>(addresses[Render]);
+    if(pl::memory::hook(tickTarget,reinterpret_cast<void*>(&tickHook),
+                        reinterpret_cast<void**>(&originalTick))!=0){state=State::HookFailed;return;}
+    tickHooked=true;
+    if(pl::memory::hook(renderTarget,reinterpret_cast<void*>(&renderHook),
+                        reinterpret_cast<void**>(&originalRender))!=0){state=State::HookFailed;return;}
+    renderHooked=true;installed.store(true,std::memory_order_release);state=State::Ready;
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicWorld3D","world renderer ready: %s",profile->name.data());
+}
+inline void request(bool value){
+    if(enabled.exchange(value)!=value){++generation;lastDraw=0;}
+    if(!value)return;
+    std::lock_guard lock(lifecycle);
+    if(state.load()!=State::Idle)return;
+    state=State::Preparing;
+    installer=std::thread([]{
+        try{prepare();}catch(...){state=State::HookFailed;}
+        if(state.load()!=State::Ready)
+            __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","renderer unavailable (%d)",int(state.load()));
+    });
 }
 inline void shutdown(){
-    enabled=false;
-    if(installed.exchange(false)){
-        pl::memory::unhook(targetRender,reinterpret_cast<void*>(&renderHook));
-        pl::memory::unhook(targetUpdate,reinterpret_cast<void*>(&clientUpdateHook));
-    }
-    client=nullptr;
-    originalRender=nullptr;
-    originalUpdate=nullptr;
-    publish("");
-    attempted=false;
+    request(false);publish("");
+    std::lock_guard lock(lifecycle);
+    if(installer.joinable())installer.join();
+}
+inline void unload(){
+    shutdown();
+    if(renderHooked)pl::memory::unhook(renderTarget,reinterpret_cast<void*>(&renderHook));
+    if(tickHooked)pl::memory::unhook(tickTarget,reinterpret_cast<void*>(&tickHook));
+    installed=false;
 }
 } // namespace lm_world3d
+

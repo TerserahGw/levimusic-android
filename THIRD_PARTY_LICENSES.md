@@ -69,4 +69,11 @@ The app icon is original vector artwork, not Apple or Spotify branding.
 
 Source: https://github.com/QYCottage/BedrockTools
 
-GPL-3.0. LeviMusic's optional 3D world renderer is adapted from the publicly documented signature-resolution and Tessellator-hook approach in BedrockTools, including ARM64 signatures and version-specific render offsets. The renderer logic and Latin glyph bitmaps are independently authored in src/WorldLyrics3D.hpp. No BedrockTools binaries are redistributed. Native renderer compatibility is not guaranteed across Minecraft versions.
+GPL-3.0. The optional 3D renderer uses the native render/material path documented by BedrockTools. Latin glyph bitmaps in src/WorldLyrics3D.hpp were independently authored. No BedrockTools binaries are redistributed.
+
+## World Analysis (Android world renderer and game binding reference)
+
+Source: https://github.com/callmehuda/World-Analysis (commit 4669e3072f79ede9b074d7d1ac19df4b9de88cee)
+
+Copyright © 2026 Ekowat. World Analysis is a GPL-3.0-only derivative of BedrockTools (original author RadiantByte). LeviMusic adapts its render-stage approach, hashed material lookup, Tessellator and MeshHelpers ABI, and audited 1.26.52 and 1.26.60 ARM64 bindings. Relevant code is in src/WorldLyrics3D.hpp and src/WorldLyricsBindings.hpp. The source remains GPL-3.0; no World Analysis binary or art is bundled. Build-specific profiles are deliberately checked before a hook is installed.
+

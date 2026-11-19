@@ -2,7 +2,8 @@
   "type": "preload-native",
   "name": "LeviMusic Standalone - ChruPipe (self-hosted)",
   "author": "ReaAurelis",
-  "version": "1.2.3",
+  "version": "1.2.5",
   "entry": "liblevimusic_standalone.so",
   "minecraft_versions": []
 }
+

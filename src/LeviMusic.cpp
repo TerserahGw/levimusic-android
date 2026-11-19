@@ -1277,7 +1277,7 @@ public:
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,"false")
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,"false")
-            .config("worldLyrics3D","Floating lyrics (safe 2D fallback; 3D renderer unavailable)",pl::modmenu::ConfigType::Toggle,"false")
+            .config("worldLyrics3D","3D Floating Lyrics (Experimental, client-only)",pl::modmenu::ConfigType::Toggle,"false")
             .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,"true")
 #if defined(LEVI_STANDALONE)
             .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,"false")
@@ -1321,13 +1321,14 @@ public:
         pl::modmenu::unregisterModule(MODULE);
         return true;
     }
-    bool unload(){return true;}
+    bool unload(){lm_world3d::unload();return true;}
 private:
     void setConfig(std::string_view k,std::string_view v){
         if(k=="romanizeLyrics"){
             romanizeLyrics_=v=="true"||v=="1";
         } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
+            lm_world3d::request(worldLyrics3D_);
         } else if(k=="embeddedBrowser") {
             browserEnabled_=v=="true"||v=="1";
         } else if(k=="floatingLyrics") {
@@ -1593,7 +1594,7 @@ private:
         const bool streamingBridge=useBridge_.load();
         const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
         // Client-only native 3D scene: independent from Behavior Packs or servers.
-        if(worldLyrics3D_ && lm_world3d::installed)
+        if(worldLyrics3D_)
             lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?lyric:std::string{});
         else if(lm_world3d::installed)
             lm_world3d::publish("");
@@ -1673,7 +1674,7 @@ private:
             }
             // No background: white text + black multi-pass outline.
             // LRC lines remain until the NEXT timestamp, never a fixed 5-second cutoff.
-            if(lyricsOn_ && !(worldLyrics3D_ && lm_world3d::installed) && !timedLyrics.empty() && elapsed>=0) {
+            if(lyricsOn_ && !(worldLyrics3D_ && lm_world3d::active()) && !timedLyrics.empty() && elapsed>=0) {
                 int active=-1;
                 for(size_t i=0;i<timedLyrics.size();i++) {
                     if(timedLyrics[i].ms>elapsed)break;
@@ -1761,6 +1762,8 @@ private:
         // Compact status, no potentially huge text block overlapping seek.
         text(l.left.x+17*u,l.left.y+134*u,info,10.6f*u,C_DIM,
              static_cast<size_t>(std::max(12.f,l.left.w/(7.7f*u))));
+        if(worldLyrics3D_)
+            text(l.left.x+17*u,l.left.y+149*u,lm_world3d::status(),9.2f*u,C_MINT,48);
 
         // Player card no longer embeds a second lyrics box.
         const float separation=std::min(l.seek.y-22*u,l.left.y+158*u);
@@ -2027,17 +2030,9 @@ private:
                     jobs_.pop_front();hasJob=true;
                 }
             }
-            // Experimental local-only world rendering, opt-in and signature-gated.
-            if(worldLyrics3D_){
-                // Native world hook is disabled until renderer offsets are verified for this game build.
-                // The old signature matched an incompatible update method and stalled the client.
-                lm_world3d::enabled=false;
-            }else if(lm_world3d::installed){
-                // Do not unhook a live game render path on every settings toggle.
-                // Keep the detour inert; unhook only on module disable.
-                lm_world3d::enabled=false;
-                lm_world3d::publish("");
-            }
+            // Hook preparation is separate from playback and never scans the
+            // entire game library during a music command.
+            lm_world3d::request(worldLyrics3D_);
             if(useBridge_) {
                 std::string key;
                 {std::lock_guard lock(mu_);key=bridgeKey_;}
@@ -2432,3 +2427,4 @@ private:
 };
 } // namespace
 PL_REGISTER_MOD(LeviMusic, LeviMusic::instance())
+
