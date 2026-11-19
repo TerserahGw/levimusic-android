@@ -1,4 +1,4 @@
-# LeviMusic 1.3.4 — feature status
+# LeviMusic 1.3.5 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -62,3 +62,8 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 ## v1.3.4
 - First Person and other cameras retain separate saved distance, height, vertical scatter, and font size controls. First Person keeps its FOV setting; the other camera mode scatters new lines over a full 360 degrees.
 - In other camera modes, ordered lyric segments occupy successive positions along an adjustable arc around the player instead of sharing a tight grid. The default distance is 3.8 blocks and line arc is 220 degrees.
+
+## v1.3.5
+- Continue each segment’s actual opacity into staggered, ordered old-to-new transitions; remove the pre-end fade that made previous lyrics reappear. Crossfade the legacy 2D lyrics at timestamp boundaries.
+- First Person placement choices: grid, fan, staggered grid. Other cameras: adjustable arc, full ring, or gently varied full ring (default); all maintain lyric order.
+- Add KuGou and LiriQo fallback to the Bridge lyrics engine, validate recording metadata and timed lines, and retain native word timings when supplied.

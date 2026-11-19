@@ -16,10 +16,19 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorCompletionService;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
-/** Local LRC, word-timed TTML, LRCLIB, NetEase and original-video captions. */
+/** Local LRC, word-timed TTML, multiple synced providers and video captions. */
 public final class LyricsFinder {
     private static final String TAG="LeviMusicLyrics";
+    private static final ExecutorService SOURCES=Executors.newFixedThreadPool(7,task->{
+        Thread thread=new Thread(task,"LeviMusic-LyricsSource");thread.setDaemon(true);return thread;
+    });
     private LyricsFinder(){}
     private static String enc(String text){
         try{return URLEncoder.encode(text==null?"":text,"UTF-8");}catch(Exception e){return "";}
@@ -28,7 +37,7 @@ public final class LyricsFinder {
         try{
             URLConnection connection=new URL(address).openConnection();
             connection.setConnectTimeout(4500);connection.setReadTimeout(6500);
-            connection.setRequestProperty("User-Agent","LeviMusic/1.3.0 (Android; lyrics client)");
+            connection.setRequestProperty("User-Agent","LeviMusic/1.3.5 (Android; lyrics client)");
             try(InputStream stream=connection.getInputStream()){
                 byte[] data=stream.readNBytes(500000);
                 return new String(data,StandardCharsets.UTF_8);
@@ -67,6 +76,21 @@ public final class LyricsFinder {
     private static boolean hasTimedLyrics(String raw){
         return raw!=null&&raw.matches("(?s).*\\[\\d{1,3}:\\d{2}(?:[.\\:]\\d+)?\\].*");
     }
+    // Reject short, badly offset or empty responses before selecting a provider.
+    static boolean usable(String raw,int duration){
+        if(!hasTimedLyrics(raw)||raw.length()>500000)return false;
+        int lines=0;long last=-1;
+        for(String row:raw.split("\\r?\\n")){
+            java.util.regex.Matcher m=java.util.regex.Pattern.compile(
+                "^\\[(\\d{1,3}):(\\d{2})(?:[.:](\\d{1,3}))?\\]\\s*(.*)$").matcher(row);
+            if(!m.find()||m.group(4).replaceAll("<\\d{1,3}:\\d{2}[.:]\\d{1,3}>","").trim().isEmpty())continue;
+            long fraction=m.group(3)==null?0:Long.parseLong((m.group(3)+"000").substring(0,3));
+            long at=Long.parseLong(m.group(1))*60000+Long.parseLong(m.group(2))*1000+fraction;
+            if(at<last||duration>0&&at>duration+12000L)return false;
+            last=at;++lines;
+        }
+        return lines>=3;
+    }
     // The public lrc.red catalogue indexes Apple-style TTML by recording ISRC.
     // Match the recording before requesting its document to avoid wrong edits.
     private static String lrcRed(String title,String artist,int duration){
@@ -86,7 +110,8 @@ public final class LyricsFinder {
                 if(rank>best){best=rank;isrc=code;}
             }
             if(best<130||isrc.isEmpty())return "";
-            return WordTimedTtml.convert(fetch("https://lrc.red/s/"+isrc+".ttml"));
+            String raw=WordTimedTtml.convert(fetch("https://lrc.red/s/"+isrc+".ttml"));
+            return usable(raw,duration)?raw:"";
         }catch(Exception ignored){return "";}
     }
     private static String betterLyrics(String title,String artist,int duration){
@@ -94,8 +119,60 @@ public final class LyricsFinder {
         try{
             JSONObject answer=new JSONObject(fetch("https://lyrics-api.boidu.dev/getLyrics?s="+
                 enc(title)+"&a="+enc(artist)+"&d="+duration/1000));
-            return WordTimedTtml.convert(answer.optString("ttml"));
+            String raw=WordTimedTtml.convert(answer.optString("ttml"));
+            return usable(raw,duration)?raw:"";
         }catch(Exception ignored){return "";}
+    }
+    private static String kugou(String title,String artist,int duration){
+        if(title.isEmpty()||artist.isEmpty()||duration<=0)return "";
+        try{
+            JSONObject answer=new JSONObject(fetch("https://lyrics-api.boidu.dev/kugou/getLyrics?s="+
+                enc(title)+"&a="+enc(artist)+"&d="+duration/1000));
+            String raw=answer.optString("lyrics");
+            return usable(raw,duration)?raw:"";
+        }catch(Exception ignored){return "";}
+    }
+    private static String mark(long ms,char open,char close){
+        return String.format(Locale.ROOT,"%c%02d:%05.2f%c",open,ms/60000,(ms%60000)/1000.0,close);
+    }
+    // LiriQo merges multiple providers; only accept a matching recording and real timed lines.
+    private static String[] liriqo(String title,String artist,int duration){
+        if(title.isEmpty()||artist.isEmpty()||duration<=0)return new String[]{"",""};
+        try{
+            JSONObject root=new JSONObject(fetch("https://api.liriqo-alfarrizi.my.id/v1/lyrics?title="+
+                enc(title)+"&artist="+enc(artist)+"&duration="+duration/1000+"&fast=1"));
+            JSONObject metadata=root.optJSONObject("metadata"),track=root.optJSONObject("primary");
+            if(metadata==null||track==null)return new String[]{"",""};
+            int rank=score(title,artist,duration,metadata.optString("title"),
+                metadata.optString("artist"),(long)(metadata.optDouble("duration",0)*1000));
+            if(rank<130||"plain".equals(track.optString("syncLevel")))return new String[]{"",""};
+            JSONArray timed=track.optJSONArray("timed");if(timed==null)return new String[]{"",""};
+            StringBuilder output=new StringBuilder();long last=-1;
+            boolean wordTiming=track.optBoolean("nativeWordTiming");
+            for(int i=0;i<Math.min(1000,timed.length());i++){
+                JSONObject line=timed.optJSONObject(i);if(line==null)continue;
+                long at=line.optLong("start",-1);String text=line.optString("text").trim();
+                if(at<0||at<last||duration>0&&at>duration+12000L||text.isEmpty())continue;
+                last=at;output.append(mark(at,'[',']')).append(' ');
+                JSONArray words=wordTiming?line.optJSONArray("words"):null;
+                StringBuilder rich=new StringBuilder(),plain=new StringBuilder();
+                if(words!=null)for(int j=0;j<Math.min(100,words.length());j++){
+                    JSONObject word=words.optJSONObject(j);if(word==null)continue;
+                    long wordAt=word.optLong("start",-1);
+                    if(wordAt<at||wordAt>at+30000)continue;
+                    String token=word.optString("text");
+                    rich.append(mark(wordAt,'<','>')).append(token);plain.append(token);
+                }
+                if(rich.length()>0&&normalize(plain.toString()).equals(normalize(text)))
+                    output.append(rich);
+                else output.append(text);
+                output.append('\n');
+            }
+            String raw=output.toString();
+            if(!usable(raw,duration))return new String[]{"",""};
+            String provider=track.optString("upstreamProvider",track.optString("provider","LiriQo"));
+            return new String[]{raw,"LiriQo / "+provider};
+        }catch(Exception ignored){return new String[]{"",""};}
     }
     private static String lrclib(String title,String artist,int duration){
         try{
@@ -104,7 +181,9 @@ public final class LyricsFinder {
                     +"&duration="+Math.round(duration/1000f);
                 JSONObject item=new JSONObject(fetch(address));
                 String raw=item.optString("syncedLyrics");
-                if(hasTimedLyrics(raw))return raw;
+                if(score(title,artist,duration,item.optString("trackName"),
+                    item.optString("artistName"),(long)(item.optDouble("duration",0)*1000))>=100
+                    &&usable(raw,duration))return raw;
             }
         }catch(Exception ignored){}
         for(String query:new String[]{"track_name="+enc(title)+"&artist_name="+enc(artist),
@@ -116,12 +195,12 @@ public final class LyricsFinder {
                 int best=-1;String selected="";
                 for(int i=0;i<Math.min(20,results.length());i++){
                     JSONObject item=results.optJSONObject(i);if(item==null||item.optBoolean("instrumental"))continue;
-                    String raw=item.optString("syncedLyrics");if(!hasTimedLyrics(raw))continue;
+                    String raw=item.optString("syncedLyrics");if(!usable(raw,duration))continue;
                     int rank=score(title,artist,duration,item.optString("trackName"),
                         item.optString("artistName"),(long)(item.optDouble("duration",0)*1000));
                     if(rank>best){best=rank;selected=raw;}
                 }
-                if(best>=70)return selected;
+                if(best>=100)return selected;
             }catch(Exception ignored){}
         }
         return "";
@@ -147,7 +226,7 @@ public final class LyricsFinder {
             JSONObject lyric=new JSONObject(fetch("https://music.163.com/api/song/lyric?id="+id+"&lv=1&kv=0&tv=0"));
             JSONObject lrc=lyric.optJSONObject("lrc");
             String raw=lrc==null?"":lrc.optString("lyric");
-            return hasTimedLyrics(raw)?raw:"";
+            return usable(raw,duration)?raw:"";
         }catch(Exception ignored){return "";}
     }
     private static long timestamp(String time){
@@ -197,10 +276,39 @@ public final class LyricsFinder {
     }
     public static JSONObject find(Context context,String title,String artist,int duration,String videoUrl,String language){
         String raw=LyricsStore.get(context,title,artist),source="local LRC";
-        if(raw.isEmpty()){raw=lrcRed(title,artist,duration);source="lrc.red (word-timed)";}
-        if(raw.isEmpty()){raw=betterLyrics(title,artist,duration);source="BetterLyrics (word-timed)";}
-        if(raw.isEmpty()){raw=lrclib(title,artist,duration);source="LRCLIB";}
-        if(raw.isEmpty()){raw=netease(title,artist,duration);source="NetEase";}
+        if(raw.isEmpty()){
+            final class Found {
+                final String lyrics,provider;final int quality;
+                Found(String l,String p,int q){lyrics=l;provider=p;quality=q;}
+            }
+            ExecutorCompletionService<Found> completed=new ExecutorCompletionService<>(SOURCES);
+            List<Future<Found>> tasks=new ArrayList<>();
+            tasks.add(completed.submit(()->new Found(lrcRed(title,artist,duration),"lrc.red",80)));
+            tasks.add(completed.submit(()->new Found(betterLyrics(title,artist,duration),"BetterLyrics TTML",75)));
+            tasks.add(completed.submit(()->new Found(lrclib(title,artist,duration),"LRCLIB",50)));
+            tasks.add(completed.submit(()->new Found(netease(title,artist,duration),"NetEase",45)));
+            tasks.add(completed.submit(()->new Found(kugou(title,artist,duration),"KuGou / BetterLyrics",40)));
+            tasks.add(completed.submit(()->{
+                String[] result=liriqo(title,artist,duration);
+                return new Found(result[0],result[1],result[0].contains("<")?78:55);
+            }));
+            tasks.add(completed.submit(()->new Found(captions(videoUrl),"YouTube captions",20)));
+            final long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(18);
+            int best=-1;
+            for(int i=0;i<tasks.size();i++){
+                long remaining=deadline-System.nanoTime();if(remaining<=0)break;
+                try{
+                    Future<Found> next=completed.poll(remaining,TimeUnit.NANOSECONDS);
+                    if(next==null)break;
+                    Found found=next.get();
+                    if(found.quality>best&&usable(found.lyrics,duration)){
+                        raw=found.lyrics;source=found.provider;best=found.quality;
+                        if(best>=80)break;
+                    }
+                }catch(Exception ignored){/* an unavailable source does not block the rest */}
+            }
+            for(Future<Found> task:tasks)if(!task.isDone())task.cancel(true);
+        }
         if(raw.isEmpty()){raw=captions(videoUrl);source="YouTube captions";}
         JSONObject result=new JSONObject();
         try{result.put("success",!raw.isEmpty()).put("source",raw.isEmpty()?"none":source)

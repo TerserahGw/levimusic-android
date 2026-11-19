@@ -74,6 +74,15 @@ int main(){
         assert(magnitude2(a-b)>1.f);
         assert(std::abs(std::hypot(b.x,b.z)-3.8f)<.001f);
     }
+    for(int mode=1;mode<=2;++mode){
+        auto a=scatteredAnchor(pose,orbitBase,0,8,mode,79);
+        auto b=scatteredAnchor(pose,orbitBase,4,8,mode,79);
+        assert(magnitude2(a-b)>25.f); // opposite sectors, not a tight cluster
+        assert(magnitude2(scatteredAnchor(pose,orbitBase,2,8,mode,79)-
+                          scatteredAnchor(pose,orbitBase,2,8,mode,79))<.0001f);
+    }
+    auto fan=firstFanAnchor(pose,firstWide,0,6);
+    assert(magnitude2(fan-firstWide)>.1f);
     lyricVerticalRangeTenths=0;
     auto levelAnchor=lyricAnchor(pose,cam,47,false);
     lyricVerticalRangeTenths=15;
@@ -89,8 +98,12 @@ int main(){
     auto secondPanel=layoutAnchor({0,0,0},{1,0,0},1,8,.9f);
     auto fifthPanel=layoutAnchor({0,0,0},{1,0,0},4,8,.9f);
     assert(firstPanel.x<secondPanel.x&&firstPanel.y>fifthPanel.y);
-    assert(cueFade(0,0,4000)>cueFade(3800,0,4000));
+    assert(cueFade(0,0,4000)==cueFade(3800,0,4000));
+    assert(cueFade(4000,0,4000)==1.f);
     assert(cueFade(4700,0,4000)==0.f);
+    assert(transitionFade(1000,1080,0,100)==1.f);
+    assert(transitionFade(1300,1080,0,100)<transitionFade(1300,1080,3,100));
+    assert(transitionFade(2000,1080,0,100)==0.f);
     assert(riseForProgress(0.f)==0.f);
     assert(riseForProgress(.5f)>0.f&&riseForProgress(.5f)<riseForProgress(1.f));
     assert(riseForProgress(1.f)<.7f);
@@ -119,6 +132,8 @@ int main(){
     assert(magnitude2(scene.panels[0].anchor-scene.panels[1].anchor)>.1f);
     assert(!scene.previous.empty()&&scene.previousUntil>nowMs());
     assert(scene.previousFadeStart>nowMs());
+    assert(scene.previous[0].transitionAlpha>0.f);
+    assert(scene.previous[0].transitionAlpha<=scene.previous[0].visibleAlpha);
     for(size_t i=1;i<scene.panels.size();++i)
         assert(magnitude2(scene.panels[i].anchor-scene.panels[i-1].anchor)>.1f);
     // A new line in another camera mode uses its own font and orbit layout.
@@ -158,6 +173,16 @@ int main(){
     assert(meshes==9);
     enabled=false;renderHook(renderer.data(),screen.data(),nullptr);
     assert(originals==11&&meshes==9);
+    enabled=true;
+    publish("FADE TEST",0,1000,500,true);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(!scene.panels.empty()&&scene.panels.front().visibleAlpha>0.f);
+    publish("FADE TEST",0,1000,3000,true); // same lyric, now fully faded
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.panels.front().visibleAlpha==0.f);
+    publish("NEW CUE",3000,5000,3000,true);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(!scene.previous.empty()&&scene.previous.front().transitionAlpha==0.f);
     return 0;
 }
 

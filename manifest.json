@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "LeviMusic - Full Music Player",
   "author": "ReaAurelis",
-  "version": "1.3.4",
+  "version": "1.3.5",
   "entry": "liblevimusic.so",
   "minecraft_versions": []
 }

@@ -43,6 +43,7 @@ inline std::atomic<int> lyricVerticalRangeTenths{8},lyricFontPercent{115};
 inline std::atomic<int> otherDistanceTenths{38},otherHeightTenths{13};
 inline std::atomic<int> otherVerticalRangeTenths{8},otherFontPercent{115};
 inline std::atomic<int> otherArcSpread{220};
+inline std::atomic<int> firstPlacement{0},otherPlacement{2};
 inline std::atomic<bool> lyricTrailFollow{false},experimentalBeats{false};
 inline std::atomic<float> beatStrength{0.f};
 inline std::atomic<int64_t> beatUpdated{0};
@@ -248,6 +249,8 @@ struct Panel{
     int cueStart=0,cueEnd=1;
     float visualLift=0.f;
     int fontPercent=115;
+    int wordCount=1;
+    float visibleAlpha=0.f,transitionAlpha=0.f;
     size_t letters=0;
     float width=0;
 };
@@ -260,6 +263,7 @@ struct Scene{
     uint64_t lastBeatPulse=0;
     float cueClock=0.f;
     int64_t lastFrame=0,previousFadeStart=0,previousUntil=0;
+    int previousStagger=0;
     std::vector<Panel> panels,previous;
 };
 inline Scene scene; // render thread only
@@ -289,8 +293,11 @@ inline float cueProgress(float position,int start,int end){
     return std::clamp(float(position-start)/float(std::max(end-start,1)),0.f,1.f);
 }
 inline float cueFade(float position,int start,int end){
-    const int window=std::clamp((end-start)/5,450,1100);
-    return 1.f-smoothstep(float(position-(end-window))/float(window+500));
+    (void)start;
+    return 1.f-smoothstep((position-float(end))/650.f);
+}
+inline float transitionFade(int64_t now,int64_t start,int index,int stagger){
+    return 1.f-smoothstep(float(now-start-int64_t(index)*stagger)/620.f);
 }
 inline float riseForProgress(float progress){
     progress=std::clamp(progress,0.f,1.f);
@@ -370,6 +377,35 @@ inline Vec3 orbitAnchor(Pose view,Vec3 base,size_t index,size_t count){
     return {view.position.x-std::sin(yaw)*distance,baseY+offset,
             view.position.z+std::cos(yaw)*distance};
 }
+inline Vec3 scatteredAnchor(Pose view,Vec3 base,size_t index,size_t count,int mode,uint64_t seed){
+    if(count<=1)return base;
+    constexpr float deg=.01745329251994f;
+    const float center=std::atan2(-(base.x-view.position.x),base.z-view.position.z);
+    const float fraction=float(index)/float(count);
+    // Ordered clockwise positions, but each lyric starts in a new world sector.
+    const float jitter=mode==2?std::sin(float(seed%997+index*163)*.71f)*.24f:0.f;
+    const float yaw=center+(fraction+(jitter/float(count)))*360.f*deg;
+    const float radial=mode==2?std::sin(float(seed%701+index*97)*.83f)*.38f:0.f;
+    const float height=view.position.y+float(otherHeightTenths.load())*.1f;
+    const float range=float(otherVerticalRangeTenths.load())*.1f;
+    const float lift=mode==2?std::sin(float(index)*1.17f+float(seed%37))*
+        std::min(range,.55f):(.5f-fraction)*std::min(range*1.3f,.9f);
+    const float distance=float(otherDistanceTenths.load())*.1f+radial;
+    return {view.position.x-std::sin(yaw)*distance,height+lift,
+            view.position.z+std::cos(yaw)*distance};
+}
+inline Vec3 firstFanAnchor(Pose view,Vec3 base,size_t index,size_t count){
+    if(count<=1)return base;
+    constexpr float deg=.01745329251994f;
+    const float center=std::atan2(-(base.x-view.position.x),base.z-view.position.z);
+    const float arc=float(std::min(lyricScatterFov.load(),int((count-1)*15)))*deg;
+    const float fraction=float(index)/float(count-1);
+    const float yaw=center+(fraction-.5f)*arc;
+    const float distance=float(lyricDistanceTenths.load())*.1f;
+    return {view.position.x-std::sin(yaw)*distance,
+            base.y+(.5f-fraction)*std::min(.7f,float(lyricVerticalRangeTenths.load())*.1f),
+            view.position.z+std::cos(yaw)*distance};
+}
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
     explicit ColorGuard(float* p):holder(p){std::memcpy(saved.data(),p,16);for(int i=0;i<4;++i)p[i]=1.f;}
@@ -416,9 +452,19 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             lyricFontPercent.load(),60,200);
         const float step=.2f+float(fontPercent)*.01f*.66f;
         const size_t columns=lyricScatterFov.load()<50?2:fontPercent>145?3:4;
+        const int mode=thirdPerson?otherPlacement.load():firstPlacement.load();
+        const uint64_t layoutSeed=serial*733;
         auto place=[&](Vec3 candidate,Vec3 right,size_t index){
-            return thirdPerson?orbitAnchor(view,candidate,index,parts.size()):
-                layoutAnchor(candidate,right,index,parts.size(),step,columns);
+            if(thirdPerson)return mode==0?orbitAnchor(view,candidate,index,parts.size()):
+                scatteredAnchor(view,candidate,index,parts.size(),mode,layoutSeed);
+            if(mode==1)return firstFanAnchor(view,candidate,index,parts.size());
+            if(mode==2){
+                const size_t row=index/columns;
+                auto center=layoutAnchor(candidate,right,index,parts.size(),step,columns);
+                return center+right*(row%2==0?.17f:-.17f)*step+
+                    Vec3{0,std::sin(float(layoutSeed%101+row*31)*.47f)*.09f,0};
+            }
+            return layoutAnchor(candidate,right,index,parts.size(),step,columns);
         };
         Vec3 base{};float best=-1.f;
         for(size_t attempt=0;attempt<40&&!parts.empty();++attempt){
@@ -450,6 +496,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.cueStart=start;panel.cueEnd=end;
             panel.fontPercent=fontPercent;
             panel.letters=parts[i].size();
+            panel.wordCount=int(std::count(parts[i].begin(),parts[i].end(),' '))+1;
             panel.width=float(panel.letters)*6.f*.011f*float(fontPercent)*.01f;
             panel.anchor=place(base,right,i);
             panel.visualAnchor=panel.anchor;
@@ -467,8 +514,15 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         if(!scene.previous.empty()){
-            scene.previousFadeStart=now+(text.empty()?0:100);
-            scene.previousUntil=scene.previousFadeStart+620;
+            scene.previousFadeStart=now+(text.empty()?0:80);
+            scene.previousStagger=std::clamp(850/int(scene.previous.size()),55,150);
+            int64_t lastWord=0;
+            for(auto& old:scene.previous){
+                old.transitionAlpha=old.visibleAlpha;
+                lastWord=std::max(lastWord,int64_t(old.partIndex)*scene.previousStagger+
+                    int64_t(old.wordCount-1)*65);
+            }
+            scene.previousUntil=scene.previousFadeStart+lastWord+620;
         }
     }
     const float dt=std::clamp(float(now-scene.lastFrame),0.f,200.f);
@@ -509,17 +563,22 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }
     const bool fading=now<scene.previousUntil&&!scene.previous.empty();
     if(scene.panels.empty()&&!fading)return;
+    const float activeFade=cueFade(position,start,end);
+    if(activeFade<=0.f)for(auto& panel:scene.panels)panel.visibleAlpha=0.f;
     ColorGuard guard(colors);
     size_t count=0;
     int currentPart=-1;
-    if(cueFade(position,start,end)>0.f)
+    if(activeFade>0.f)
         for(const auto& panel:scene.panels)if(panel.appeared){
             count+=panel.pixels.size();currentPart=panel.partIndex;
         }
-    if(fading)for(const auto& panel:scene.previous)if(panel.appeared)count+=panel.pixels.size();
+    if(fading)for(const auto& panel:scene.previous)if(panel.appeared&&
+        panel.transitionAlpha*transitionFade(now,scene.previousFadeStart,
+            panel.partIndex*scene.previousStagger+(panel.wordCount-1)*65,1)>0.f)
+        count+=panel.pixels.size();
     if(!count)return;
     tessBegin(tess,nullptr,1,int(count*20),0);
-    auto draw=[&](const Panel& panel,float alpha,float lift){
+    auto draw=[&](const Panel& panel,float alpha,float lift,bool leaving=false){
         if(alpha<=0.f)return;
         const float baseScale=.011f*float(panel.fontPercent)*.01f;
         const float entryAge=std::max(0.f,float(now-panel.appeared));
@@ -549,21 +608,23 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             auto origin=anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
             for(const auto& p:panel.pixels){
                 const auto tint=lyricTint(panel.partIndex,p.word);
+                const float wordAlpha=leaving?transitionFade(now,scene.previousFadeStart,
+                    panel.partIndex*scene.previousStagger+int(p.word)*65,1):1.f;
                 tessColor(tess,outline?0.f:tint[0],outline?0.f:tint[1],outline?0.f:tint[2],
-                          alpha*(outline?.45f:1.f));
+                          alpha*wordAlpha*(outline?.45f:1.f));
                 quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
             }
         }
     };
     if(fading){
-        float fade=1.f-smoothstep(float(now-scene.previousFadeStart)/620.f);
         for(const auto& panel:scene.previous)if(panel.appeared)
-            draw(panel,fade,(1.f-fade)*.16f);
+            draw(panel,panel.transitionAlpha,.1f,true);
     }
-    for(const auto& panel:scene.panels)if(panel.appeared){
+    for(auto& panel:scene.panels)if(panel.appeared){
         float appear=std::clamp(float(now-panel.appeared)/220.f,.05f,1.f);
         float focus=panel.partIndex==currentPart?1.f:.68f;
-        draw(panel,appear*focus*cueFade(position,start,end),(1.f-appear)*(-.12f));
+        panel.visibleAlpha=appear*focus*activeFade;
+        draw(panel,panel.visibleAlpha,(1.f-appear)*(-.12f));
     }
     alignas(8) char texture[0x58]{};
     renderMesh(ctx,tess,&material,texture);
