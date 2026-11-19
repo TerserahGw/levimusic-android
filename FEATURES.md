@@ -1,4 +1,4 @@
-# LeviMusic 1.2.8 — feature status
+# LeviMusic 1.2.9 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -32,4 +32,5 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - v1.2.6: Fixed romanization in Bridge mode and immediate re-render on toggle; added verified signature-based hotfix matching, and removed the misleading 2D display from the 3D option.
 - v1.2.7: Preserve original LRC lines with smaller Latin readings in the app and mod. The Bridge uses Kuromoji for Japanese kanji, adds vetted LRCLIB/NetEase/manual video captions, and fetches lyrics on a separate mod worker so controls stay responsive. The unsupported 3D signature shown on user builds is still unresolved; renderer logcat reports how far each profile matches.
 - v1.2.8: Adds a Build ID checked native 3D profile for Minecraft 1.26.62.1 using the user's actual ARM64 game binary. Hook installation should now proceed on that exact binary; a device test is required to verify the panel appears and follows the camera.
+- v1.2.9: On the exact audited game Build ID, recognize existing mod hook stubs if the following function body still matches; keep hook chaining. Anchor world lyrics on player position, reduce the glyph scale and outline weight, render mixed-case Latin glyphs, and correct Japanese small-tsu and contracted syllables. Coexistence with independently hooked mods still requires an on-device test.
 

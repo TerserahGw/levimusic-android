@@ -84,5 +84,11 @@ inline bool matchesPattern(std::span<const std::uint8_t> bytes,std::string_view 
     }
     return false;
 }
+inline std::size_t patternBytes(std::string_view pattern) {
+    if(pattern.empty())return 0;
+    std::size_t count=1;
+    for(char c:pattern)if(c==' ')++count;
+    return count;
+}
 } // namespace lm_world3d
 

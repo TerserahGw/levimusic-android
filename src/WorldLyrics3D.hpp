@@ -40,7 +40,7 @@ inline std::atomic<uint64_t> generation{0};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
 inline const Profile* profile=nullptr;
-struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;};
+struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;Vec3 position{};};
 inline Pose pose;
 inline std::string currentLine;
 inline uint64_t lyricSerial=0;
@@ -114,6 +114,32 @@ inline Rows bitmap(char c){
     case 'X':return {"#   #","#   #"," # # ","  #  "," # # ","#   #","#   #"};
     case 'Y':return {"#   #","#   #"," # # ","  #  ","  #  ","  #  ","  #  "};
     case 'Z':return {"#####","    #","   # ","  #  "," #   ","#    ","#####"};
+    case 'a':return {"     ","     "," ### ","    #"," ####","#   #"," ####"};
+    case 'b':return {"#    ","#    ","#### ","#   #","#   #","#   #","#### "};
+    case 'c':return {"     ","     "," ####","#    ","#    ","#    "," ####"};
+    case 'd':return {"    #","    #"," ####","#   #","#   #","#   #"," ####"};
+    case 'e':return {"     ","     "," ### ","#   #","#####","#    "," ####"};
+    case 'f':return {"  ###"," #   "," #   ","###  "," #   "," #   "," #   "};
+    case 'g':return {"     "," ####","#   #","#   #"," ####","    #"," ### "};
+    case 'h':return {"#    ","#    ","#### ","#   #","#   #","#   #","#   #"};
+    case 'i':return {"  #  ","     "," ##  ","  #  ","  #  ","  #  "," ### "};
+    case 'j':return {"   # ","     ","  ## ","   # ","   # ","#  # "," ##  "};
+    case 'k':return {"#    ","#    ","#  # ","# #  ","##   ","# #  ","#  # "};
+    case 'l':return {" ##  ","  #  ","  #  ","  #  ","  #  ","  #  "," ### "};
+    case 'm':return {"     ","     ","## # ","# # #","# # #","# # #","# # #"};
+    case 'n':return {"     ","     ","#### ","#   #","#   #","#   #","#   #"};
+    case 'o':return {"     ","     "," ### ","#   #","#   #","#   #"," ### "};
+    case 'p':return {"     ","#### ","#   #","#   #","#### ","#    ","#    "};
+    case 'q':return {"     "," ####","#   #","#   #"," ####","    #","    #"};
+    case 'r':return {"     ","     ","# ###","##   ","#    ","#    ","#    "};
+    case 's':return {"     ","     "," ####","#    "," ### ","    #","#### "};
+    case 't':return {" #   "," #   ","#### "," #   "," #   "," #   ","  ###"};
+    case 'u':return {"     ","     ","#   #","#   #","#   #","#   #"," ####"};
+    case 'v':return {"     ","     ","#   #","#   #","#   #"," # # ","  #  "};
+    case 'w':return {"     ","     ","#   #","# # #","# # #","# # #"," # # "};
+    case 'x':return {"     ","     ","#   #"," # # ","  #  "," # # ","#   #"};
+    case 'y':return {"     ","#   #","#   #","#   #"," ####","    #"," ### "};
+    case 'z':return {"     ","     ","#####","   # ","  #  "," #   ","#####"};
     case '0':return {" ### ","#  ##","# # #","# # #","##  #","#   #"," ### "};
     case '1':return {"  #  "," ##  ","  #  ","  #  ","  #  ","  #  ","#####"};
     case '2':return {" ### ","#   #","    #","   # ","  #  "," #   ","#####"};
@@ -142,7 +168,6 @@ inline std::string latinDisplay(std::string_view s){
         if(out.size()>=96)break;
         if(c>=128){if((c&0xC0)!=0x80)out+='?';continue;}
         if(c=='\n'||c=='\r'||c=='\t')out+=' ';
-        else if(c>='a'&&c<='z')out+=static_cast<char>(c-32);
         else if(c>=32&&c<127)out+=static_cast<char>(c);
     }
     return out;
@@ -179,15 +204,22 @@ inline void tickHook(void* player){
     if(!valid(rotation))return;
     const float pitch=read<float>(rotation,0),yaw=read<float>(rotation,4);
     if(!std::isfinite(pitch)||!std::isfinite(yaw)||std::abs(pitch)>180.f)return;
+    // The state-vector component precedes the rotation component by 0x10
+    // in the audited Android player layouts (World Analysis Actor offsets).
+    auto* stateVector=read<void*>(player,profile->rotation-0x10);
+    if(!valid(stateVector))return;
+    Vec3 position=read<Vec3>(stateVector,0);
+    if(!std::isfinite(position.x)||!std::isfinite(position.y)||!std::isfinite(position.z)
+       ||magnitude2(position)>1.e14f)return;
     Pose next{pitch,std::remainder(yaw,360.f),reinterpret_cast<uintptr_t>(player),
-              read<uintptr_t>(player,profile->level),nowMs()};
+              read<uintptr_t>(player,profile->level),nowMs(),position};
     std::unique_lock lock(poseMutex,std::try_to_lock);
     if(lock)pose=next;
 }
 struct Scene{
     uint64_t serial=0,generation=0;
     uintptr_t world=0,player=0,renderer=0;
-    Vec3 anchor{};
+    Vec3 anchor{},playerOrigin{};
     int64_t appeared=0,lastFrame=0;
     std::vector<Pixel> pixels;
 };
@@ -214,7 +246,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     auto* colors=read<float*>(ctx,0x30);
     if(!valid(rp)||!valid(tess)||!valid(colors))return;
     const Vec3 cam=read<Vec3>(rp,profile->camera);
-    if(!std::isfinite(cam.x)||!std::isfinite(cam.y)||!std::isfinite(cam.z))return;
+    if(!std::isfinite(cam.x)||!std::isfinite(cam.y)||!std::isfinite(cam.z)
+       ||magnitude2(cam-view.position)>1024.f)return;
     resolveMaterial(now);
     if(!material){renderStage=3;return;}
     const uint64_t gen=generation.load();
@@ -224,19 +257,21 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     if(scene.serial!=serial||reset){
         scene.pixels=glyphs(latinDisplay(text));
         constexpr float deg=.01745329251994f;
-        const float yaw=view.yaw*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
-        const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
+        const float yaw=view.yaw*deg;
+        const Vec3 forward{-std::sin(yaw),0,std::cos(yaw)};
         const Vec3 side{-std::cos(yaw),0,-std::sin(yaw)};
-        scene.anchor=cam+forward*4.6f+side*(float(int(serial%3)-1)*.65f)+Vec3{0,.25f,0};
+        scene.anchor=view.position+forward*2.0f+side*(float(int(serial%3)-1)*.35f)+Vec3{0,2.15f,0};
+        scene.playerOrigin=view.position;
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         scene.appeared=now;
     }
+    else {scene.anchor=scene.anchor+(view.position-scene.playerOrigin);scene.playerOrigin=view.position;}
     scene.lastFrame=now;
     if(scene.pixels.empty())return;
     const Vec3 facing=normalized(cam-scene.anchor);
     const Vec3 right=normalized({facing.z,0,-facing.x}),up{0,1,0};
-    constexpr float scale=.022f;
+    constexpr float scale=.011f;
     ColorGuard guard(colors);
     auto quad=[&](Vec3 tl){
         auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
@@ -246,9 +281,9 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     for(int pass=0;pass<5;++pass){
         const bool outline=pass<4;
         const float alpha=std::clamp(float(now-scene.appeared)/180.f,.05f,1.f);
-        tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha);
-        const float dx=pass==0?-.22f:pass==1?.22f:0.f;
-        const float dy=pass==2?-.22f:pass==3?.22f:0.f;
+        tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha*(outline?.45f:1.f));
+        const float dx=pass==0?-.12f:pass==1?.12f:0.f;
+        const float dy=pass==2?-.12f:pass==3?.12f:0.f;
         auto origin=scene.anchor-cam+facing*(outline?0.f:.001f);
         for(const auto& p:scene.pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
     }
@@ -316,8 +351,30 @@ inline void prepare(){
     auto exact=[&](const Profile& candidate){
         for(size_t i=0;i<addresses.size();++i){
             const auto& binding=candidate.bindings[i];auto at=image.base+binding.rva;
-            if(!image.contains(at,binding.pattern.size(),PF_R|PF_X)
-               ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern))return false;
+            if(!image.contains(at,binding.pattern.size(),PF_R|PF_X)){
+                __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","exact binding %zu address outside executable image",i);
+                return false;
+            }
+            if(!matchesPattern({reinterpret_cast<const uint8_t*>(at),patternBytes(binding.pattern)},binding.pattern)){
+                // A second mod may already have replaced the entry trampoline.
+                // With the same exact ELF Build ID, accept only when the untouched
+                // body after the 16-byte hook stub still matches our audited code.
+                if(i==MaterialGroup)return false; // ADRP/ADD is needed to locate the material table.
+                std::string_view tail=binding.pattern;
+                for(int skip=0;skip<16;++skip){
+                    auto space=tail.find(' ');
+                    if(space==std::string_view::npos)return false;
+                    tail.remove_prefix(space+1);
+                }
+                if(!image.contains(at+16,patternBytes(tail),PF_R|PF_X)
+                   ||!matchesPattern({reinterpret_cast<const uint8_t*>(at+16),patternBytes(tail)},tail)){
+                    __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","exact binding %zu differs beyond the hook stub",i);
+                    return false;
+                }
+                __android_log_print(ANDROID_LOG_INFO,"LeviMusicWorld3D",
+                    "existing hook at binding %zu on exact build %.*s; preserving hook chain",
+                    i,int(candidate.name.size()),candidate.name.data());
+            }
             addresses[i]=at;
         }
         return true;
@@ -336,7 +393,7 @@ inline void prepare(){
                 const auto& binding=candidate.bindings[i];
                 auto at=pl::memory::resolveSignature(binding.pattern.data(),"libminecraftpe.so");
                 if(!at||!image.contains(at,binding.pattern.size(),PF_R|PF_X)
-                   ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern)){
+                   ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),patternBytes(binding.pattern)},binding.pattern)){
                     complete=false;break;
                 }
                 found[i]=at;++matched;

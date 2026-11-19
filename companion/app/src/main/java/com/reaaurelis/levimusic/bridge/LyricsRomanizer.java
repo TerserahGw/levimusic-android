@@ -42,6 +42,55 @@ public final class LyricsRomanizer {
         }}
         return found;
     }
+    private static String mora(char c){
+        if(c>=0x3041&&c<=0x3096)c=(char)(c+0x60);
+        final String kana="アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ";
+        final String[] latin={"a","i","u","e","o","ka","ki","ku","ke","ko","sa","shi","su","se","so","ta","chi","tsu","te","to","na","ni","nu","ne","no","ha","hi","fu","he","ho","ma","mi","mu","me","mo","ya","yu","yo","ra","ri","ru","re","ro","wa","o","n","ga","gi","gu","ge","go","za","ji","zu","ze","zo","da","ji","zu","de","do","ba","bi","bu","be","bo","pa","pi","pu","pe","po"};
+        int at=kana.indexOf(c);
+        return at<0?"":latin[at];
+    }
+    private static String japaneseReading(String source){
+        StringBuilder out=new StringBuilder();
+        boolean geminate=false;
+        for(int i=0;i<source.length();i++){
+            char c=source.charAt(i);
+            if(c>=0x3041&&c<=0x3096)c=(char)(c+0x60);
+            if(c=='ッ'){geminate=true;continue;}
+            if(Character.isWhitespace(c)){
+                if(!geminate&&out.length()>0&&out.charAt(out.length()-1)!=' ')out.append(' ');
+                continue;
+            }
+            if(c=='ー'){
+                for(int j=out.length()-1;j>=0;j--){char v=out.charAt(j);
+                    if("aeiou".indexOf(v)>=0){out.append(v);break;}
+                    if(v==' ')break;
+                }
+                continue;
+            }
+            String part=mora(c);
+            if(part.isEmpty()){out.append(c);geminate=false;continue;}
+            if(i+1<source.length()){
+                char next=source.charAt(i+1);
+                if(next>=0x3041&&next<=0x3096)next=(char)(next+0x60);
+                if(next=='ャ'||next=='ュ'||next=='ョ'){
+                    String stem=part.endsWith("i")?part.substring(0,part.length()-1):part;
+                    if(part.equals("shi"))stem="sh";
+                    else if(part.equals("chi"))stem="ch";
+                    else if(part.equals("ji"))stem="j";
+                    boolean special=part.equals("shi")||part.equals("chi")||part.equals("ji");
+                    part=stem+(special?(next=='ャ'?"a":next=='ュ'?"u":"o"):(next=='ャ'?"ya":next=='ュ'?"yu":"yo"));i++;
+                }
+            }
+            if(geminate){
+                if(out.length()>0&&out.charAt(out.length()-1)==' ')out.deleteCharAt(out.length()-1);
+                if(part.startsWith("ch"))out.append('t');
+                else if(!part.equals("n"))out.append(part.charAt(0));
+                geminate=false;
+            }
+            out.append(part);
+        }
+        return out.toString();
+    }
     public static String line(String source,String language){
         if(source==null||source.isEmpty())return "";
         boolean nonLatin=false;
@@ -50,17 +99,14 @@ public final class LyricsRomanizer {
         String reading=source;
         try {
             if("ja".equals(language)){
-                StringBuilder out=new StringBuilder();
+                StringBuilder kanaLine=new StringBuilder();
                 List<Token> tokens=tokenizer().tokenize(source);
                 for(Token token:tokens){
                     String kana=token.getReading();
                     if(kana==null||kana.equals("*"))kana=token.getSurface();
-                    String part=transliterate(kana,"Hiragana-Latin; Katakana-Latin; Latin-ASCII");
-                    if(out.length()>0 && !part.isEmpty() && Character.isLetter(part.charAt(0))
-                            && Character.isLetter(out.charAt(out.length()-1)))out.append(' ');
-                    out.append(part);
+                    kanaLine.append(kana).append(' ');
                 }
-                reading=out.toString();
+                reading=japaneseReading(kanaLine.toString());
             } else if("ko".equals(language))reading=transliterate(source,"Hangul-Latin; Latin-ASCII");
             else if("zh".equals(language))reading=transliterate(source,"Han-Latin; Latin-ASCII");
             else reading=transliterate(source,"Any-Latin; Latin-ASCII");

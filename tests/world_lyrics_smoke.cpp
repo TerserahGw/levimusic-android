@@ -13,7 +13,8 @@ int main(){
     using namespace lm_world3d;
     auto pixels=glyphs("HELLO 123");
     assert(!pixels.empty() && pixels.size()*20 < 50000);
-    assert(latinDisplay("lirik") == "LIRIK");
+    assert(latinDisplay("lirik") == "lirik");
+    assert(!glyphs("lirik").empty());
     assert(matchesPattern({reinterpret_cast<const uint8_t*>("\xEE\x0F\x16\xFC"),4}, "EE 0F ? FC"));
     assert(!matchesPattern({reinterpret_cast<const uint8_t*>("\xEE\x0F\x16\xFC"),4}, "EE 0F 17 FC"));
     auto id=profiles[0].buildId;
@@ -35,7 +36,7 @@ int main(){
     ptr(screen.data(),profile->tessellator,t);
     ptr(screen.data(),0x30,holder);
     Vec3 cam{100.f,67.f,200.f};ptr(rp,profile->camera,cam);
-    pose={0.f,35.f,reinterpret_cast<uintptr_t>(player.data()),0x2345678,nowMs()};
+    pose={0.f,35.f,reinterpret_cast<uintptr_t>(player.data()),0x2345678,nowMs(),{100.f,65.f,200.f}};
     enabled=true;installed=true;publish("HELLO WORLD");
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(originals==1&&meshes==1&&vertices==declared&&declared>0);
@@ -45,8 +46,11 @@ int main(){
     cam.x+=1.f;ptr(rp,profile->camera,cam);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==2&&scene.anchor.x==anchor.x);
+    pose.position.x+=1.f;
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(meshes==3&&std::abs(scene.anchor.x-anchor.x-1.f)<.001f);
     enabled=false;renderHook(renderer.data(),screen.data(),nullptr);
-    assert(originals==3&&meshes==2);
+    assert(originals==4&&meshes==3);
     return 0;
 }
 
