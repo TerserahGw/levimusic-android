@@ -37,6 +37,7 @@ inline std::atomic<int64_t> lastDraw{0};
 inline std::atomic<int> renderStage{0}; // 0 no callback, 1 no player, 2 no LRC, 3 no material, 4 drawing
 inline std::atomic<int> matchingBindings{0}; // largest complete prefix of audited signatures
 inline std::atomic<uint64_t> generation{0};
+inline std::atomic<int> lyricDistanceTenths{22},lyricScatterFov{100};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
 inline const Profile* profile=nullptr;
@@ -222,19 +223,21 @@ struct Scene{
     Vec3 anchor{},playerOrigin{};
     int64_t appeared=0,lastFrame=0;
     std::vector<Pixel> pixels;
+    std::vector<Pixel> previousPixels;
+    Vec3 previousAnchor{};
+    int64_t previousUntil=0;
 };
 inline Scene scene; // render thread only
 inline Vec3 lyricAnchor(Pose view,uint64_t serial){
     constexpr float deg=.01745329251994f;
-    const float yaw=view.yaw*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
-    const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
-    const Vec3 side{-std::cos(yaw),0,-std::sin(yaw)};
-    // Stable world location for this lyric, distributed across a wider area.
     const uint64_t h=(serial*0x9e3779b97f4a7c15ULL)^(serial>>13);
-    const float lateral=(float(h%1001)/1000.f-.5f)*3.4f;
-    const float distance=2.7f+float((h>>12)%1001)/1000.f*1.2f;
+    const float scatter=(float(h%1001)/1000.f-.5f)*float(lyricScatterFov.load());
+    const float yaw=(view.yaw+scatter)*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
+    const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
+    // Stable world location for this lyric, distributed across a wider area.
+    const float distance=float(lyricDistanceTenths.load())*.1f;
     const float height=.55f+float((h>>24)%1001)/1000.f*.3f;
-    return view.position+Vec3{0,height,0}+forward*distance+side*lateral;
+    return view.position+Vec3{0,height,0}+forward*distance;
 }
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
@@ -252,7 +255,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     if(!view.world||!view.time||now-view.time>1500)return;
     std::string text;uint64_t serial;
     {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;text=currentLine;serial=lyricSerial;}
-    if(text.empty()){renderStage=2;return;}
+    if(text.empty())renderStage=2;
     auto* rp=read<void*>(renderer,profile->rendererPlayer);
     auto* tess=read<void*>(ctx,profile->tessellator);
     auto* colors=read<float*>(ctx,0x30);
@@ -267,6 +270,11 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         ||scene.renderer!=reinterpret_cast<uintptr_t>(rp)||now-scene.lastFrame>1500
         ||magnitude2(cam-scene.anchor)>1024.f;
     if(scene.serial!=serial||reset){
+        if(scene.serial!=serial&&!reset&&!scene.pixels.empty()){
+            scene.previousPixels=std::move(scene.pixels);
+            scene.previousAnchor=scene.anchor;
+            scene.previousUntil=now+240;
+        }else if(reset){scene.previousPixels.clear();scene.previousUntil=0;}
         scene.pixels=glyphs(latinDisplay(text));
         scene.anchor=lyricAnchor(view,serial);
         scene.playerOrigin=view.position;
@@ -276,25 +284,34 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }
     // Do not follow camera rotation or player movement until the next line.
     scene.lastFrame=now;
-    if(scene.pixels.empty())return;
-    const Vec3 facing=normalized(cam-scene.anchor);
-    const Vec3 right=normalized({facing.z,0,-facing.x}),up{0,1,0};
+    const bool fading=now<scene.previousUntil&&!scene.previousPixels.empty();
+    if(scene.pixels.empty()&&!fading)return;
     constexpr float scale=.011f;
     ColorGuard guard(colors);
-    auto quad=[&](Vec3 tl){
-        auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
-        for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
+    tessBegin(tess,nullptr,1,int((scene.pixels.size()+(fading?scene.previousPixels.size():0))*20),0);
+    auto draw=[&](const std::vector<Pixel>& pixels,Vec3 anchor,float alpha,float lift){
+        if(alpha<=0.f)return;
+        const Vec3 facing=normalized(cam-anchor);
+        const Vec3 right=normalized({facing.z,0,-facing.x}),up{0,1,0};
+        auto quad=[&](Vec3 tl){
+            auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
+            for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
+        };
+        for(int pass=0;pass<5;++pass){
+            const bool outline=pass<4;
+            tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha*(outline?.45f:1.f));
+            const float dx=pass==0?-.12f:pass==1?.12f:0.f;
+            const float dy=pass==2?-.12f:pass==3?.12f:0.f;
+            auto origin=anchor-cam+up*lift+facing*(outline?0.f:.001f);
+            for(const auto& p:pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
+        }
     };
-    tessBegin(tess,nullptr,1,int(scene.pixels.size()*20),0);
-    for(int pass=0;pass<5;++pass){
-        const bool outline=pass<4;
-        const float alpha=std::clamp(float(now-scene.appeared)/180.f,.05f,1.f);
-        tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha*(outline?.45f:1.f));
-        const float dx=pass==0?-.12f:pass==1?.12f:0.f;
-        const float dy=pass==2?-.12f:pass==3?.12f:0.f;
-        auto origin=scene.anchor-cam+facing*(outline?0.f:.001f);
-        for(const auto& p:scene.pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
+    if(fading){
+        float fade=std::clamp(float(scene.previousUntil-now)/240.f,0.f,1.f);
+        draw(scene.previousPixels,scene.previousAnchor,fade,(1.f-fade)*.12f);
     }
+    float appear=std::clamp(float(now-scene.appeared)/220.f,.05f,1.f);
+    draw(scene.pixels,scene.anchor,appear,(1.f-appear)*(-.12f));
     alignas(8) char texture[0x58]{};
     renderMesh(ctx,tess,&material,texture);
     if(enabled.load()&&gen==generation.load()){renderStage=4;lastDraw=now;}

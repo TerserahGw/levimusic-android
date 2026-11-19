@@ -45,7 +45,7 @@ int main(){
     const auto anchor=scene.anchor;
     Pose lookingDown=pose;lookingDown.pitch=60.f;
     const auto down=lyricAnchor(lookingDown,lyricSerial);
-    assert(down.y<anchor.y-2.2f);
+    assert(down.y<anchor.y-1.8f);
     assert(std::abs(down.x-lookingDown.position.x)<5.f);
     float minSide=100.f,maxSide=-100.f;
     for(uint64_t n=1;n<128;++n){
@@ -55,7 +55,7 @@ int main(){
                           +(point.z-pose.position.z)*(-std::sin(yaw));
         minSide=std::min(minSide,offset);maxSide=std::max(maxSide,offset);
     }
-    assert(maxSide-minSide>2.8f);
+    assert(maxSide-minSide>2.7f);
     cam.x+=1.f;ptr(rp,profile->camera,cam);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==2&&scene.anchor.x==anchor.x);
@@ -68,8 +68,15 @@ int main(){
     publish("NEXT LINE");
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==5&&magnitude2(scene.anchor-anchor)>.1f);
+    assert(!scene.previousPixels.empty()&&scene.previousUntil>nowMs());
+    publish("");
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(meshes==6&&!scene.previousPixels.empty());
+    scene.previousUntil=nowMs()-1;
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(meshes==6);
     enabled=false;renderHook(renderer.data(),screen.data(),nullptr);
-    assert(originals==6&&meshes==5);
+    assert(originals==8&&meshes==6);
     return 0;
 }
 

@@ -32,6 +32,7 @@
 #include <vector>
 #include <fstream>
 #include <filesystem>
+#include <map>
 
 namespace {
 constexpr const char* TAG = "LeviMusic";
@@ -1308,6 +1309,8 @@ class LeviMusic {
     std::atomic<bool> animation_{true};
     std::atomic<bool> browserEnabled_{false},worldLyrics3D_{false},romanizeLyrics_{true};
     std::atomic<bool> lyricsRebuild_{false};
+    std::map<std::string,std::string> savedSettings_;
+    bool restoringSettings_=false;
 #if defined(LEVI_STANDALONE)
     std::atomic<bool> useBridge_{false},lyricsBelow_{false},floatingLyrics_{false};
 #else
@@ -1324,11 +1327,18 @@ public:
     bool load(){
         vm_=self_.getJavaVM();
         try{
+            std::ifstream settings(self_.getConfigDir()/"settings.conf");
+            std::string row;
+            while(std::getline(settings,row)){
+                auto eq=row.find('=');
+                if(eq!=std::string::npos&&eq<40&&row.size()<512)
+                    savedSettings_[row.substr(0,eq)]=row.substr(eq+1);
+            }
             std::ifstream keyFile(self_.getConfigDir()/"bridge.token");
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.12 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.13 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1336,40 +1346,45 @@ public:
             std::lock_guard lock(mu_);
             shutdown_=false;open_=false;typing_=false;
         }
+        restoringSettings_=true;
         bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic Online")
             .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(true)
             .description("Native music HUD. Bridge mode controls Spotify or YouTube Music via companion Android app.")
-            .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,"75","0","100")
+            .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,remembered("volume","75"),"0","100")
 #if defined(LEVI_STANDALONE)
-            .config("useBridge","Use Android Bridge (optional)",pl::modmenu::ConfigType::Toggle,"false")
+            .config("useBridge","Use Android Bridge (optional)",pl::modmenu::ConfigType::Toggle,remembered("useBridge","false"))
 #else
-            .config("useBridge","Use Android Bridge",pl::modmenu::ConfigType::Toggle,"true")
+            .config("useBridge","Use Android Bridge",pl::modmenu::ConfigType::Toggle,remembered("useBridge","true"))
 #endif
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
-            .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,"false")
-            .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,"false")
-            .config("worldLyrics3D","3D Floating Lyrics (Experimental, client-only)",pl::modmenu::ConfigType::Toggle,"false")
-            .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,"true")
+            .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
+            .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
+            .config("worldLyrics3D","3D Floating Lyrics (Experimental, client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","false"))
+            .config("lyricDistance","3D Lyrics Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
+            .config("lyricScatterFov","3D Lyrics Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","100"),"0","140")
+            .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,remembered("romanizeLyrics","true"))
 #if defined(LEVI_STANDALONE)
-            .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,"false")
+            .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,remembered("embeddedBrowser","false"))
 #endif
 #if defined(LEVI_STANDALONE)
             .config("chruServer","ChruPipe server URL (local 127.0.0.1:8080 or HTTPS)",
-                    pl::modmenu::ConfigType::Text,"http://127.0.0.1:8080")
+                    pl::modmenu::ConfigType::Text,remembered("chruServer","http://127.0.0.1:8080"))
 #else
-            .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,"")
+            .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,remembered("apiKey",""))
 #endif
-            .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,"true")
-            .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,"true")
-            .config("hudSize","HUD Size (%)",pl::modmenu::ConfigType::SliderInt,"84","55","125")
-            .config("hudX","HUD Horizontal Position (0-100%)",pl::modmenu::ConfigType::SliderInt,"3","0","100")
-            .config("hudY","HUD Vertical Position (0-100%)",pl::modmenu::ConfigType::SliderInt,"93","0","100")
-            .config("panelTop","Menu Distance from Top (%)",pl::modmenu::ConfigType::SliderInt,"15","12","32")
-            .config("animation","Subtle Animations",pl::modmenu::ConfigType::Toggle,"true")
+            .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,remembered("hud","true"))
+            .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,remembered("lyrics","true"))
+            .config("hudSize","HUD Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("hudSize","84"),"55","125")
+            .config("hudX","HUD Horizontal Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudX","3"),"0","100")
+            .config("hudY","HUD Vertical Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudY","93"),"0","100")
+            .config("panelTop","Menu Distance from Top (%)",pl::modmenu::ConfigType::SliderInt,remembered("panelTop","15"),"12","32")
+            .config("animation","Subtle Animations",pl::modmenu::ConfigType::Toggle,remembered("animation","true"))
             .onConfigChanged([](std::string_view,std::string_view k,std::string_view v){
                 instance().setConfig(k,v);
             }).registerModule();
-        if(!ok)return false;
+        if(!ok){restoringSettings_=false;return false;}
+        for(const auto& [key,value]:savedSettings_)setConfig(key,value);
+        restoringSettings_=false;
         static std::once_flag registered;
         std::call_once(registered,[](){
             pl::input::registerTouchCallback([](const pl::input::TouchEvent& e){return instance().touch(e);});
@@ -1396,6 +1411,22 @@ public:
     }
     bool unload(){lm_world3d::unload();return true;}
 private:
+    std::string remembered(const char* key,const char* fallback)const{
+        auto it=savedSettings_.find(key);
+        return it==savedSettings_.end()?fallback:it->second;
+    }
+    void persistSetting(std::string_view k,std::string_view v){
+        if(restoringSettings_||k=="bridgeKey"||k.size()>40||v.size()>350||v.find('\n')!=v.npos)return;
+        savedSettings_[std::string(k)]=std::string(v);
+        try{
+            std::filesystem::create_directories(self_.getConfigDir());
+            auto tmp=self_.getConfigDir()/"settings.conf.tmp";
+            std::ofstream file(tmp,std::ios::trunc);
+            for(const auto& [key,value]:savedSettings_)file<<key<<'='<<value<<'\n';
+            file.close();
+            if(file)std::filesystem::rename(tmp,self_.getConfigDir()/"settings.conf");
+        }catch(...){}
+    }
     void processLyrics(){
         EnvScope scope(vm_);
         if(!scope)return;
@@ -1432,6 +1463,7 @@ private:
         lyricCv_.notify_one();
     }
     void setConfig(std::string_view k,std::string_view v){
+        persistSetting(k,v);
         if(k=="romanizeLyrics"){
             romanizeLyrics_=v=="true"||v=="1";
             lyricsRebuild_=true;
@@ -1439,6 +1471,10 @@ private:
         } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
             lm_world3d::request(worldLyrics3D_);
+        } else if(k=="lyricDistance") {
+            try{lm_world3d::lyricDistanceTenths=std::clamp(std::stoi(std::string(v)),12,60);}catch(...){}
+        } else if(k=="lyricScatterFov") {
+            try{lm_world3d::lyricScatterFov=std::clamp(std::stoi(std::string(v)),0,140);}catch(...){}
         } else if(k=="embeddedBrowser") {
             browserEnabled_=v=="true"||v=="1";
         } else if(k=="floatingLyrics") {
