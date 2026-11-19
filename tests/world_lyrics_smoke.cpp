@@ -1,13 +1,14 @@
 #include "../src/WorldLyrics3D.hpp"
 #include <cassert>
 namespace {
-int originals=0,meshes=0,vertices=0,declared=0;
+int originals=0,meshes=0,vertices=0,declared=0,batchVertices=0;
+float maxChroma=0.f;
 float shader[4]{.2f,.3f,.4f,.5f};
 void original(void*,void*,void*){++originals;}
-void begin(void*,void*,int mode,int count,int){assert(mode==1);declared=count;}
-void color(void*,float,float,float,float){assert(shader[0]==1.f);}
-void vertex(void*,float x,float y,float z){assert(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(z));++vertices;}
-void mesh(void*,void*,void* material,char*){assert(material);++meshes;}
+void begin(void*,void*,int mode,int count,int){assert(mode==1);declared=count;batchVertices=0;}
+void color(void*,float r,float,float b,float){assert(shader[0]==1.f);maxChroma=std::max(maxChroma,r-b);}
+void vertex(void*,float x,float y,float z){assert(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(z));++vertices;++batchVertices;}
+void mesh(void*,void*,void* material,char*){assert(material);assert(batchVertices==declared);++meshes;}
 }
 int main(){
     using namespace lm_world3d;
@@ -37,12 +38,12 @@ int main(){
     ptr(screen.data(),0x30,holder);
     Vec3 cam{100.f,67.f,200.f};ptr(rp,profile->camera,cam);
     pose={0.f,35.f,reinterpret_cast<uintptr_t>(player.data()),0x2345678,nowMs(),{100.f,65.f,200.f}};
-    enabled=true;installed=true;publish("HELLO WORLD");
+    enabled=true;installed=true;publish("HELLO WORLD",0,4000,0,true);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(originals==1&&meshes==1&&vertices==declared&&declared>0);
     assert(shader[0]==.2f&&shader[1]==.3f&&shader[2]==.4f&&shader[3]==.5f);
     assert(active());
-    assert(scene.panels.size()==1);
+    assert(scene.panels.size()==2);
     const auto anchor=scene.panels.front().anchor,right=scene.panels.front().right;
     lyricScatterFov=0;
     auto first=lyricAnchor(pose,cam,47,false);
@@ -60,10 +61,16 @@ int main(){
     assert(std::abs(variedAnchor.y-levelAnchor.y)<=1.5001f);
     assert(std::abs(variedAnchor.y-levelAnchor.y)>.001f);
     lyricVerticalRangeTenths=8;
-    assert(splitLyric("One long lyric line that should appear across different parts").size()>1);
-    for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=22);
+    assert(splitLyric("One long lyric line that should appear across different parts").size()>=4);
+    for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=10);
     auto longWord=splitLyric("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
-    assert(longWord.size()==2&&longWord[0]+longWord[1]=="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
+    assert(longWord.size()==4&&longWord[0]+longWord[1]+longWord[2]+longWord[3]=="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
+    auto firstPanel=layoutAnchor({0,0,0},{1,0,0},0,8,.9f);
+    auto secondPanel=layoutAnchor({0,0,0},{1,0,0},1,8,.9f);
+    auto fifthPanel=layoutAnchor({0,0,0},{1,0,0},4,8,.9f);
+    assert(firstPanel.x<secondPanel.x&&firstPanel.y>fifthPanel.y);
+    assert(cueFade(0,0,4000)>cueFade(3800,0,4000));
+    assert(cueFade(4700,0,4000)==0.f);
     cam.x+=1.f;ptr(rp,profile->camera,cam);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==2&&scene.panels.front().anchor.x==anchor.x&&scene.panels.front().right.x==right.x);
@@ -73,24 +80,27 @@ int main(){
     pose.pitch=60.f;
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==4&&std::abs(scene.panels.front().anchor.y-anchor.y)<.001f);
-    publish("NEXT LINE HAS MANY WORDS TO SPLIT INTO PARTS");
+    publish("NEXT LINE HAS MANY WORDS TO SPLIT INTO PARTS",0,5000,300,true);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==5&&scene.panels.size()>1&&magnitude2(scene.panels.front().anchor-anchor)>.1f);
-    assert(scene.panels[1].born-scene.panels[0].born==260);
+    assert(scene.panels[1].born-scene.panels[0].born>0);
     assert(magnitude2(scene.panels[0].anchor-scene.panels[1].anchor)>.1f);
     assert(!scene.previous.empty()&&scene.previousUntil>nowMs());
     assert(scene.previousFadeStart>nowMs());
     for(size_t i=1;i<scene.panels.size();++i)
-        assert(panelClearance(scene.panels[i].anchor,scene.panels[i].width,cam,scene.panels[i-1])>.7f);
+        assert(magnitude2(scene.panels[i].anchor-scene.panels[i-1].anchor)>.1f);
     lyricTrailFollow=true;
     auto trail=scene.panels.front().anchor;
+    auto filtered=scene.filteredPlayer;
     pose.position.x+=.5f;
+    scene.lastFrame=nowMs()-80;
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(scene.panels.front().anchor.x>trail.x);
+    assert(scene.panels.front().anchor.x==trail.x);
+    assert(scene.filteredPlayer.x>filtered.x&&scene.filteredPlayer.x<pose.position.x);
     lyricTrailFollow=false;
     experimentalBeats=true;beatStrength=.8f;beatUpdated=nowMs();
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==7&&declared>0);
+    assert(meshes==7&&declared>0&&maxChroma>.1f);
     experimentalBeats=false;
     publish("");
     renderHook(renderer.data(),screen.data(),nullptr);

@@ -7,8 +7,8 @@ android {
         applicationId 'com.reaaurelis.levimusic.bridge'
         minSdk 28
         targetSdk 34
-        versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10300')
-        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.3.0')
+        versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10301')
+        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.3.1')
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -41,7 +41,7 @@ android {
     }
 }
 dependencies {
-    def mediaVersion = '1.3.1'
+    def mediaVersion = '1.3.0'
     implementation "androidx.media3:media3-common:$mediaVersion"
     implementation "androidx.media3:media3-exoplayer:$mediaVersion"
     implementation "androidx.media3:media3-session:$mediaVersion"

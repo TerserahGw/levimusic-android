@@ -1345,7 +1345,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.0 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.1 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1765,9 +1765,18 @@ private:
         // Client-only native 3D scene: independent from Behavior Packs or servers.
         if(worldLyrics3D_){
             std::string worldLine=lyric;
-            if(romanizeLyrics_)for(const auto& item:timedLyrics)
-                if(item.ms<=elapsed&&item.line==lyric&&!item.romanized.empty())worldLine=item.romanized;
-            lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?worldLine:std::string{});
+            int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
+            for(size_t i=0;i<timedLyrics.size();++i){
+                const auto& item=timedLyrics[i];
+                if(item.ms<=elapsed&&item.line==lyric){
+                    cueStart=item.ms;
+                    cueEnd=i+1<timedLyrics.size()?timedLyrics[i+1].ms:
+                        (total>item.ms?total:item.ms+3500);
+                    if(romanizeLyrics_&&!item.romanized.empty())worldLine=item.romanized;
+                }
+            }
+            lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?worldLine:std::string{},
+                                 cueStart,cueEnd,elapsed,playing);
         }
         else if(lm_world3d::installed)
             lm_world3d::publish("");
@@ -2253,6 +2262,8 @@ private:
                 }
             const bool wantBeat=lm_world3d::experimentalBeats.load()&&worldLyrics3D_.load()
                 &&useBridge_.load();
+            if(!wantBeat)lm_world3d::beatState=0;
+            else if(key.empty())lm_world3d::beatState=2;
             auto beatNow=std::chrono::steady_clock::now();
             if(!key.empty()&&(wantBeat!=beatSent||
                 (wantBeat&&beatNow-lastBeat>std::chrono::milliseconds(180)))){
@@ -2263,6 +2274,8 @@ private:
                     auto root=makeJson(env,payload);
                     if(root){
                         const bool available=optString(env,root,"available")=="true";
+                        const bool needPermission=optString(env,root,"permissionRequired")=="true";
+                        lm_world3d::beatState=needPermission?1:(available?3:2);
                         try{lm_world3d::beatStrength=available?
                             std::clamp(std::stof(optString(env,root,"strength")),0.f,1.f):0.f;}
                         catch(...){lm_world3d::beatStrength=0.f;}

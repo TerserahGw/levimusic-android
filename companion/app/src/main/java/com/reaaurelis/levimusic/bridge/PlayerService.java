@@ -15,6 +15,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.media3.common.AudioAttributes;
@@ -48,6 +49,11 @@ public final class PlayerService extends MediaSessionService {
     private Visualizer beatVisualizer;
     private int beatSession=-1;
     private volatile float beatValue=0f;
+    private volatile float beatRaw=0f;
+    private float beatAverage=.04f;
+    private float bassAverage=.04f;
+    private volatile boolean beatCaptured=false;
+    private long beatRetryAt=0;
     private volatile boolean beatEnabled=false;
     private MediaSession session;
     private volatile MusicCatalog.Song song;
@@ -63,6 +69,7 @@ public final class PlayerService extends MediaSessionService {
     public static boolean isActive(){return active!=null;}
     public static void setBeatEnabled(boolean enabled){
         PlayerService current=active;
+        if(current!=null&&current.beatEnabled==enabled)return;
         if(current!=null)current.handler.post(()->{
             current.beatEnabled=enabled;
             if(!enabled)current.releaseBeat();
@@ -73,14 +80,19 @@ public final class PlayerService extends MediaSessionService {
         boolean permitted=context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED;
         JSONObject result=new JSONObject();
         try{result.put("enabled",current!=null&&current.beatEnabled)
-            .put("available",current!=null&&current.beatVisualizer!=null&&permitted)
+            .put("available",current!=null&&current.beatCaptured&&current.playing&&permitted)
             .put("permissionRequired",!permitted)
-            .put("strength",current==null?0:current.beatValue);}
+            .put("strength",current==null?0:current.beatValue)
+            .put("rawLevel",current==null?0:current.beatRaw)
+            .put("reason",!permitted?"grant RECORD_AUDIO in LeviMusic Settings":
+                current==null?"open LeviMusic player":
+                !current.playing?"play a song in LeviMusic":
+                !current.beatCaptured?"waiting for audio capture":"audio connected");}
         catch(Exception ignored){}
         return result;
     }
     private void releaseBeat(){
-        beatValue=0f;beatSession=-1;
+        beatValue=0f;beatRaw=0f;beatCaptured=false;beatSession=-1;
         if(beatVisualizer!=null){
             try{beatVisualizer.setEnabled(false);beatVisualizer.release();}catch(RuntimeException ignored){}
             beatVisualizer=null;
@@ -89,8 +101,9 @@ public final class PlayerService extends MediaSessionService {
     private void captureBeat(){
         if(!beatEnabled||player==null||!player.isPlaying()
             ||checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
-            beatValue=0f;return;
+            beatValue=0f;beatCaptured=false;return;
         }
+        if(SystemClock.uptimeMillis()<beatRetryAt)return;
         int session=player.getAudioSessionId();
         if(session<=0){beatValue=0f;return;}
         if(beatVisualizer==null||beatSession!=session){
@@ -99,7 +112,10 @@ public final class PlayerService extends MediaSessionService {
                 beatVisualizer=new Visualizer(session);
                 beatVisualizer.setCaptureSize(Visualizer.getCaptureSizeRange()[0]);
                 beatVisualizer.setEnabled(true);beatSession=session;
-            }catch(RuntimeException ex){releaseBeat();return;}
+            }catch(RuntimeException ex){
+                releaseBeat();beatRetryAt=SystemClock.uptimeMillis()+3000;
+                Log.w(TAG,"Audio visualizer unavailable",ex);return;
+            }
         }
         try{
             byte[] wave=new byte[beatVisualizer.getCaptureSize()];
@@ -108,9 +124,31 @@ public final class PlayerService extends MediaSessionService {
             // Smooth the release so short transients remain visible for a frame.
             double sum=0;
             for(byte sample:wave){int centered=(sample&255)-128;sum+=centered*centered;}
-            float rms=(float)Math.sqrt(sum/wave.length)/65f;
-            beatValue=Math.max(Math.min(1f,rms),beatValue*.74f);
-        }catch(RuntimeException ex){releaseBeat();}
+            float rms=(float)Math.sqrt(sum/wave.length)/55f;
+            beatRaw=rms;beatCaptured=true;
+            byte[] fft=new byte[wave.length];
+            float bass=0f;
+            if(beatVisualizer.getFft(fft)==Visualizer.SUCCESS){
+                int bins=Math.min(10,fft.length/2-1);
+                for(int i=1;i<=bins;i++){
+                    int real=fft[i*2],imag=fft[i*2+1];
+                    bass+=(float)Math.sqrt(real*real+imag*imag);
+                }
+                bass=bins>0?bass/(bins*80f):0f;
+            }
+            // Adapt to quiet and loud tracks: a fixed RMS divisor made the
+            // previous release almost invisible on normalized streams.
+            beatAverage=beatAverage*.965f+rms*.035f;
+            bassAverage=bassAverage*.94f+bass*.06f;
+            float onset=Math.max(0f,(rms-beatAverage)/(beatAverage+.025f));
+            float bassHit=Math.max(0f,(bass-bassAverage)/(bassAverage+.025f));
+            float visible=Math.min(1f,Math.max(onset*1.8f,bassHit*1.4f)
+                +Math.min(.38f,rms*1.3f));
+            beatValue=Math.max(visible,beatValue*.77f);
+        }catch(RuntimeException ex){
+            releaseBeat();beatRetryAt=SystemClock.uptimeMillis()+3000;
+            Log.w(TAG,"Audio capture interrupted",ex);
+        }
     }
     public static JSONObject getStatus() {
         PlayerService current=active;

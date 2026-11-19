@@ -43,6 +43,9 @@ inline std::atomic<int> lyricVerticalRangeTenths{8},lyricFontPercent{115};
 inline std::atomic<bool> lyricTrailFollow{false},experimentalBeats{false};
 inline std::atomic<float> beatStrength{0.f};
 inline std::atomic<int64_t> beatUpdated{0};
+inline std::atomic<int> beatState{0}; // 0 off, 1 needs permission, 2 waiting for audio, 3 receiving audio
+inline std::atomic<int> cueStartMs{0},cueEndMs{0},cuePositionMs{0};
+inline std::atomic<bool> cuePlaying{false};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
 inline const Profile* profile=nullptr;
@@ -199,7 +202,9 @@ inline std::vector<Pixel> glyphs(std::string_view text){
     }
     return result;
 }
-inline void publish(std::string_view value){
+inline void publish(std::string_view value,int start=0,int end=0,int position=0,bool playing=false){
+    cueStartMs=std::max(0,start);cueEndMs=std::max(start+1,end);
+    cuePositionMs=std::max(0,position);cuePlaying=playing;
     std::lock_guard lock(lyricsMutex);
     auto bounded=value.substr(0,512);
     if(currentLine==bounded)return;
@@ -226,8 +231,11 @@ inline void tickHook(void* player){
 }
 struct Panel{
     Vec3 anchor{},right{},facing{};
+    Vec3 spawnPlayer{};
     std::vector<Pixel> pixels;
     int64_t born=0;
+    int partIndex=0,partCount=1;
+    int cueStart=0,cueEnd=1;
     size_t letters=0;
     float width=0;
     std::array<uint8_t,8> wordLengths{};
@@ -237,6 +245,7 @@ struct Scene{
     uintptr_t world=0,player=0,renderer=0;
     Vec3 origin{};
     Vec3 lastPlayer{};
+    Vec3 filteredPlayer{};
     int64_t lastFrame=0,previousFadeStart=0,previousUntil=0;
     std::vector<Panel> panels,previous;
 };
@@ -245,22 +254,30 @@ inline std::vector<std::string> splitLyric(std::string_view text){
     std::vector<std::string> result;
     std::string part;
     size_t at=0;
-    while(at<text.size()&&result.size()<8){
+    while(at<text.size()&&result.size()<16){
         while(at<text.size()&&text[at]==' ')++at;
         size_t end=text.find(' ',at);
         if(end==text.npos)end=text.size();
         if(end==at)break;
-        std::string word(text.substr(at,std::min<size_t>(end-at,22)));
-        size_t words=part.empty()?0:1;
-        for(char c:part)if(c==' ')++words;
-        if(!part.empty()&&(part.size()+word.size()+1>22||words>=4)){
-            result.push_back(std::move(part));part.clear();
+        const size_t room=part.empty()?10:(part.size()>=9?0:9-part.size());
+        if(!part.empty() && (end-at>room || room==0)){
+            result.push_back(std::move(part));part.clear();continue;
         }
+        const size_t taken=std::min<size_t>(end-at,10);
+        std::string word(text.substr(at,taken));
         if(!part.empty())part+=' ';
-        part+=word;at+=word.size();
+        part+=word;at+=taken;
     }
     if(!part.empty())result.push_back(std::move(part));
     return result;
+}
+inline float smoothstep(float t){t=std::clamp(t,0.f,1.f);return t*t*(3.f-2.f*t);}
+inline float cueProgress(int position,int start,int end){
+    return std::clamp(float(position-start)/float(std::max(end-start,1)),0.f,1.f);
+}
+inline float cueFade(int position,int start,int end){
+    const int window=std::clamp((end-start)/5,450,1100);
+    return 1.f-smoothstep(float(position-(end-window))/float(window+500));
 }
 inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
     constexpr float deg=.01745329251994f;
@@ -282,15 +299,26 @@ inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
 }
 // Compare directions on the camera image as well as physical separation: panels
 // behind one another are unreadable even when their anchors are far apart.
-inline float panelClearance(Vec3 candidate,float width,Vec3 cam,const Panel& other){
-    Vec3 a=candidate-cam,b=other.anchor-cam;
+inline float panelClearance(Vec3 candidate,float width,Vec3 cam,Vec3 otherAnchor,float otherWidth){
+    Vec3 a=candidate-cam,b=otherAnchor-cam;
     float da=std::sqrt(magnitude2(a)),db=std::sqrt(magnitude2(b));
     if(da<.01f||db<.01f)return -1.f;
     float horizontal=std::abs(a.x/da-b.x/db)+std::abs(a.z/da-b.z/db);
     float vertical=std::abs(a.y/da-b.y/db);
-    const float minH=(width+other.width)*.5f/std::min(da,db)+.07f;
+    const float minH=(width+otherWidth)*.5f/std::min(da,db)+.07f;
     const float minV=.18f/std::min(da,db)+.035f;
     return std::max(horizontal/minH,vertical/minV);
+}
+inline float panelClearance(Vec3 candidate,float width,Vec3 cam,const Panel& other){
+    return panelClearance(candidate,width,cam,other.anchor,other.width);
+}
+inline Vec3 layoutAnchor(Vec3 base,Vec3 right,size_t index,size_t count,float step,size_t maxCols=4){
+    const size_t cols=std::min(maxCols,count);
+    const size_t rows=(count+cols-1)/cols;
+    const size_t row=index/cols,col=index%cols;
+    const size_t inRow=std::min(cols,count-row*cols);
+    return base+right*((float(col)-float(inRow-1)*.5f)*step)
+        +Vec3{0,(float(rows-1)*.5f-float(row))*.31f,0};
 }
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
@@ -322,14 +350,47 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const bool reset=scene.generation!=gen||scene.world!=view.world||scene.player!=view.player
         ||scene.renderer!=reinterpret_cast<uintptr_t>(rp)||now-scene.lastFrame>1500
         ||(!scene.panels.empty()&&magnitude2(cam-scene.panels.front().anchor)>1024.f);
+    const int start=cueStartMs.load(),end=cueEndMs.load(),position=cuePositionMs.load();
     if(scene.serial!=serial||reset){
         if(reset){scene.previous.clear();scene.previousUntil=0;}
         else if(scene.serial!=serial)scene.previous=std::move(scene.panels);
         scene.panels.clear();
         const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
         const auto parts=splitLyric(latinDisplay(text));
+        const float step=.2f+float(std::clamp(lyricFontPercent.load(),60,200))*.01f*.66f;
+        const size_t columns=thirdPerson?4:
+            lyricScatterFov.load()<50?2:lyricFontPercent.load()>145?3:4;
+        Vec3 base{};float best=-1.f;
+        for(size_t attempt=0;attempt<40&&!parts.empty();++attempt){
+            Vec3 candidate=lyricAnchor(view,cam,serial*733+attempt*137,thirdPerson);
+            Vec3 facing=normalized(cam-candidate);
+            Vec3 right=normalized({facing.z,0,-facing.x});
+            float score=100.f;
+            if(!scene.previous.empty())for(size_t i=0;i<parts.size();++i){
+                Vec3 point=layoutAnchor(candidate,right,i,parts.size(),step,columns);
+                float width=float(parts[i].size())*6.f*.011f*float(lyricFontPercent.load())*.01f;
+                for(const auto& old:scene.previous){
+                    Vec3 occupied=old.anchor;
+                    if(lyricTrailFollow.load()){
+                        const float progress=cueProgress(position,old.cueStart,old.cueEnd);
+                        occupied=occupied+
+                            (scene.filteredPlayer-old.spawnPlayer)*(.83f-.62f*progress)
+                            +Vec3{0,.09f*progress+.85f*progress*progress,0};
+                    }
+                    score=std::min(score,panelClearance(point,width,cam,occupied,old.width));
+                }
+            }
+            if(score>best){best=score;base=candidate;}
+            if(score>=1.15f)break;
+        }
+        Vec3 facing=normalized(cam-base);
+        Vec3 right=normalized({facing.z,0,-facing.x});
+        int duration=std::clamp(end-start,600,12000);
+        int spacing=std::clamp(duration/int(std::max<size_t>(1,parts.size()+1)),55,230);
         for(size_t i=0;i<parts.size();++i){
             Panel panel;
+            panel.partIndex=int(i);panel.partCount=int(parts.size());
+            panel.cueStart=start;panel.cueEnd=end;
             panel.letters=parts[i].size();
             size_t word=0;
             for(char c:parts[i]){
@@ -337,47 +398,30 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
                 if(panel.wordLengths[word]<255)++panel.wordLengths[word];
             }
             panel.width=float(panel.letters)*6.f*.011f*float(lyricFontPercent.load())*.01f;
-            float best=-1.f;
-            // Include lyrics still fading from the previous line. A candidate
-            // is chosen before its first frame, so fixed mode never jitters.
-            for(size_t attempt=0;attempt<32;++attempt){
-                Vec3 candidate=lyricAnchor(view,cam,serial*733+i*89+attempt*137,thirdPerson);
-                float score=100.f;
-                for(const auto& old:scene.previous)
-                    score=std::min(score,panelClearance(candidate,panel.width,cam,old));
-                for(const auto& placed:scene.panels)
-                    score=std::min(score,panelClearance(candidate,panel.width,cam,placed));
-                if(score>best){best=score;panel.anchor=candidate;}
-                if(score>=1.f)break;
-            }
+            panel.anchor=layoutAnchor(base,right,i,parts.size(),step,columns);
+            panel.spawnPlayer=view.position;
             panel.facing=normalized(cam-panel.anchor);
             panel.right=normalized({panel.facing.z,0,-panel.facing.x});
             panel.pixels=glyphs(parts[i]);
-            panel.born=now+int64_t(i)*260;
+            panel.born=now+int64_t(i)*spacing;
             scene.panels.push_back(std::move(panel));
         }
         scene.origin=view.position;
         scene.lastPlayer=view.position;
+        if(reset)scene.filteredPlayer=view.position;
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         if(!scene.previous.empty()){
-            scene.previousFadeStart=now+(text.empty()?0:
-                std::max<int64_t>(150,int64_t(scene.panels.size())*130));
-            scene.previousUntil=scene.previousFadeStart+320;
+            scene.previousFadeStart=now+(text.empty()?0:100);
+            scene.previousUntil=scene.previousFadeStart+620;
         }
     }
+    const float dt=std::clamp(float(now-scene.lastFrame),0.f,200.f);
+    if(magnitude2(view.position-scene.filteredPlayer)<64.f){
+        const float weight=1.f-std::exp(-dt/175.f);
+        scene.filteredPlayer=scene.filteredPlayer+(view.position-scene.filteredPlayer)*weight;
+    }else scene.filteredPlayer=view.position;
     scene.lastFrame=now;
-    if(lyricTrailFollow.load()){
-        Vec3 delta=view.position-scene.lastPlayer;
-        // Teleports and dimension changes must not drag old text across worlds.
-        if(magnitude2(delta)<16.f){
-            auto follow=[&](std::vector<Panel>& panels){for(auto& p:panels){
-                float age=std::max(0.f,float(now-p.born));
-                p.anchor=p.anchor+delta*std::clamp(1.f-age/6500.f,.07f,.85f);
-            }};
-            follow(scene.panels);follow(scene.previous);
-        }
-    }
     scene.lastPlayer=view.position;
     const bool fading=now<scene.previousUntil&&!scene.previous.empty();
     if(scene.panels.empty()&&!fading)return;
@@ -386,19 +430,35 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const float beat=beats?std::clamp(beatStrength.load(),0.f,1.f):0.f;
     ColorGuard guard(colors);
     size_t count=0;
-    for(const auto& panel:scene.panels)if(now>=panel.born)count+=panel.pixels.size();
+    int currentPart=-1;
+    if(cueFade(position,start,end)>0.f)
+        for(const auto& panel:scene.panels)if(now>=panel.born){
+            count+=panel.pixels.size();currentPart=panel.partIndex;
+        }
     if(fading)for(const auto& panel:scene.previous)if(now>=panel.born)count+=panel.pixels.size();
     if(!count)return;
     tessBegin(tess,nullptr,1,int(count*20),0);
     auto draw=[&](const Panel& panel,float alpha,float lift){
         if(alpha<=0.f)return;
-        const float age=std::max(0.f,float(now-panel.born));
+        const float progress=cueProgress(position,panel.cueStart,panel.cueEnd);
         const float scale=baseScale*(1.f+(beats?beat*.34f:0.f))*(beats?
             std::clamp(1.12f-float(panel.letters)*.008f,.82f,1.1f):1.f);
-        const float tilt=beats?std::sin(float(now)*.013f+float(panel.letters))*.19f*beat:0.f;
+        // Every panel has a tiny, smooth world-space sway. Audio adds a
+        // stronger transient tilt only when a real beat sample is available.
+        const float t=float(now-panel.born)*.001f;
+        const float sway=.028f*std::sin(t*1.8f+panel.partIndex*.45f)
+                        +.012f*std::sin(t*1.13f+panel.partIndex);
+        const float tilt=sway+(beats?std::sin(t*11.f+float(panel.partIndex))*.26f*beat:0.f);
         const Vec3 right=panel.right*std::cos(tilt)+Vec3{0,1,0}*std::sin(tilt);
         const Vec3 up=Vec3{0,1,0}*std::cos(tilt)-panel.right*std::sin(tilt);
-        if(lyricTrailFollow.load())lift+=std::min(age/5500.f*.9f,.9f);
+        Vec3 anchor=panel.anchor;
+        if(lyricTrailFollow.load()){
+            float lag=std::clamp(.83f-.62f*progress,.12f,.83f);
+            anchor=anchor+(scene.filteredPlayer-panel.spawnPlayer)*lag;
+            // Quadratic lift accelerates through the line instead of pausing
+            // after its appearance and racing at a fixed speed near its end.
+            lift+=.09f*progress+.85f*progress*progress;
+        }
         auto quad=[&](Vec3 tl,float glyphScale){
             auto tr=tl+right*(glyphScale*.88f),bl=tl-up*(glyphScale*.88f),br=tr-up*(glyphScale*.88f);
             for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
@@ -407,7 +467,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             const bool outline=pass<4;
             const float dx=pass==0?-.12f:pass==1?.12f:0.f;
             const float dy=pass==2?-.12f:pass==3?.12f:0.f;
-            auto origin=panel.anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
+            auto origin=anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
             for(const auto& p:panel.pixels){
                 const float accent=beats&&((p.word+panel.letters)%3!=0)?beat:0.f;
                 const float wordScale=beats?std::clamp(1.14f-
@@ -420,13 +480,14 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         }
     };
     if(fading){
-        float fade=std::clamp(float(scene.previousUntil-now)/320.f,0.f,1.f);
+        float fade=1.f-smoothstep(float(now-scene.previousFadeStart)/620.f);
         for(const auto& panel:scene.previous)if(now>=panel.born)
-            draw(panel,fade,(1.f-fade)*.12f);
+            draw(panel,fade,(1.f-fade)*.16f);
     }
     for(const auto& panel:scene.panels)if(now>=panel.born){
         float appear=std::clamp(float(now-panel.born)/220.f,.05f,1.f);
-        draw(panel,appear,(1.f-appear)*(-.12f));
+        float focus=panel.partIndex==currentPart?1.f:.68f;
+        draw(panel,appear*focus*cueFade(position,start,end),(1.f-appear)*(-.12f));
     }
     alignas(8) char texture[0x58]{};
     renderMesh(ctx,tess,&material,texture);
@@ -441,7 +502,17 @@ inline const char* status(){
         case State::BindingMismatch:return "3D: renderer bindings changed";
         case State::HookFailed:return "3D: renderer hook failed";
         case State::Ready:
-            if(active())return "3D lyrics active";
+            if(active()){
+                if(experimentalBeats.load()){
+                    switch(beatState.load()){
+                        case 1:return "3D active | Beats: allow audio in app Settings";
+                        case 2:return "3D active | Beats: waiting for LeviMusic audio";
+                        case 3:return "3D active | Beats: audio connected";
+                        default:return "3D active | Beats: Bridge unavailable";
+                    }
+                }
+                return "3D lyrics active";
+            }
             switch(renderStage.load()){
                 case 1:return "3D: waiting for local player";
                 case 2:return "3D: waiting for synced lyrics";
