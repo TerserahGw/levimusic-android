@@ -35,6 +35,7 @@ inline std::atomic<State> state{State::Idle};
 inline std::atomic<bool> enabled{false},installed{false};
 inline std::atomic<int64_t> lastDraw{0};
 inline std::atomic<int> renderStage{0}; // 0 no callback, 1 no player, 2 no LRC, 3 no material, 4 drawing
+inline std::atomic<int> matchingBindings{0}; // largest complete prefix of audited signatures
 inline std::atomic<uint64_t> generation{0};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
@@ -307,7 +308,10 @@ inline Image findImage(){
 }
 inline void prepare(){
     auto image=findImage();
-    if(!image.headers){state=State::Unsupported;return;}
+    if(!image.headers){
+        __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","libminecraftpe.so not loaded; renderer cannot bind");
+        state=State::Unsupported;return;
+    }
     std::array<uintptr_t,BindingCount> addresses{};
     auto exact=[&](const Profile& candidate){
         for(size_t i=0;i<addresses.size();++i){
@@ -327,7 +331,7 @@ inline void prepare(){
     if(!selected){
         for(const auto& candidate:profiles){
             std::array<uintptr_t,BindingCount> found{};
-            bool complete=true;
+            bool complete=true;int matched=0;
             for(size_t i=0;i<found.size();++i){
                 const auto& binding=candidate.bindings[i];
                 auto at=pl::memory::resolveSignature(binding.pattern.data(),"libminecraftpe.so");
@@ -335,11 +339,20 @@ inline void prepare(){
                    ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern)){
                     complete=false;break;
                 }
-                found[i]=at;
+                found[i]=at;++matched;
             }
+            matchingBindings=std::max(matchingBindings.load(),matched);
+            __android_log_print(ANDROID_LOG_INFO,"LeviMusicWorld3D",
+                "profile %.*s: %d/%zu signatures verified, exact ELF ID=%d",
+                int(candidate.name.size()),candidate.name.data(),matched,found.size(),int(image.selected==&candidate));
             if(complete){selected=&candidate;addresses=found;break;}
         }
-        if(!selected){state=image.selected?State::BindingMismatch:State::Unsupported;return;}
+        if(!selected){
+            __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D",
+                "no complete render profile: %d/%zu matching signatures, exact ID=%d",
+                matchingBindings.load(),addresses.size(),int(image.selected!=nullptr));
+            state=image.selected?State::BindingMismatch:State::Unsupported;return;
+        }
     }
     // World Analysis resolves the material group from ADRP x0 / ADD x0
     // at the verified common-material function, then skips 32 bytes.

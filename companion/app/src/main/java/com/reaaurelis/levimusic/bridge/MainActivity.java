@@ -593,7 +593,15 @@ public final class MainActivity extends Activity {
         roman.setChecked(LyricsStore.romanizeEnabled(this));
         roman.setOnCheckedChangeListener((button,checked)->LyricsStore.setRomanize(this,checked));
         add(list,roman,-1,68);
-        TextView note=text("Latin pronunciation for lyrics written in other scripts. Supported languages vary.",12,SECONDARY,false);
+        TextView language=text("Lyric language: "+LyricsStore.romanizationLanguage(this)+"  ›",14,PRIMARY,false);
+        language.setPadding(dp(14),dp(12),dp(14),dp(12));
+        language.setOnClickListener(v->new AlertDialog.Builder(this).setTitle("Romanization language")
+            .setItems(new String[]{"Auto","Japanese","Chinese","Korean"},(dialog,index)->{
+                LyricsStore.setRomanizationLanguage(this,new String[]{"auto","ja","zh","ko"}[index]);
+                showSettingsTab();
+            }).show());
+        add(list,language,-1,50);
+        TextView note=text("Original lyrics stay visible. Japanese kanji readings use a Japanese dictionary; choose Japanese for titles written only in kanji.",12,SECONDARY,false);
         note.setPadding(dp(14),0,dp(14),dp(20));
         add(list,note,-1,-2);
         TextView connection=text("Minecraft connection  ›",16,PRIMARY,true);
@@ -655,29 +663,16 @@ public final class MainActivity extends Activity {
             playerDetail.setText("Play a song to see its lyrics");return;
         }
         String title=state.optString("title"),artist=state.optString("artist");
+        int duration=state.optInt("durationMs");
+        MusicCatalog.Song song=MusicCatalog.find(state.optString("id"));
         playerDetail.setText("Loading lyrics…");
         io.execute(()->{
-            String raw=LyricsStore.get(this,title,artist);
-            if(raw.isEmpty()){
-                try{
-                    String url="https://lrclib.net/api/search?track_name="+
-                        java.net.URLEncoder.encode(title,"UTF-8")+"&artist_name="+
-                        java.net.URLEncoder.encode(artist,"UTF-8");
-                    java.net.URLConnection c=new URL(url).openConnection();
-                    c.setConnectTimeout(4000);c.setReadTimeout(4000);
-                    try(InputStream stream=c.getInputStream()){
-                        byte[] bytes=stream.readNBytes(500000);
-                        org.json.JSONArray results=new org.json.JSONArray(new String(bytes,java.nio.charset.StandardCharsets.UTF_8));
-                        for(int i=0;i<results.length();i++){
-                            String found=results.optJSONObject(i).optString("syncedLyrics");
-                            if(!found.isEmpty()){raw=found;break;}
-                        }
-                    }
-                }catch(Exception ignored){}
-            }
-            raw=LyricsStore.display(this,raw,LyricsStore.romanizeEnabled(this));
-            if(raw.isEmpty())raw="Lyrics unavailable. Import an LRC file in Settings.";
-            final String display=raw;
+            JSONObject result=LyricsFinder.find(this,title,artist,duration,
+                song==null?"":song.url,LyricsStore.romanizationLanguage(this));
+            String raw=result.optString("syncedLyrics");
+            final CharSequence display=raw.isEmpty()?"Lyrics unavailable. Import an LRC file in Settings.":
+                LyricsRomanizer.richDisplay(raw,title,LyricsStore.romanizationLanguage(this),
+                    LyricsStore.romanizeEnabled(this));
             runOnUiThread(()->playerDetail.setText(display));
         });
     }
@@ -792,3 +787,4 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(poll);io.shutdownNow();artIo.shutdownNow();super.onDestroy();
     }
 }
+

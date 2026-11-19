@@ -7,8 +7,8 @@ android {
         applicationId 'com.reaaurelis.levimusic.bridge'
         minSdk 28
         targetSdk 34
-        versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10204')
-        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.2.4')
+        versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10207')
+        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.2.7')
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
@@ -42,4 +42,6 @@ dependencies {
     implementation "androidx.media3:media3-session:$mediaVersion"
     implementation 'com.github.TeamNewPipe:NewPipeExtractor:v0.26.5'
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    implementation 'com.atilika.kuromoji:kuromoji-ipadic:0.9.0'
 }
+

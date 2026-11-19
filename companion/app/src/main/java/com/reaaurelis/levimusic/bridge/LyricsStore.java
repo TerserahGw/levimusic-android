@@ -17,22 +17,18 @@ public final class LyricsStore {
         context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit()
             .putBoolean("romanize",enabled).apply();
     }
+    public static String romanizationLanguage(Context context){
+        return context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString("language","auto");
+    }
+    public static void setRomanizationLanguage(Context context,String language){
+        if(!language.equals("ja")&&!language.equals("zh")&&!language.equals("ko"))language="auto";
+        context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).edit()
+            .putString("language",language).apply();
+    }
     public static String display(Context context,String lines,boolean enabled){
+        // Preserve the original; callers can use richDisplay for smaller readings.
         if(!enabled||lines==null||lines.isEmpty())return lines;
-        try{
-            android.icu.text.Transliterator latin=android.icu.text.Transliterator
-                .getInstance("Any-Latin; Latin-ASCII");
-            StringBuilder out=new StringBuilder();
-            for(String line:lines.split("\n",-1)){
-                int marker=line.lastIndexOf(']');
-                if(marker>=0 && line.startsWith("[")){
-                    out.append(line,0,marker+1);
-                    out.append(latin.transliterate(line.substring(marker+1)));
-                }else out.append(latin.transliterate(line));
-                out.append('\n');
-            }
-            return out.toString();
-        }catch(Exception ignored){return lines;}
+        return lines+"\n"+LyricsRomanizer.lrc(lines,"",romanizationLanguage(context));
     }
 
     private static String key(String title,String artist){
@@ -61,9 +57,11 @@ public final class LyricsStore {
     }
     public static JSONObject response(Context context,String title,String artist,boolean romanize){
         JSONObject result=new JSONObject();
-        String lines=display(context,get(context,title,artist),romanize);
+        String lines=get(context,title,artist);
         try{result.put("success",!lines.isEmpty()).put("source","local LRC")
-            .put("syncedLyrics",lines);}catch(Exception ignored){}
+            .put("syncedLyrics",lines)
+            .put("romanizedLyrics",romanize?LyricsRomanizer.lrc(lines,title,romanizationLanguage(context)):"");}catch(Exception ignored){}
         return result;
     }
 }
+

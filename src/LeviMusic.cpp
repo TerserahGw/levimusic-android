@@ -48,6 +48,7 @@ struct Track {
 struct Lyric {
     int ms = 0;
     std::string line;
+    std::string romanized;
 };
 
 enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
@@ -523,12 +524,12 @@ std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, co
                 try {
                     int seconds = static_cast<int>(std::stod(optString(env,obj,"duration")));
                     int delta = std::abs(seconds * 1000 - trackDurationMs);
-                    score = 100000 - delta;
+                    score += 30000 - delta;
                     if(delta > 15000) {env->DeleteLocalRef(obj);continue;}
                 } catch(...) { score = -100000; }
             }
             env->DeleteLocalRef(obj);
-            if(!lrc.empty()){
+            if(!lrc.empty() && score>0){
                 auto candidate = parseLrc(lrc);
                 if(!candidate.empty() && score > bestScore) {
                     bestScore=score;
@@ -583,13 +584,23 @@ std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0,
     // First try a user-imported LRC for the exact currently playing track.
     if(!bridgeKey.empty()) {
         std::string response=bridgeGet("/v1/lyrics?title="+encode(env,tr.title)+
-             "&artist="+encode(env,tr.artist),bridgeKey);
+             "&artist="+encode(env,tr.artist)+"&duration="+std::to_string(duration)+
+             "&id="+encode(env,tr.id),bridgeKey);
         if(!response.empty()) {
             jobject root=makeJson(env,response);
             if(root){
                 std::string raw=optString(env,root,"syncedLyrics");
+                std::string romanized=optString(env,root,"romanizedLyrics");
                 env->DeleteLocalRef(root);
                 auto local=parseLrc(raw);
+                auto reading=parseLrc(romanized);
+                size_t i=0,j=0;
+                while(i<local.size()&&j<reading.size()){
+                    if(std::abs(local[i].ms-reading[j].ms)<=15){
+                        local[i].romanized=reading[j].line;++i;++j;
+                    }else if(local[i].ms<reading[j].ms)++i;
+                    else ++j;
+                }
                 if(!local.empty())return local;
             }
         }
@@ -666,7 +677,19 @@ std::string romanizeLine(JNIEnv* env,const std::string& line){
     return result;
 }
 void romanizeLyrics(JNIEnv* env,std::vector<Lyric>& lines){
-    for(auto& lyric:lines)lyric.line=romanizeLine(env,lyric.line);
+    // Bridge readings from the Japanese dictionary take precedence over generic ICU.
+    // Never overwrite the original line; fallback avoids reading kanji as Mandarin.
+    for(auto& lyric:lines)if(lyric.romanized.empty()){
+        bool han=false;
+        for(size_t i=0;i+2<lyric.line.size();++i){
+            const auto a=static_cast<unsigned char>(lyric.line[i]);
+            if(a>=0xe4&&a<=0xe9)han=true;
+        }
+        if(!han){
+            auto result=romanizeLine(env,lyric.line);
+            if(result!=lyric.line)lyric.romanized=std::move(result);
+        }
+    }
 }
 
 // Probe Audius redirects on the music worker (never on the game UI thread).
@@ -736,6 +759,7 @@ std::string bridgeGet(const std::string& path,const std::string& token) {
     if(fd<0)return {};
     // External searches run on the native worker and may take several seconds.
     const int timeoutMs=path.rfind("/v1/search?",0)==0?30000:
+                       path.rfind("/v1/lyrics?",0)==0?26000:
                        path.rfind("/v1/play?",0)==0?3500:1500;
     timeval timeout{};timeout.tv_sec=timeoutMs/1000;
     timeout.tv_usec=(timeoutMs%1000)*1000;
@@ -817,7 +841,7 @@ std::vector<std::string> parsePlaylistNames(JNIEnv* env,const std::string& body)
 }
 struct BridgeState {
     bool connected=false,available=false,playing=false;
-    std::string title,artist,provider,message,art;
+    std::string id,title,artist,provider,message,art;
     int elapsed=0,duration=0;
 };
 BridgeState decodeBridge(JNIEnv* env,const std::string& response) {
@@ -828,6 +852,7 @@ BridgeState decodeBridge(JNIEnv* env,const std::string& response) {
     result.available=optString(env,root,"available")=="true";
     result.playing=optString(env,root,"playing")=="true";
     result.title=optString(env,root,"title");
+    result.id=optString(env,root,"id");
     result.artist=optString(env,root,"artist");
     result.provider=optString(env,root,"provider");
     result.message=optString(env,root,"message");
@@ -1213,9 +1238,15 @@ class LeviMusic {
     ll::mod::NativeMod& self_;
     JavaVM* vm_=nullptr;
     std::thread worker_;
+    std::thread lyricWorker_;
     std::mutex mu_;
     std::condition_variable cv_;
     std::deque<Job> jobs_;
+    struct LyricRequest {Track track;int duration=0;std::string key;uint64_t serial=0;};
+    LyricRequest lyricRequest_;
+    uint64_t lyricSerial_=0;
+    bool lyricPending_=false;
+    std::condition_variable lyricCv_;
     std::vector<Track> results_;
     std::vector<Track> searchCache_;
     std::vector<Track> queueTracks_;
@@ -1258,7 +1289,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.3 RC loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.7 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1308,15 +1339,17 @@ public:
         });
         levimusic_icons::registerAll();
         enabled_=true;
+        lyricWorker_=std::thread([this](){processLyrics();});
         worker_=std::thread([this](){process();});
         paint();
         return true;
     }
     bool disable(){
         enabled_=false;
-        {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();}
-        cv_.notify_all();
+        {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();++lyricSerial_;}
+        cv_.notify_all();lyricCv_.notify_all();
         if(worker_.joinable())worker_.join();
+        if(lyricWorker_.joinable())lyricWorker_.join();
         lm_world3d::shutdown();
         pl::modmenu::submitDrawCommands(MODULE,std::span<const pl::modmenu::DrawCommand>{});
         pl::modmenu::unregisterModule(MODULE);
@@ -1324,6 +1357,41 @@ public:
     }
     bool unload(){lm_world3d::unload();return true;}
 private:
+    void processLyrics(){
+        EnvScope scope(vm_);
+        if(!scope)return;
+        while(true){
+            LyricRequest req;
+            {
+                std::unique_lock lock(mu_);
+                lyricCv_.wait(lock,[this]{return shutdown_||lyricPending_;});
+                if(shutdown_)return;
+                req=lyricRequest_;lyricPending_=false;
+            }
+            auto found=searchLyrics(scope.env,req.track,req.duration,req.key);
+            auto shown=found;
+            if(romanizeLyrics_)romanizeLyrics(scope.env,shown);
+            {
+                std::lock_guard lock(mu_);
+                if(shutdown_||req.serial!=lyricSerial_)continue;
+                lyricsSource_=std::move(found);lyrics_=std::move(shown);
+                lyric_.clear();
+                for(const auto& item:lyrics_){
+                    if(item.ms>elapsed_)break;
+                    lyric_=item.line;
+                }
+                lyricChanged_=std::chrono::steady_clock::now();
+            }
+        }
+    }
+    void queueLyrics(const Track& track,int duration,const std::string& key){
+        {
+            std::lock_guard lock(mu_);
+            lyricRequest_={track,duration,key,++lyricSerial_};
+            lyricPending_=true;
+        }
+        lyricCv_.notify_one();
+    }
     void setConfig(std::string_view k,std::string_view v){
         if(k=="romanizeLyrics"){
             romanizeLyrics_=v=="true"||v=="1";
@@ -1597,8 +1665,12 @@ private:
         const bool streamingBridge=useBridge_.load();
         const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
         // Client-only native 3D scene: independent from Behavior Packs or servers.
-        if(worldLyrics3D_)
-            lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?lyric:std::string{});
+        if(worldLyrics3D_){
+            std::string worldLine=lyric;
+            if(romanizeLyrics_)for(const auto& item:timedLyrics)
+                if(item.ms<=elapsed&&item.line==lyric&&!item.romanized.empty())worldLine=item.romanized;
+            lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?worldLine:std::string{});
+        }
         else if(lm_world3d::installed)
             lm_world3d::publish("");
         auto box=[&](Rect r,uint32_t color,float radius=9.f){
@@ -1707,8 +1779,11 @@ private:
                         }
                         if(!(floatingLyrics_ || worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
                             subtitleY=lyricsBelow_?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
-                        if(subtitleY>23*u&&subtitleY<l.h-10*u)
+                        if(subtitleY>23*u&&subtitleY<l.h-10*u){
                             outlineText(subtitleX,subtitleY,item.line,((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u,alpha);
+                            if(romanizeLyrics_&&!item.romanized.empty()&&subtitleY+15*u<l.h-10*u)
+                                outlineText(subtitleX,subtitleY+15*u,item.romanized,10.1f*u,alpha*.78f);
+                        }
                     }
                 }
             }
@@ -1865,8 +1940,8 @@ private:
                 text(l.right.x+20*u,l.right.y+160*u,
                      "Try another recording or import timed LRC in the app.",10.5f*u,C_DIM,72);
             }else{
-                const float step=std::max(21*u,
-                    std::min(37*u,(l.right.h-111*u)/6.f));
+                const float step=std::max(33*u,
+                    std::min(49*u,(l.right.h-111*u)/6.f));
                 const int start=std::max(0,activeLine-2);
                 const size_t lineLength=static_cast<size_t>(
                     std::max(18.f,(l.right.w-42*u)/(7.2f*u)));
@@ -1882,6 +1957,9 @@ private:
                     }
                     text(l.right.x+22*u,y,timedLyrics[static_cast<size_t>(j)].line,
                          currentLine?12.6f*u:11*u,currentLine?C_TEXT:C_DIM,lineLength);
+                    if(romanizeLyrics_&&!timedLyrics[static_cast<size_t>(j)].romanized.empty())
+                        text(l.right.x+22*u,y+12*u,timedLyrics[static_cast<size_t>(j)].romanized,
+                             9.1f*u,C_DIM,lineLength);
                 }
                 text(l.right.x+16*u,l.right.y+l.right.h-12*u,
                      "LRC "+std::to_string(std::max(0,activeLine+1))+
@@ -2023,7 +2101,7 @@ private:
         auto lastPaint=std::chrono::steady_clock::now();
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
         auto lastQueue=std::chrono::steady_clock::now()-std::chrono::seconds(3);
-        std::string previousTitle, previousArtist, previousProvider,previousArt;
+        std::string previousId,previousTitle,previousArtist,previousProvider,previousArt;
         bool lastBridgeConnected=false;
         while(true){
             Job job{};bool hasJob=false;
@@ -2267,7 +2345,7 @@ private:
                     if(!key.empty())state=decodeBridge(env,bridgeGet("/v1/status",key));
                     if(!state.connected) {
                         if(lastBridgeConnected || previousTitle!="") {
-                            previousTitle.clear();previousArtist.clear();previousProvider.clear();previousArt.clear();previousArt.clear();
+                            previousId.clear();previousTitle.clear();previousArtist.clear();previousProvider.clear();previousArt.clear();
                         }
                         lastBridgeConnected=false;
                         {
@@ -2276,23 +2354,24 @@ private:
                             artist_="Spotify / YouTube Music";
                             info_=key.empty()?"Paste Bridge Key in LeviMusic settings":
                                   "Start LeviMusic Bridge; grant Notification Access";
-                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();lyricsSource_.clear();coverImageId_.clear();coverImageId_.clear();
+                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();lyricsSource_.clear();coverImageId_.clear();coverImageId_.clear();++lyricSerial_;
                         }
                     } else if(!state.available) {
                         lastBridgeConnected=true;
-                        previousTitle.clear();previousArtist.clear();previousProvider.clear();
+                        previousId.clear();previousTitle.clear();previousArtist.clear();previousProvider.clear();
                         {
                             std::lock_guard lock(mu_);
                             title_="Choose a song";
                             artist_="Spotify / YouTube Music";
                             info_="Start music in the official app";
-                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();lyricsSource_.clear();
+                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();lyricsSource_.clear();++lyricSerial_;
                         }
                     } else {
                         lastBridgeConnected=true;
-                        const bool changed=state.title!=previousTitle ||
+                        const bool changed=state.id!=previousId||state.title!=previousTitle ||
                                           state.artist!=previousArtist || state.provider!=previousProvider;
                         if(changed) {
+                            previousId=state.id;
                             previousTitle=state.title;previousArtist=state.artist;previousProvider=state.provider;
                             {
                                 std::lock_guard lock(mu_);
@@ -2322,17 +2401,8 @@ private:
                         }
                         if(changed && !state.title.empty()) {
                             Track track;
-                            track.title=state.title;track.artist=state.artist;
-                            auto found=searchLyrics(env,track,state.duration,key);
-                            auto shown=found;
-                            if(romanizeLyrics_)romanizeLyrics(env,shown);
-                            {
-                                std::lock_guard lock(mu_);
-                                lyricsSource_=std::move(found);
-                                lyrics_=std::move(shown);
-                                lyric_=lyrics_.empty()?"":"";
-                                lyricChanged_=std::chrono::steady_clock::now();
-                            }
+                            track.id=state.id;track.title=state.title;track.artist=state.artist;
+                            queueLyrics(track,state.duration,key);
                         }
                         std::string current;
                         {

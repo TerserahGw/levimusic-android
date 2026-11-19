@@ -1,4 +1,4 @@
-# LeviMusic 1.2.6 — feature status
+# LeviMusic 1.2.7 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -30,4 +30,5 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - v1.2.4: Android Home/Playlists/Settings, mini and expanded player, song options, ICU romanization default-on. Native 3D hook suspended; floating 2D fallback is client-only.
 - v1.2.5: World Analysis-style native billboard glyph renderer, exact game-build checks, asynchronous preparation, client-only world positioning, 2D fallback on unsupported builds.
 - v1.2.6: Fixed romanization in Bridge mode and immediate re-render on toggle; added verified signature-based hotfix matching, and removed the misleading 2D display from the 3D option.
+- v1.2.7: Preserve original LRC lines with smaller Latin readings in the app and mod. The Bridge uses Kuromoji for Japanese kanji, adds vetted LRCLIB/NetEase/manual video captions, and fetches lyrics on a separate mod worker so controls stay responsive. The unsupported 3D signature shown on user builds is still unresolved; renderer logcat reports how far each profile matches.
 

@@ -180,7 +180,7 @@ public final class BridgeApi {
     private void serve(Socket socket) throws Exception {
         BufferedReader reader=new BufferedReader(new InputStreamReader(socket.getInputStream(),StandardCharsets.US_ASCII));
         String first=reader.readLine();
-        if(first==null||first.length()>250)return;
+        if(first==null||first.length()>2048)return;
         String token="";
         String header;
         int headerCount=0;
@@ -251,7 +251,14 @@ public final class BridgeApi {
             else if(path.startsWith("/v1/lyrics?")){
                 String title=URLDecoder.decode(getParam(path,"title"),"UTF-8");
                 String artist=URLDecoder.decode(getParam(path,"artist"),"UTF-8");
-                json=LyricsStore.response(context,title,artist);
+                String id=getParam(path,"id");
+                MusicCatalog.Song song=MusicCatalog.find(id);
+                int duration=0;
+                try{duration=Math.max(0,Integer.parseInt(getParam(path,"duration")));}
+                catch(NumberFormatException ignored){}
+                if(song!=null&&duration==0)duration=(int)Math.min(Integer.MAX_VALUE,song.durationMs);
+                json=LyricsFinder.find(context,title,artist,duration,
+                    song==null?"":song.url,LyricsStore.romanizationLanguage(context));
             }
             else if(path.startsWith("/v1/playlist/")){
                 String op=path.substring("/v1/playlist/".length()).split("[?]")[0];
@@ -291,3 +298,4 @@ public final class BridgeApi {
         os.write(content);os.flush();
     }
 }
+
