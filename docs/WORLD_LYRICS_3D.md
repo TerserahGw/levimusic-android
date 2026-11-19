@@ -1,4 +1,4 @@
-# 3D Floating Lyrics — experimental Android renderer (v1.2.7)
+# 3D Floating Lyrics — experimental Android renderer (v1.2.8)
 
 Turn on the option in LeviMusic's mod menu. With a timed lyric track and a supported Minecraft build, each lyric is drawn as a camera-facing world-space billboard near the player. The panel remains fixed as the player looks around until the next lyric line changes it. It is local-only: no addon per world, spawned server entity, network packet, or server permission is needed; other players cannot see it.
 
@@ -14,4 +14,4 @@ The native path follows the Android render and material handling in [World Analy
 
 The source compiles and the local render-detour smoke test covers geometry submission, Minecraft's original render callback and color restoration. It has **not** been visually tested on a physical Android device. Verify the panel and Play/Pause/Next on your exact game build; send the build identity and logs if status reports unsupported or binding conflict.
 
-The screenshot showing `3D: game renderer signatures unavailable` confirms this user's game binary is not supported by the two audited profiles. v1.2.7 records per-profile matching counts in logcat under `LeviMusicWorld3D`; it does not claim that 3D world rendering works on this build. A compatible build of `libminecraftpe.so` (or its Build ID plus symbol/prologue evidence) is needed to adapt render hooks and object offsets safely. The working LHolo package has a different render entry point and cannot establish matching LeviMusic object layouts by itself.
+The user's Minecraft 1.26.62.1 ARM64 binary has Build ID `c60fa32908019eecae39ebfe7bac5755dc35cde2`. v1.2.8 adds its seven verified function entry points, including the changed material-group address calculation. This enables an exact build binding; world-space drawing and camera layout still require an on-device test. The working LHolo package uses a different render entry point, so it cannot establish LeviMusic's object layouts by itself.

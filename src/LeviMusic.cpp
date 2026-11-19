@@ -1291,7 +1291,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.7 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.8 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){

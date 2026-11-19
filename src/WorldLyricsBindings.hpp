@@ -15,7 +15,7 @@ struct Profile {
     std::size_t rendererPlayer, camera, tessellator, rotation, level;
     std::array<Binding, BindingCount> bindings;
 };
-inline constexpr std::array<Profile,2> profiles{{
+inline constexpr std::array<Profile,3> profiles{{
     {"1.26.52", "56de9eed077631e03a31f4f58eb2f0e00071d335", 0x420, 0x61c, 0xb8, 0x218, 0x1d0, {{
         {0xaac7dd8, "E8 0F 19 FC FD 7B 01 A9 FC 6F 02 A9 FA 67 03 A9 F8 5F 04 A9 F6 57 05 A9 F4 4F 06 A9 FD 43 00 91 FF C3 09 D1 54 D0 3B D5 F3 03 00 AA 88 16 40 F9 A8 03 1E F8 08 C0 78 39 ? ? ? ? 68 92 4C B9"}, // NormalTick
         {0xb318478, "EE 0F 16 FC ED 33 01 6D EB 2B 02 6D E9 23 03 6D FD 7B 04 A9 FC 6F 05 A9 FA 67 06 A9 F8 5F 07 A9 F6 57 08 A9 F4 4F 09 A9 FD 03 01 91 FF 03 06 D1 57 D0 3B D5 F8 03 00 AA F4 03 02 AA E8 16 40 F9"}, // RenderLevel
@@ -24,6 +24,15 @@ inline constexpr std::array<Profile,2> profiles{{
         {0xa76f048, "FF C3 02 D1 EA 1B 00 FD E9 23 04 6D FD 7B 05 A9 FC 6F 06 A9 FA 67 07 A9 F8 5F 08 A9 F6 57 09 A9 F4 4F 0A A9 FD 43 01 91 5A D0 3B D5 48 17 40 F9 E8 17 00 F9 08 90 42 B9 09 94 42 B9 1F 01 09 6B"}, // TessellatorVertex
         {0xb28402c, "FD 7B BC A9 FC 5F 01 A9 F6 57 02 A9 F4 4F 03 A9 FD 03 00 91 FF 03 0A D1 57 D0 3B D5 F6 03 00 AA E0 03 01 AA E8 16 40 F9 F4 03 03 AA F5 03 02 AA F3 03 01 AA A8 83 1F F8 13 AB D3 97 C0 02 00 37"}, // MeshHelpersRenderMeshImmediately2
         {0x997a740, "E0 CF 04 90 00 A0 13 91 A1 83 00 D1 A2 43 01 D1 E4 83 01 91 E3 03 14 AA 25 00 80 52 13 A4 3B 94 F4 37 40 F9 FF 7F 06 A9 F4 06 00 B4 81 22 00 91 00 00 80 92 87 BA AE 97 E0 00 00 B5 88 02 40 F9"}, // RenderMaterialGroupCommon
+    }}},
+    {"1.26.62.1", "c60fa32908019eecae39ebfe7bac5755dc35cde2", 0x430, 0x614, 0xb0, 0x238, 0x1f0, {{
+        {0xaf5e7a0, "E8 0F 19 FC FD 7B 01 A9 FC 6F 02 A9 FA 67 03 A9 F8 5F 04 A9 F6 57 05 A9 F4 4F 06 A9 FD 43 00 91 FF C3 09 D1 54 D0 3B D5 F3 03 00 AA 88 16 40 F9"},
+        {0xb7a38a0, "FF 83 07 D1 EE AB 00 FD ED 33 16 6D EB 2B 17 6D E9 23 18 6D FD 7B 19 A9 FC 67 1A A9 F8 5F 1B A9"},
+        {0xac2a748, "FD 7B BC A9 F8 5F 01 A9 F6 57 02 A9 F4 4F 03 A9 FD 03 00 91 08 60 4A 39 09 54 49 39 08 01 09 2A"},
+        {0xac2acfc, "E8 6F A8 52 0C 50 49 39 04 01 27 1E 00 08 24 1E 21 08 24 1E 42 08 24 1E 63 08 24 1E"},
+        {0xac2af98, "FF C3 02 D1 EA 1B 00 FD E9 23 04 6D FD 7B 05 A9 FC 6F 06 A9 FA 67 07 A9 F8 5F 08 A9 F6 57 09 A9 F4 4F 0A A9"},
+        {0xb769fec, "FD 7B BC A9 FC 5F 01 A9 F6 57 02 A9 F4 4F 03 A9 FD 03 00 91 FF C3 09 D1 57 D0 3B D5 F6 03 00 AA"},
+        {0x9d21a3c, "A0 1B 05 F0 00 80 38 91 A1 83 00 D1 A2 43 01 D1 E4 83 01 91 E3 03 14 AA 25 00 80 52"},
     }}},
     {"1.26.60", "eb291b883dfdfaff70c4999c2eabd61885ae3e15", 0x430, 0x614, 0xb0, 0x238, 0x1f0, {{
         {0xaf5e460, "E8 0F 19 FC FD 7B 01 A9 FC 6F 02 A9 FA 67 03 A9 F8 5F 04 A9 F6 57 05 A9 F4 4F 06 A9 FD 43 00 91 FF C3 09 D1 54 D0 3B D5 F3 03 00 AA 88 16 40 F9"}, // NormalTick
