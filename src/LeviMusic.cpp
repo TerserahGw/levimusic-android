@@ -634,6 +634,41 @@ std::vector<Lyric> searchLyrics(JNIEnv* env,const Track& tr,int duration=0,
     return searchLyricsRaw(env,cleaned,tr.artist,duration,true);
 }
 
+std::string romanizeLine(JNIEnv* env,const std::string& line){
+    bool nonLatin=false;
+    for(unsigned char c:line)if(c>=128){nonLatin=true;break;}
+    if(!nonLatin)return line;
+    jclass cls=env->FindClass("android/icu/text/Transliterator");
+    if(!cls||env->ExceptionCheck()){env->ExceptionClear();return line;}
+    jmethodID get=env->GetStaticMethodID(cls,"getInstance",
+        "(Ljava/lang/String;)Landroid/icu/text/Transliterator;");
+    jmethodID transliterate=env->GetMethodID(cls,"transliterate",
+        "(Ljava/lang/String;)Ljava/lang/String;");
+    if(!get||!transliterate||env->ExceptionCheck()){
+        env->ExceptionClear();env->DeleteLocalRef(cls);return line;
+    }
+    jstring rule=env->NewStringUTF("Any-Latin; Latin-ASCII");
+    jobject object=env->CallStaticObjectMethod(cls,get,rule);
+    std::string result=line;
+    if(object&&!env->ExceptionCheck()){
+        jstring input=toJava(env,line);
+        jstring output=(jstring)env->CallObjectMethod(object,transliterate,input);
+        if(output&&!env->ExceptionCheck()){
+            const char* chars=env->GetStringUTFChars(output,nullptr);
+            if(chars){result=chars;env->ReleaseStringUTFChars(output,chars);}
+        }
+        if(env->ExceptionCheck())env->ExceptionClear();
+        if(output)env->DeleteLocalRef(output);
+        env->DeleteLocalRef(input);env->DeleteLocalRef(object);
+    }
+    if(env->ExceptionCheck())env->ExceptionClear();
+    env->DeleteLocalRef(rule);env->DeleteLocalRef(cls);
+    return result;
+}
+void romanizeLyrics(JNIEnv* env,std::vector<Lyric>& lines){
+    for(auto& lyric:lines)lyric.line=romanizeLine(env,lyric.line);
+}
+
 // Probe Audius redirects on the music worker (never on the game UI thread).
 // Android's MediaPlayer is more reliable when given the final HTTPS audio URL.
 std::string resolveStreamUrl(JNIEnv* env, const std::string& url) {
@@ -1201,7 +1236,7 @@ class LeviMusic {
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<bool> animation_{true};
-    std::atomic<bool> browserEnabled_{false},worldLyrics3D_{false};
+    std::atomic<bool> browserEnabled_{false},worldLyrics3D_{false},romanizeLyrics_{true};
 #if defined(LEVI_STANDALONE)
     std::atomic<bool> useBridge_{false},lyricsBelow_{false},floatingLyrics_{false};
 #else
@@ -1242,7 +1277,8 @@ public:
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,"false")
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,"false")
-            .config("worldLyrics3D","Experimental true 3D world lyrics (native, risky)",pl::modmenu::ConfigType::Toggle,"false")
+            .config("worldLyrics3D","Floating lyrics (safe 2D fallback; 3D renderer unavailable)",pl::modmenu::ConfigType::Toggle,"false")
+            .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,"true")
 #if defined(LEVI_STANDALONE)
             .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,"false")
 #endif
@@ -1288,7 +1324,9 @@ public:
     bool unload(){return true;}
 private:
     void setConfig(std::string_view k,std::string_view v){
-        if(k=="worldLyrics3D") {
+        if(k=="romanizeLyrics"){
+            romanizeLyrics_=v=="true"||v=="1";
+        } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
         } else if(k=="embeddedBrowser") {
             browserEnabled_=v=="true"||v=="1";
@@ -1652,7 +1690,7 @@ private:
                         float alpha=std::clamp(fadeIn*fadeOut,0.f,1.f);
                         float subtitleY=lyricsBelow_?l.mini.y+l.mini.h+26*u:l.mini.y-16*u;
                         float subtitleX=l.mini.x+3*u;
-                        if(floatingLyrics_){
+                        if(floatingLyrics_ || worldLyrics3D_){
                             // Client-only 2D fallback, per-line location (not 3D world text).
                             // True world-space rendering needs version-specific camera hooks.
                             const uint32_t seed=static_cast<uint32_t>(item.ms)*2654435761U+0x9E3779B9U;
@@ -1661,10 +1699,10 @@ private:
                             subtitleX=std::clamp(l.w*(.18f+px*.47f),18*u,l.w*.67f);
                             subtitleY=std::clamp(l.h*(.32f+py*.40f),44*u,l.h-36*u);
                         }
-                        if(!floatingLyrics_ && (subtitleY<25*u||subtitleY>l.h-12*u))
+                        if(!(floatingLyrics_ || worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
                             subtitleY=lyricsBelow_?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
                         if(subtitleY>23*u&&subtitleY<l.h-10*u)
-                            outlineText(subtitleX,subtitleY,item.line,(floatingLyrics_?15.8f:14.4f)*u,alpha);
+                            outlineText(subtitleX,subtitleY,item.line,((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u,alpha);
                     }
                 }
             }
@@ -1967,6 +2005,7 @@ private:
             std::vector<Lyric> found=searchLyrics(env,tr,player.duration(env));
             {
                 std::lock_guard lock(mu_);
+                if(romanizeLyrics_)romanizeLyrics(env,found);
                 lyrics_=std::move(found);
                 lyric_=lyrics_.empty()?"No synchronized lyrics":"...";
             }
@@ -1990,9 +2029,9 @@ private:
             }
             // Experimental local-only world rendering, opt-in and signature-gated.
             if(worldLyrics3D_){
-                if(!lm_world3d::installed)
-                    lm_world3d::tryInstall();
-                lm_world3d::enabled=lm_world3d::installed.load();
+                // Native world hook is disabled until renderer offsets are verified for this game build.
+                // The old signature matched an incompatible update method and stalled the client.
+                lm_world3d::enabled=false;
             }else if(lm_world3d::installed){
                 // Do not unhook a live game render path on every settings toggle.
                 // Keep the detour inert; unhook only on module disable.

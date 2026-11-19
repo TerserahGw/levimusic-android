@@ -197,14 +197,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.2.3-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.2.4-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.2.3-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.2.4-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -280,7 +280,7 @@ jobs:
               "Full mod: Bridge APK + LeviPack. Standalone: ChruPipe API client (requires self-hosted server). Optional world-lyrics 3D addon is manual script-event demo; not auto-synced. Never load both native variants.",
               "",
               "## Catatan kompatibilitas",
-              "- Status **Release Candidate (RC), belum diverifikasi di perangkat Minecraft Android**; berhasil dikompilasi tidak menjamin playback bekerja pada semua perangkat.",
+              "- Rilis stabil 1.2.4. Mod dan APK harus dipasang bersama untuk mode Bridge. Mode native 3D dinonaktifkan karena hook renderer belum kompatibel; toggle menampilkan lirik floating 2D agar game tetap responsif.",
               "- Full mod provides Up Next radio (current + three related recommendations) with queue editing. Availability and relevance depend on unofficial YouTube extraction.",
               "- Experimental native world-space glyph renderer is OFF by default and may fail on incompatible Minecraft builds.",
               "",
@@ -303,7 +303,6 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
             --target "$GITHUB_SHA" \
-            --title "LeviMusic Online v$VERSION (Release Candidate)" \
-            --notes-file release-notes.md \
-            --prerelease
+            --title "LeviMusic Online v$VERSION" \
+            --notes-file release-notes.md
           echo "Published release $TAG with $PACKAGE."

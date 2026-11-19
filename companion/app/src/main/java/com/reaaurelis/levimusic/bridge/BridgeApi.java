@@ -201,7 +201,7 @@ public final class BridgeApi {
             if(parts.length<3||!"GET".equals(parts[0])) {
                 status=405;json=new JSONObject().put("error","GET only");
             }else if(path.equals("/v1/status"))json=state();
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.2.2").put("api",3);
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.2.4").put("api",3);
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
                 String id=player==null?"":player.optString("id");

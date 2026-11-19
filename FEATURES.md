@@ -1,4 +1,4 @@
-# LeviMusic 1.2.3 RC — feature status
+# LeviMusic 1.2.4 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -15,18 +15,14 @@
 - Saved user playlists still retain their own ordered queue and are not replaced by radio.
 - Three recommendations are best effort: extractor results may be missing or blocked; the service never invents song availability.
 
-## True native 3D world lyrics — EXPERIMENTAL, OFF by default
-- **No behavior pack, per-world addon or Script API required.** The native .levipack includes an experimental client-side Minecraft world-renderer hook.
-- Uses game ARM64 signatures, LevelRenderer/Tessellator and camera/player rotation to create white, black-outlined *actual world-space* vector glyphs.
-- Each new timed lyric gets a seeded random new anchor ~4.6 blocks in front of the camera, with lateral and vertical variation. The old line is replaced at the timestamp change.
-- No world entities, blocks or network packets; other players should not see text, including in friends' worlds or public servers, because it is rendered in the local process only.
-- Missing signatures cause the renderer to stay disabled; 2D lyric popup remains available.
-- **Runtime has not been proven on the user's Minecraft build.** Native render offsets and hooked functions change with game versions and could crash Minecraft even after signatures match. Test with a backed-up local world first and disable if unstable.
-- Initial font is original ASCII/Latin 5x7 vector glyphs only: non-Latin/Unicode characters are approximated by question marks. The current experiment does not raycast walls to guarantee empty space, and visual depth/visibility must be tested.
-- World lyric mode is gated behind `Experimental true 3D world lyrics (native, risky)` in the LeviMusic Mod Menu; OFF by default.
+## Floating lyrics safety update
+
+The native world renderer is suspended in v1.2.4 because version-specific hooks can freeze Minecraft. The option uses the safe, client-only 2D lyric scatter. True world-space 3D rendering is unavailable in this release.
+
 
 ## Other
 - The full mod retains the Android Bridge APK with Search, Media3 playback, ChruPipe-free remote controls, saved playlists, artwork, and online LRCLIB lyrics.
 - Standalone retains its externally hosted ChruPipe backend requirement and optional visible WebView; it does not provide full Bridge queue editing.
 - Signed APK update chain retained from 1.2.0. Do not load full and standalone .levipacks together.
 - Release Candidate until successfully tested in game; GitHub Actions compile success does not confirm runtime stability.
+- v1.2.4: Android Home/Playlists/Settings, mini and expanded player, song options, ICU romanization default-on. Native 3D hook suspended; floating 2D fallback is client-only.

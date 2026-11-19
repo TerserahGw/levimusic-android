@@ -51,6 +51,10 @@ public final class MainActivity extends Activity {
     private LinearLayout list;
     private TextView libraryTitle;
     private boolean showingPlaylists=false;
+    private LinearLayout mainArea, fullPlayer, miniPlayer, navigation;
+    private TextView miniTitle, miniArtist, playerDetail;
+    private ImageButton miniPlay;
+    private int activeTab=0;
     private java.util.List<MusicCatalog.Song> lastSearch=java.util.List.of();
     private EditText searchInput;
     private ImageButton playButton;
@@ -137,6 +141,8 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(-1,dp(56));
         searchParams.topMargin=dp(14);
         root.addView(searchBar,searchParams);
+        mainArea=column();
+        root.addView(mainArea,new LinearLayout.LayoutParams(-1,0,1));
 
         LinearLayout listTitle=new LinearLayout(this);
         listTitle.setGravity(Gravity.CENTER_VERTICAL);
@@ -158,7 +164,7 @@ public final class MainActivity extends Activity {
         add(listTitle,trackCount,-2,-2);
         LinearLayout.LayoutParams listTitleParams=new LinearLayout.LayoutParams(-1,dp(54));
         listTitleParams.topMargin=dp(10);
-        root.addView(listTitle,listTitleParams);
+        mainArea.addView(listTitle,listTitleParams);
 
         ScrollView scroller=new ScrollView(this);
         scroller.setFillViewport(true);
@@ -166,7 +172,7 @@ public final class MainActivity extends Activity {
         list=column();
         list.setPadding(0,0,0,dp(22));
         scroller.addView(list);
-        root.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
+        mainArea.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
         empty=text("Search for your next song.\nYour music will keep playing while you explore Minecraft.",
                 14,SECONDARY,false);
         empty.setGravity(Gravity.CENTER);
@@ -179,6 +185,7 @@ public final class MainActivity extends Activity {
         player.setPadding(dp(18),dp(15),dp(18),dp(12));
         LinearLayout.LayoutParams playerParams=new LinearLayout.LayoutParams(-1,-2);
         playerParams.topMargin=dp(8);
+        fullPlayer=player;
         root.addView(player,playerParams);
 
         LinearLayout row=new LinearLayout(this);
@@ -244,6 +251,35 @@ public final class MainActivity extends Activity {
         headerStatus.setGravity(Gravity.CENTER);
         headerStatus.setPadding(0,dp(9),0,0);
         add(root,headerStatus,-1,25);
+        miniPlayer=new LinearLayout(this);
+        miniPlayer.setGravity(Gravity.CENTER_VERTICAL);
+        miniPlayer.setBackground(bg(SURFACE_ALT,18));
+        miniPlayer.setPadding(dp(14),0,dp(8),0);
+        LinearLayout labels=column();
+        miniTitle=text("Nothing playing",14,PRIMARY,true);
+        miniTitle.setSingleLine(true);
+        miniTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        miniArtist=text("Open player",11,SECONDARY,false);
+        add(labels,miniTitle,-1,-2);add(labels,miniArtist,-1,-2);
+        miniPlayer.addView(labels,new LinearLayout.LayoutParams(0,-2,1));
+        miniPlay=icon(R.drawable.ic_play,46);
+        miniPlay.setOnClickListener(v->{
+            JSONObject status=PlayerService.getStatus();
+            PlayerService.command(status!=null&&status.optBoolean("playing")?"pause":"play",0);
+        });
+        add(miniPlayer,miniPlay,48,48);
+        miniPlayer.setOnClickListener(v->expandPlayer(true));
+        root.addView(miniPlayer,new LinearLayout.LayoutParams(-1,dp(62)));
+        navigation=new LinearLayout(this);
+        for(int i=0;i<3;i++){
+            final int tab=i;
+            TextView button=text(i==0?"Home":i==1?"Playlists":"Settings",13,i==0?PRIMARY:SOFT,true);
+            button.setGravity(Gravity.CENTER);
+            button.setOnClickListener(v->selectTab(tab));
+            navigation.addView(button,new LinearLayout.LayoutParams(0,dp(54),1));
+        }
+        root.addView(navigation,new LinearLayout.LayoutParams(-1,dp(54)));
+        fullPlayer.setVisibility(View.GONE);
         setContentView(root);
     }
     private ImageButton icon(int resource,int size){
@@ -316,8 +352,8 @@ public final class MainActivity extends Activity {
             row.addView(details,new LinearLayout.LayoutParams(0,-2,1));
             TextView length=text(format(song.durationMs),11,SOFT,false);
             add(row,length,-2,-2);
-            TextView addSong=text("  +  ",20,PRIMARY,true);
-            addSong.setOnClickListener(v->addToPlaylist(song));
+            TextView addSong=text("  ⋮  ",20,PRIMARY,true);
+            addSong.setOnClickListener(v->songMenu(song));
             add(row,addSong,42,46);
             row.setOnClickListener(v->{
                 MusicCatalog.activateSearchQueue(song);
@@ -525,6 +561,126 @@ public final class MainActivity extends Activity {
                 headerStatus.setText(result.optString("message"));
             }).setNegativeButton("Cancel",null).show();
     }
+    private void songMenu(MusicCatalog.Song song){
+        new AlertDialog.Builder(this).setTitle(song.title)
+            .setItems(new String[]{"Play now","Add to Up Next","Add to playlist"},(dialog,index)->{
+                if(index==0){MusicCatalog.activateSearchQueue(song);PlayerService.play(this,song);}
+                else if(index==1){
+                    boolean added=MusicCatalog.enqueue(song);
+                    headerStatus.setText(added?"Added to Up Next":"Already in Up Next");
+                }else addToPlaylist(song);
+            }).show();
+    }
+    private void selectTab(int tab){
+        activeTab=tab;
+        expandPlayer(false);
+        searchInput.setVisibility(tab==0?View.VISIBLE:View.GONE);
+        mainArea.setVisibility(View.VISIBLE);
+        if(tab==0){render(lastSearch);libraryTitle.setText("Discover");}
+        else if(tab==1)showPlaylists();
+        else showSettingsTab();
+        for(int i=0;i<navigation.getChildCount();i++)
+            ((TextView)navigation.getChildAt(i)).setTextColor(i==tab?PRIMARY:SOFT);
+    }
+    private void showSettingsTab(){
+        libraryTitle.setText("Settings");
+        list.removeAllViews();
+        android.widget.Switch roman=new android.widget.Switch(this);
+        roman.setText("Romanize lyrics");
+        roman.setTextColor(PRIMARY);
+        roman.setTextSize(16);
+        roman.setPadding(dp(14),dp(12),dp(14),dp(12));
+        roman.setChecked(LyricsStore.romanizeEnabled(this));
+        roman.setOnCheckedChangeListener((button,checked)->LyricsStore.setRomanize(this,checked));
+        add(list,roman,-1,68);
+        TextView note=text("Latin pronunciation for lyrics written in other scripts. Supported languages vary.",12,SECONDARY,false);
+        note.setPadding(dp(14),0,dp(14),dp(20));
+        add(list,note,-1,-2);
+        TextView connection=text("Minecraft connection  ›",16,PRIMARY,true);
+        connection.setPadding(dp(14),dp(18),dp(14),dp(18));
+        connection.setBackground(bg(SURFACE,14));
+        connection.setOnClickListener(v->showBridgeSettings());
+        add(list,connection,-1,62);
+        TextView importLrc=text("Import synchronized lyrics  ›",16,PRIMARY,true);
+        importLrc.setPadding(dp(14),dp(18),dp(14),dp(18));
+        importLrc.setOnClickListener(v->importLyrics());
+        add(list,importLrc,-1,62);
+    }
+    private void expandPlayer(boolean expanded){
+        mainArea.setVisibility(expanded?View.GONE:View.VISIBLE);
+        fullPlayer.setVisibility(expanded?View.VISIBLE:View.GONE);
+        miniPlayer.setVisibility(expanded?View.GONE:View.VISIBLE);
+        navigation.setVisibility(expanded?View.GONE:View.VISIBLE);
+        if(expanded){
+            if(playerDetail==null){
+                LinearLayout tabs=new LinearLayout(this);
+                TextView queue=text("Up Next",15,PRIMARY,true);
+                queue.setPadding(dp(14),dp(16),dp(14),dp(16));
+                queue.setOnClickListener(v->showUpNext());
+                tabs.addView(queue,new LinearLayout.LayoutParams(0,-2,1));
+                TextView lyric=text("Lyrics",15,PRIMARY,true);
+                lyric.setPadding(dp(14),dp(16),dp(14),dp(16));
+                lyric.setOnClickListener(v->showPlayerLyrics());
+                tabs.addView(lyric,new LinearLayout.LayoutParams(0,-2,1));
+                add(fullPlayer,tabs,-1,-2);
+                ScrollView scroll=new ScrollView(this);
+                playerDetail=text("",15,SECONDARY,false);
+                playerDetail.setPadding(dp(14),dp(12),dp(14),dp(12));
+                scroll.addView(playerDetail);
+                add(fullPlayer,scroll,-1,210);
+                TextView close=text("⌄  Back to library",14,SECONDARY,true);
+                close.setGravity(Gravity.CENTER);
+                close.setOnClickListener(v->expandPlayer(false));
+                add(fullPlayer,close,-1,46);
+            }
+            showUpNext();
+        }
+    }
+    private void showUpNext(){
+        JSONObject state=PlayerService.getStatus();
+        String id=state==null?"":state.optString("id");
+        org.json.JSONArray tracks=MusicCatalog.queueJson(id).optJSONArray("tracks");
+        StringBuilder summary=new StringBuilder();
+        if(tracks!=null)for(int i=0;i<tracks.length();i++){
+            JSONObject song=tracks.optJSONObject(i);
+            if(song!=null)summary.append(i==0?"NOW PLAYING  ":"NEXT  ")
+                .append(song.optString("title")).append(" • ")
+                .append(song.optString("artist")).append("\n\n");
+        }
+        playerDetail.setText(summary.length()==0?"Queue is empty":summary.toString());
+    }
+    private void showPlayerLyrics(){
+        JSONObject state=PlayerService.getStatus();
+        if(state==null||!state.optBoolean("available")){
+            playerDetail.setText("Play a song to see its lyrics");return;
+        }
+        String title=state.optString("title"),artist=state.optString("artist");
+        playerDetail.setText("Loading lyrics…");
+        io.execute(()->{
+            String raw=LyricsStore.get(this,title,artist);
+            if(raw.isEmpty()){
+                try{
+                    String url="https://lrclib.net/api/search?track_name="+
+                        java.net.URLEncoder.encode(title,"UTF-8")+"&artist_name="+
+                        java.net.URLEncoder.encode(artist,"UTF-8");
+                    java.net.URLConnection c=new URL(url).openConnection();
+                    c.setConnectTimeout(4000);c.setReadTimeout(4000);
+                    try(InputStream stream=c.getInputStream()){
+                        byte[] bytes=stream.readNBytes(500000);
+                        org.json.JSONArray results=new org.json.JSONArray(new String(bytes,java.nio.charset.StandardCharsets.UTF_8));
+                        for(int i=0;i<results.length();i++){
+                            String found=results.optJSONObject(i).optString("syncedLyrics");
+                            if(!found.isEmpty()){raw=found;break;}
+                        }
+                    }
+                }catch(Exception ignored){}
+            }
+            raw=LyricsStore.display(this,raw,LyricsStore.romanizeEnabled(this));
+            if(raw.isEmpty())raw="Lyrics unavailable. Import an LRC file in Settings.";
+            final String display=raw;
+            runOnUiThread(()->playerDetail.setText(display));
+        });
+    }
     private static String format(long ms){
         long seconds=Math.max(0,ms/1000);
         return String.format(Locale.ROOT,"%d:%02d",seconds/60,seconds%60);
@@ -535,6 +691,9 @@ public final class MainActivity extends Activity {
             if(state!=null){
                 currentTitle.setText(state.optString("title","Nothing playing"));
                 currentArtist.setText(state.optString("artist",""));
+                miniTitle.setText(state.optString("title","Nothing playing"));
+                miniArtist.setText(state.optString("artist",""));
+                miniPlay.setImageResource(state.optBoolean("playing")?R.drawable.ic_pause:R.drawable.ic_play);
                 boolean playing=state.optBoolean("playing");
                 playButton.setImageResource(playing?R.drawable.ic_pause:R.drawable.ic_play);
                 long position=state.optLong("positionMs"),duration=state.optLong("durationMs");
