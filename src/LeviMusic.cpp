@@ -1338,7 +1338,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.13 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.14 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1361,6 +1361,7 @@ public:
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (Experimental, client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","false"))
             .config("lyricDistance","3D Lyrics Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
+            .config("lyricHeight","3D Lyrics Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
             .config("lyricScatterFov","3D Lyrics Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","100"),"0","140")
             .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,remembered("romanizeLyrics","true"))
 #if defined(LEVI_STANDALONE)
@@ -1473,6 +1474,8 @@ private:
             lm_world3d::request(worldLyrics3D_);
         } else if(k=="lyricDistance") {
             try{lm_world3d::lyricDistanceTenths=std::clamp(std::stoi(std::string(v)),12,60);}catch(...){}
+        } else if(k=="lyricHeight") {
+            try{lm_world3d::lyricHeightTenths=std::clamp(std::stoi(std::string(v)),0,30);}catch(...){}
         } else if(k=="lyricScatterFov") {
             try{lm_world3d::lyricScatterFov=std::clamp(std::stoi(std::string(v)),0,140);}catch(...){}
         } else if(k=="embeddedBrowser") {
@@ -2612,4 +2615,5 @@ private:
 };
 } // namespace
 PL_REGISTER_MOD(LeviMusic, LeviMusic::instance())
+
 

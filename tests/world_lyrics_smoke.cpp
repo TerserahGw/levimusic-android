@@ -42,36 +42,40 @@ int main(){
     assert(originals==1&&meshes==1&&vertices==declared&&declared>0);
     assert(shader[0]==.2f&&shader[1]==.3f&&shader[2]==.4f&&shader[3]==.5f);
     assert(active());
-    const auto anchor=scene.anchor;
-    Pose lookingDown=pose;lookingDown.pitch=60.f;
-    const auto down=lyricAnchor(lookingDown,lyricSerial);
-    assert(down.y<anchor.y-1.8f);
-    assert(std::abs(down.x-lookingDown.position.x)<5.f);
-    float minSide=100.f,maxSide=-100.f;
-    for(uint64_t n=1;n<128;++n){
-        const auto point=lyricAnchor(pose,n);
-        const float yaw=pose.yaw*.01745329251994f;
-        const float offset=(point.x-pose.position.x)*(-std::cos(yaw))
-                          +(point.z-pose.position.z)*(-std::sin(yaw));
-        minSide=std::min(minSide,offset);maxSide=std::max(maxSide,offset);
-    }
-    assert(maxSide-minSide>2.7f);
+    assert(scene.panels.size()==1);
+    const auto anchor=scene.panels.front().anchor,right=scene.panels.front().right;
+    lyricScatterFov=0;
+    auto first=lyricAnchor(pose,cam,47,false);
+    auto thirdNarrow=lyricAnchor(pose,{100.f,68.f,196.f},47,true);
+    lyricScatterFov=140;
+    auto firstWide=lyricAnchor(pose,cam,47,false);
+    assert(magnitude2(first-firstWide)>.01f);
+    auto third=lyricAnchor(pose,{100.f,68.f,196.f},47,true);
+    assert(magnitude2(third-thirdNarrow)<.0001f);
+    assert(magnitude2(third-pose.position)>magnitude2(firstWide-pose.position));
+    assert(splitLyric("One long lyric line that should appear across different parts").size()>1);
+    for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=22);
+    auto longWord=splitLyric("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
+    assert(longWord.size()==2&&longWord[0]+longWord[1]=="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
     cam.x+=1.f;ptr(rp,profile->camera,cam);
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==2&&scene.anchor.x==anchor.x);
+    assert(meshes==2&&scene.panels.front().anchor.x==anchor.x&&scene.panels.front().right.x==right.x);
     pose.position.x+=1.f;
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==3&&std::abs(scene.anchor.x-anchor.x)<.001f);
+    assert(meshes==3&&std::abs(scene.panels.front().anchor.x-anchor.x)<.001f);
     pose.pitch=60.f;
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==4&&std::abs(scene.anchor.y-anchor.y)<.001f);
-    publish("NEXT LINE");
+    assert(meshes==4&&std::abs(scene.panels.front().anchor.y-anchor.y)<.001f);
+    publish("NEXT LINE HAS MANY WORDS TO SPLIT INTO PARTS");
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==5&&magnitude2(scene.anchor-anchor)>.1f);
-    assert(!scene.previousPixels.empty()&&scene.previousUntil>nowMs());
+    assert(meshes==5&&scene.panels.size()>1&&magnitude2(scene.panels.front().anchor-anchor)>.1f);
+    assert(scene.panels[1].born-scene.panels[0].born==260);
+    assert(magnitude2(scene.panels[0].anchor-scene.panels[1].anchor)>.1f);
+    assert(!scene.previous.empty()&&scene.previousUntil>nowMs());
+    assert(scene.previousFadeStart>nowMs());
     publish("");
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==6&&!scene.previousPixels.empty());
+    assert(meshes==6&&!scene.previous.empty());
     scene.previousUntil=nowMs()-1;
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==6);
@@ -79,4 +83,5 @@ int main(){
     assert(originals==8&&meshes==6);
     return 0;
 }
+
 

@@ -1,4 +1,4 @@
-# LeviMusic 1.2.13 — feature status
+# LeviMusic 1.2.14 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -37,4 +37,6 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - v1.2.11: Keep the 3D lyric origin attached to the player while placing the panel along the player's vertical look direction. Reposition as the player turns, and shorten the forward distance so nearby walls are less likely to hide it. Fixes active renderer status while the lyric is outside the visible field.
 - v1.2.12: Lower the world lyric panel for first person. Each line gets one fixed world position until the next lyric; the lateral scatter now spans 3.4 blocks. The Bridge supplies its token automatically to the Minecraft process through a caller-UID-checked Android provider; manual Pair remains available for launchers using another process identity.
 - v1.2.13: Default world lyric distance 2.2 blocks, adjustable from 1.2 to 6.0 blocks; adjustable horizontal scatter FOV from 0 to 140 degrees. Crossfade and small vertical easing on each line and fade out at the end. Persist mod settings in the mod configuration directory and restore their displayed values at startup.
+- v1.2.14: Adjustable lyric height from 0 to 3 blocks. Split long lyric lines into separate short panels staggered across world locations. Each panel keeps its world position and rotation fixed after spawning, facing the player/camera at creation. Retain the previous lyric until halfway through the new segments, then fade it out. First person uses the configured FOV; other camera views scatter over 360 degrees at an extra 1.1 blocks and offset panels that would sit directly behind the player.
+
 

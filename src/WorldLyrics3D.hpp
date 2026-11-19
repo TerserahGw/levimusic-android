@@ -38,6 +38,7 @@ inline std::atomic<int> renderStage{0}; // 0 no callback, 1 no player, 2 no LRC,
 inline std::atomic<int> matchingBindings{0}; // largest complete prefix of audited signatures
 inline std::atomic<uint64_t> generation{0};
 inline std::atomic<int> lyricDistanceTenths{22},lyricScatterFov{100};
+inline std::atomic<int> lyricHeightTenths{13};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
 inline const Profile* profile=nullptr;
@@ -217,27 +218,54 @@ inline void tickHook(void* player){
     std::unique_lock lock(poseMutex,std::try_to_lock);
     if(lock)pose=next;
 }
+struct Panel{
+    Vec3 anchor{},right{},facing{};
+    std::vector<Pixel> pixels;
+    int64_t born=0;
+};
 struct Scene{
     uint64_t serial=0,generation=0;
     uintptr_t world=0,player=0,renderer=0;
-    Vec3 anchor{},playerOrigin{};
-    int64_t appeared=0,lastFrame=0;
-    std::vector<Pixel> pixels;
-    std::vector<Pixel> previousPixels;
-    Vec3 previousAnchor{};
-    int64_t previousUntil=0;
+    Vec3 origin{};
+    int64_t lastFrame=0,previousFadeStart=0,previousUntil=0;
+    std::vector<Panel> panels,previous;
 };
 inline Scene scene; // render thread only
-inline Vec3 lyricAnchor(Pose view,uint64_t serial){
+inline std::vector<std::string> splitLyric(std::string_view text){
+    std::vector<std::string> result;
+    std::string part;
+    size_t at=0;
+    while(at<text.size()&&result.size()<8){
+        while(at<text.size()&&text[at]==' ')++at;
+        size_t end=text.find(' ',at);
+        if(end==text.npos)end=text.size();
+        if(end==at)break;
+        std::string word(text.substr(at,std::min<size_t>(end-at,22)));
+        size_t words=part.empty()?0:1;
+        for(char c:part)if(c==' ')++words;
+        if(!part.empty()&&(part.size()+word.size()+1>22||words>=4)){
+            result.push_back(std::move(part));part.clear();
+        }
+        if(!part.empty())part+=' ';
+        part+=word;at+=word.size();
+    }
+    if(!part.empty())result.push_back(std::move(part));
+    return result;
+}
+inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
     constexpr float deg=.01745329251994f;
-    const uint64_t h=(serial*0x9e3779b97f4a7c15ULL)^(serial>>13);
-    const float scatter=(float(h%1001)/1000.f-.5f)*float(lyricScatterFov.load());
-    const float yaw=(view.yaw+scatter)*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
-    const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
-    // Stable world location for this lyric, distributed across a wider area.
-    const float distance=float(lyricDistanceTenths.load())*.1f;
-    const float height=.55f+float((h>>24)%1001)/1000.f*.3f;
-    return view.position+Vec3{0,height,0}+forward*distance;
+    const uint64_t h=(seed*0x9e3779b97f4a7c15ULL)^(seed>>13);
+    const float angle=thirdPerson?float(h%3601)/10.f:
+        view.yaw+(float(h%1001)/1000.f-.5f)*float(lyricScatterFov.load());
+    float yaw=angle*deg;
+    Vec3 forward{-std::sin(yaw),0,std::cos(yaw)};
+    if(thirdPerson){
+        Vec3 toCamera=normalized({cam.x-view.position.x,0,cam.z-view.position.z});
+        float dot=forward.x*toCamera.x+forward.z*toCamera.z;
+        if(dot<-.85f){yaw+=(h&1?35.f:-35.f)*deg;forward={-std::sin(yaw),0,std::cos(yaw)};}
+    }
+    float distance=float(lyricDistanceTenths.load())*.1f+(thirdPerson?1.1f:0.f);
+    return view.position+Vec3{0,float(lyricHeightTenths.load())*.1f,0}+forward*distance;
 }
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
@@ -268,31 +296,44 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const uint64_t gen=generation.load();
     const bool reset=scene.generation!=gen||scene.world!=view.world||scene.player!=view.player
         ||scene.renderer!=reinterpret_cast<uintptr_t>(rp)||now-scene.lastFrame>1500
-        ||magnitude2(cam-scene.anchor)>1024.f;
+        ||(!scene.panels.empty()&&magnitude2(cam-scene.panels.front().anchor)>1024.f);
     if(scene.serial!=serial||reset){
-        if(scene.serial!=serial&&!reset&&!scene.pixels.empty()){
-            scene.previousPixels=std::move(scene.pixels);
-            scene.previousAnchor=scene.anchor;
-            scene.previousUntil=now+240;
-        }else if(reset){scene.previousPixels.clear();scene.previousUntil=0;}
-        scene.pixels=glyphs(latinDisplay(text));
-        scene.anchor=lyricAnchor(view,serial);
-        scene.playerOrigin=view.position;
+        if(reset){scene.previous.clear();scene.previousUntil=0;}
+        else if(scene.serial!=serial)scene.previous=std::move(scene.panels);
+        scene.panels.clear();
+        const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
+        const auto parts=splitLyric(latinDisplay(text));
+        for(size_t i=0;i<parts.size();++i){
+            Panel panel;
+            panel.anchor=lyricAnchor(view,cam,serial*17+i*89,thirdPerson);
+            panel.facing=normalized(cam-panel.anchor);
+            panel.right=normalized({panel.facing.z,0,-panel.facing.x});
+            panel.pixels=glyphs(parts[i]);
+            panel.born=now+int64_t(i)*260;
+            scene.panels.push_back(std::move(panel));
+        }
+        scene.origin=view.position;
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
-        scene.appeared=now;
+        if(!scene.previous.empty()){
+            scene.previousFadeStart=now+(text.empty()?0:
+                std::max<int64_t>(150,int64_t(scene.panels.size())*130));
+            scene.previousUntil=scene.previousFadeStart+320;
+        }
     }
-    // Do not follow camera rotation or player movement until the next line.
     scene.lastFrame=now;
-    const bool fading=now<scene.previousUntil&&!scene.previousPixels.empty();
-    if(scene.pixels.empty()&&!fading)return;
+    const bool fading=now<scene.previousUntil&&!scene.previous.empty();
+    if(scene.panels.empty()&&!fading)return;
     constexpr float scale=.011f;
     ColorGuard guard(colors);
-    tessBegin(tess,nullptr,1,int((scene.pixels.size()+(fading?scene.previousPixels.size():0))*20),0);
-    auto draw=[&](const std::vector<Pixel>& pixels,Vec3 anchor,float alpha,float lift){
+    size_t count=0;
+    for(const auto& panel:scene.panels)if(now>=panel.born)count+=panel.pixels.size();
+    if(fading)for(const auto& panel:scene.previous)if(now>=panel.born)count+=panel.pixels.size();
+    if(!count)return;
+    tessBegin(tess,nullptr,1,int(count*20),0);
+    auto draw=[&](const Panel& panel,float alpha,float lift){
         if(alpha<=0.f)return;
-        const Vec3 facing=normalized(cam-anchor);
-        const Vec3 right=normalized({facing.z,0,-facing.x}),up{0,1,0};
+        const Vec3 right=panel.right,up{0,1,0};
         auto quad=[&](Vec3 tl){
             auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
             for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
@@ -302,16 +343,19 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha*(outline?.45f:1.f));
             const float dx=pass==0?-.12f:pass==1?.12f:0.f;
             const float dy=pass==2?-.12f:pass==3?.12f:0.f;
-            auto origin=anchor-cam+up*lift+facing*(outline?0.f:.001f);
-            for(const auto& p:pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
+            auto origin=panel.anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
+            for(const auto& p:panel.pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
         }
     };
     if(fading){
-        float fade=std::clamp(float(scene.previousUntil-now)/240.f,0.f,1.f);
-        draw(scene.previousPixels,scene.previousAnchor,fade,(1.f-fade)*.12f);
+        float fade=std::clamp(float(scene.previousUntil-now)/320.f,0.f,1.f);
+        for(const auto& panel:scene.previous)if(now>=panel.born)
+            draw(panel,fade,(1.f-fade)*.12f);
     }
-    float appear=std::clamp(float(now-scene.appeared)/220.f,.05f,1.f);
-    draw(scene.pixels,scene.anchor,appear,(1.f-appear)*(-.12f));
+    for(const auto& panel:scene.panels)if(now>=panel.born){
+        float appear=std::clamp(float(now-panel.born)/220.f,.05f,1.f);
+        draw(panel,appear,(1.f-appear)*(-.12f));
+    }
     alignas(8) char texture[0x58]{};
     renderMesh(ctx,tess,&material,texture);
     if(enabled.load()&&gen==generation.load()){renderStage=4;lastDraw=now;}
@@ -485,4 +529,5 @@ inline void unload(){
     installed=false;
 }
 } // namespace lm_world3d
+
 
