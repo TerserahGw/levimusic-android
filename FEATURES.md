@@ -1,4 +1,4 @@
-# LeviMusic 1.3.3 — feature status
+# LeviMusic 1.3.4 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -58,3 +58,7 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 
 ## v1.3.3
 - Rise animation advances on the renderer clock between audio position updates, with bounded drift correction and seek detection. Each panel filters its vertical target independently. End-of-line rise is adjusted from 0.94 to about 0.62 blocks for a gentler motion.
+
+## v1.3.4
+- First Person and other cameras retain separate saved distance, height, vertical scatter, and font size controls. First Person keeps its FOV setting; the other camera mode scatters new lines over a full 360 degrees.
+- In other camera modes, ordered lyric segments occupy successive positions along an adjustable arc around the player instead of sharing a tight grid. The default distance is 3.8 blocks and line arc is 220 degrees.

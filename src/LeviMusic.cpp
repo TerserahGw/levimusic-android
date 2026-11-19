@@ -1345,7 +1345,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.3 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.4 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1367,13 +1367,18 @@ public:
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
-            .config("lyricDistance","3D Lyrics Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
-            .config("lyricHeight","3D Lyrics Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
-            .config("lyricVerticalRange","3D Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","8"),"0","15")
-            .config("lyricFontSize","3D Lyrics Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("lyricFontSize","115"),"60","200")
+            .config("lyricDistance","First Person Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
+            .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
+            .config("lyricVerticalRange","First Person Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","8"),"0","15")
+            .config("lyricFontSize","First Person Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("lyricFontSize","115"),"60","200")
+            .config("lyricScatterFov","First Person Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","100"),"0","140")
+            .config("otherDistance","Other Cameras Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherDistance","38"),"18","80")
+            .config("otherHeight","Other Cameras Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherHeight","13"),"0","40")
+            .config("otherVerticalRange","Other Cameras Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherVerticalRange","8"),"0","15")
+            .config("otherFontSize","Other Cameras Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("otherFontSize","115"),"60","200")
+            .config("otherArcSpread","Other Cameras Line Arc (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("otherArcSpread","220"),"60","330")
             .config("lyricTrailFollow","3D Lyrics Follow Player and Rise",pl::modmenu::ConfigType::Toggle,remembered("lyricTrailFollow","false"))
             .config("lyricBeats","Experimental 3D Lyrics Beats (Bridge audio)",pl::modmenu::ConfigType::Toggle,remembered("lyricBeats","false"))
-            .config("lyricScatterFov","3D Lyrics Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","100"),"0","140")
             .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,remembered("romanizeLyrics","true"))
 #if defined(LEVI_STANDALONE)
             .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,remembered("embeddedBrowser","false"))
@@ -1498,6 +1503,16 @@ private:
             cv_.notify_all();
         } else if(k=="lyricScatterFov") {
             try{lm_world3d::lyricScatterFov=std::clamp(std::stoi(std::string(v)),0,140);}catch(...){}
+        } else if(k=="otherDistance") {
+            try{lm_world3d::otherDistanceTenths=std::clamp(std::stoi(std::string(v)),18,80);}catch(...){}
+        } else if(k=="otherHeight") {
+            try{lm_world3d::otherHeightTenths=std::clamp(std::stoi(std::string(v)),0,40);}catch(...){}
+        } else if(k=="otherVerticalRange") {
+            try{lm_world3d::otherVerticalRangeTenths=std::clamp(std::stoi(std::string(v)),0,15);}catch(...){}
+        } else if(k=="otherFontSize") {
+            try{lm_world3d::otherFontPercent=std::clamp(std::stoi(std::string(v)),60,200);}catch(...){}
+        } else if(k=="otherArcSpread") {
+            try{lm_world3d::otherArcSpread=std::clamp(std::stoi(std::string(v)),60,330);}catch(...){}
         } else if(k=="embeddedBrowser") {
             browserEnabled_=v=="true"||v=="1";
         } else if(k=="floatingLyrics") {

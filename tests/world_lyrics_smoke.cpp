@@ -54,6 +54,26 @@ int main(){
     auto third=lyricAnchor(pose,{100.f,68.f,196.f},47,true);
     assert(magnitude2(third-thirdNarrow)<.0001f);
     assert(magnitude2(third-pose.position)>magnitude2(firstWide-pose.position));
+    otherDistanceTenths=52;
+    auto farther=lyricAnchor(pose,{100.f,68.f,196.f},47,true);
+    assert(magnitude2(farther-third)>1.f);
+    assert(magnitude2(lyricAnchor(pose,cam,47,false)-firstWide)<.0001f);
+    otherDistanceTenths=38;
+    otherHeightTenths=25;
+    assert(std::abs(lyricAnchor(pose,{100.f,68.f,196.f},47,true).y-third.y-1.2f)<.001f);
+    assert(magnitude2(lyricAnchor(pose,cam,47,false)-firstWide)<.0001f);
+    otherHeightTenths=13;
+    auto orbitBase=lyricAnchor(pose,{100.f,68.f,196.f},79,true);
+    auto firstOrbit=orbitAnchor(pose,orbitBase,0,8);
+    auto lastOrbit=orbitAnchor(pose,orbitBase,7,8);
+    assert(magnitude2(lastOrbit-firstOrbit)>9.f);
+    for(size_t i=1;i<8;++i){
+        auto a=orbitAnchor(pose,orbitBase,i-1,8)-pose.position;
+        auto b=orbitAnchor(pose,orbitBase,i,8)-pose.position;
+        assert(a.x*b.z-a.z*b.x>0.f); // reading order travels around the player
+        assert(magnitude2(a-b)>1.f);
+        assert(std::abs(std::hypot(b.x,b.z)-3.8f)<.001f);
+    }
     lyricVerticalRangeTenths=0;
     auto levelAnchor=lyricAnchor(pose,cam,47,false);
     lyricVerticalRangeTenths=15;
@@ -101,6 +121,15 @@ int main(){
     assert(scene.previousFadeStart>nowMs());
     for(size_t i=1;i<scene.panels.size();++i)
         assert(magnitude2(scene.panels[i].anchor-scene.panels[i-1].anchor)>.1f);
+    // A new line in another camera mode uses its own font and orbit layout.
+    cam={100.f,68.f,196.f};ptr(rp,profile->camera,cam);
+    otherFontPercent=140;
+    publish("THIS LINE SPLITS INTO SEVERAL ORDERED PARTS AROUND THE PLAYER",0,5000,600,true);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.panels.size()>4&&scene.panels[0].fontPercent==140);
+    for(size_t i=1;i<scene.panels.size();++i)
+        assert(magnitude2(scene.panels[i].anchor-scene.panels[i-1].anchor)>1.f);
+    otherFontPercent=115;
     lyricTrailFollow=true;
     auto trail=scene.panels.front().anchor;
     scene.filteredPlayer=scene.panels.front().spawnPlayer;
@@ -118,17 +147,17 @@ int main(){
     scene.panels[1].born=nowMs();scene.panels[1].partIndex=4;
     beatPulseSerial=1;beatPulseTime=nowMs();
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==7&&declared>0&&maxChroma>.1f);
+    assert(meshes==8&&declared>0&&maxChroma>.1f);
     assert(scene.panels[1].appeared>0&&scene.panels[1].entryStrength>.4f);
     experimentalBeats=false;
     publish("");
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==8&&!scene.previous.empty());
+    assert(meshes==9&&!scene.previous.empty());
     scene.previousUntil=nowMs()-1;
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==8);
+    assert(meshes==9);
     enabled=false;renderHook(renderer.data(),screen.data(),nullptr);
-    assert(originals==10&&meshes==8);
+    assert(originals==11&&meshes==9);
     return 0;
 }
 

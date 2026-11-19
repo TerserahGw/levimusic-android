@@ -40,6 +40,9 @@ inline std::atomic<uint64_t> generation{0};
 inline std::atomic<int> lyricDistanceTenths{22},lyricScatterFov{100};
 inline std::atomic<int> lyricHeightTenths{13};
 inline std::atomic<int> lyricVerticalRangeTenths{8},lyricFontPercent{115};
+inline std::atomic<int> otherDistanceTenths{38},otherHeightTenths{13};
+inline std::atomic<int> otherVerticalRangeTenths{8},otherFontPercent{115};
+inline std::atomic<int> otherArcSpread{220};
 inline std::atomic<bool> lyricTrailFollow{false},experimentalBeats{false};
 inline std::atomic<float> beatStrength{0.f};
 inline std::atomic<int64_t> beatUpdated{0};
@@ -244,6 +247,7 @@ struct Panel{
     int partIndex=0,partCount=1;
     int cueStart=0,cueEnd=1;
     float visualLift=0.f;
+    int fontPercent=115;
     size_t letters=0;
     float width=0;
 };
@@ -317,11 +321,13 @@ inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
         float dot=forward.x*toCamera.x+forward.z*toCamera.z;
         if(dot<-.85f){yaw+=(h&1?35.f:-35.f)*deg;forward={-std::sin(yaw),0,std::cos(yaw)};}
     }
-    float distance=float(lyricDistanceTenths.load())*.1f+(thirdPerson?1.1f:0.f);
-    const int range=std::clamp(lyricVerticalRangeTenths.load(),0,15);
+    float distance=float(thirdPerson?otherDistanceTenths.load():lyricDistanceTenths.load())*.1f;
+    const int range=std::clamp(thirdPerson?otherVerticalRangeTenths.load():
+        lyricVerticalRangeTenths.load(),0,15);
     const uint64_t vertical=((seed^0xd1b54a32d192ed03ULL)*0x94d049bb133111ebULL)>>24;
     const float offset=range?float(int(vertical%uint64_t(2*range+1))-range)*.1f:0.f;
-    return view.position+Vec3{0,float(lyricHeightTenths.load())*.1f+offset,0}+forward*distance;
+    const int height=thirdPerson?otherHeightTenths.load():lyricHeightTenths.load();
+    return view.position+Vec3{0,float(height)*.1f+offset,0}+forward*distance;
 }
 // Compare directions on the camera image as well as physical separation: panels
 // behind one another are unreadable even when their anchors are far apart.
@@ -345,6 +351,24 @@ inline Vec3 layoutAnchor(Vec3 base,Vec3 right,size_t index,size_t count,float st
     const size_t inRow=std::min(cols,count-row*cols);
     return base+right*((float(col)-float(inRow-1)*.5f)*step)
         +Vec3{0,(float(rows-1)*.5f-float(row))*.31f,0};
+}
+// Non-first-person lyrics travel clockwise around the player. Each line may
+// start anywhere in 360 degrees, while its own pieces keep an obvious order.
+inline Vec3 orbitAnchor(Pose view,Vec3 base,size_t index,size_t count){
+    if(count<=1)return base;
+    const float deg=.01745329251994f;
+    const float center=std::atan2(-(base.x-view.position.x),base.z-view.position.z);
+    const float arc=float(std::min<int>(otherArcSpread.load(),
+        std::max<int>(40,int(count-1)*26)))*deg;
+    const float fraction=float(index)/float(count-1);
+    const float yaw=center+(fraction-.5f)*arc;
+    const float distance=float(otherDistanceTenths.load())*.1f;
+    const float baseY=view.position.y+float(otherHeightTenths.load())*.1f;
+    const float range=float(std::clamp(otherVerticalRangeTenths.load(),0,15))*.1f;
+    const float offset=std::clamp((base.y-baseY)*.35f+(.5f-fraction)*
+        std::min(range*1.2f,.9f),-range,range);
+    return {view.position.x-std::sin(yaw)*distance,baseY+offset,
+            view.position.z+std::cos(yaw)*distance};
 }
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
@@ -388,9 +412,14 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         scene.panels.clear();
         const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
         const auto parts=splitLyric(latinDisplay(text));
-        const float step=.2f+float(std::clamp(lyricFontPercent.load(),60,200))*.01f*.66f;
-        const size_t columns=thirdPerson?4:
-            lyricScatterFov.load()<50?2:lyricFontPercent.load()>145?3:4;
+        const int fontPercent=std::clamp(thirdPerson?otherFontPercent.load():
+            lyricFontPercent.load(),60,200);
+        const float step=.2f+float(fontPercent)*.01f*.66f;
+        const size_t columns=lyricScatterFov.load()<50?2:fontPercent>145?3:4;
+        auto place=[&](Vec3 candidate,Vec3 right,size_t index){
+            return thirdPerson?orbitAnchor(view,candidate,index,parts.size()):
+                layoutAnchor(candidate,right,index,parts.size(),step,columns);
+        };
         Vec3 base{};float best=-1.f;
         for(size_t attempt=0;attempt<40&&!parts.empty();++attempt){
             Vec3 candidate=lyricAnchor(view,cam,serial*733+attempt*137,thirdPerson);
@@ -398,8 +427,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             Vec3 right=normalized({facing.z,0,-facing.x});
             float score=100.f;
             if(!scene.previous.empty())for(size_t i=0;i<parts.size();++i){
-                Vec3 point=layoutAnchor(candidate,right,i,parts.size(),step,columns);
-                float width=float(parts[i].size())*6.f*.011f*float(lyricFontPercent.load())*.01f;
+                Vec3 point=place(candidate,right,i);
+                float width=float(parts[i].size())*6.f*.011f*float(fontPercent)*.01f;
                 for(const auto& old:scene.previous){
                     Vec3 occupied=old.visualAnchor;
                     if(lyricTrailFollow.load()){
@@ -419,9 +448,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             Panel panel;
             panel.partIndex=int(i);panel.partCount=int(parts.size());
             panel.cueStart=start;panel.cueEnd=end;
+            panel.fontPercent=fontPercent;
             panel.letters=parts[i].size();
-            panel.width=float(panel.letters)*6.f*.011f*float(lyricFontPercent.load())*.01f;
-            panel.anchor=layoutAnchor(base,right,i,parts.size(),step,columns);
+            panel.width=float(panel.letters)*6.f*.011f*float(fontPercent)*.01f;
+            panel.anchor=place(base,right,i);
             panel.visualAnchor=panel.anchor;
             panel.spawnPlayer=view.position;
             panel.facing=normalized(cam-panel.anchor);
@@ -479,7 +509,6 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }
     const bool fading=now<scene.previousUntil&&!scene.previous.empty();
     if(scene.panels.empty()&&!fading)return;
-    const float baseScale=.011f*float(std::clamp(lyricFontPercent.load(),60,200))*.01f;
     ColorGuard guard(colors);
     size_t count=0;
     int currentPart=-1;
@@ -492,6 +521,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     tessBegin(tess,nullptr,1,int(count*20),0);
     auto draw=[&](const Panel& panel,float alpha,float lift){
         if(alpha<=0.f)return;
+        const float baseScale=.011f*float(panel.fontPercent)*.01f;
         const float entryAge=std::max(0.f,float(now-panel.appeared));
         const float pulseFade=1.f-smoothstep(entryAge/340.f);
         const float scale=baseScale*std::clamp(1.06f-float(panel.letters)*.006f,.94f,1.04f)
