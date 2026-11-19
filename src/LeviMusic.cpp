@@ -512,9 +512,11 @@ std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, co
             int score=0;
             if(!actualTitle.empty()){
                 const auto a=lower(actualTitle),b=lower(songTitle);
-                score += a==b?30000:(a.find(b)!=std::string::npos ||
-                                      b.find(a)!=std::string::npos?9000:-13000);
-            }
+                const bool titleMatch=a==b || (std::min(a.size(),b.size())>=4 &&
+                    (a.find(b)!=std::string::npos || b.find(a)!=std::string::npos));
+                if(!titleMatch){env->DeleteLocalRef(obj);continue;}
+                score+=a==b?30000:9000;
+            } else {env->DeleteLocalRef(obj);continue;}
             if(!songArtist.empty()&&!actualArtist.empty()){
                 const auto a=lower(actualArtist),b=lower(songArtist);
                 score += a==b?18000:(a.find(b)!=std::string::npos ||
