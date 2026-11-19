@@ -1071,6 +1071,43 @@ std::string clipboardToken(JNIEnv* env) {
     return validToken(token)?token:std::string{};
 }
 
+std::string automaticBridgeToken(JNIEnv* env){
+    // The companion provider checks Binder's caller UID against Minecraft.
+    // A separate Android app cannot read the key simply by calling the URI.
+    std::vector<jobject> refs;
+    auto keep=[&](jobject ref){if(ref)refs.push_back(ref);return ref;};
+    auto done=[&](std::string value){
+        clearException(env,"automatic bridge token");
+        for(auto it=refs.rbegin();it!=refs.rend();++it)env->DeleteLocalRef(*it);
+        return validToken(value)?value:std::string{};
+    };
+    jclass thread=(jclass)keep(env->FindClass("android/app/ActivityThread"));
+    if(!thread||clearException(env,"bridge ActivityThread"))return done({});
+    auto current=env->GetStaticMethodID(thread,"currentApplication","()Landroid/app/Application;");
+    if(!current||clearException(env,"bridge currentApplication"))return done({});
+    jobject app=keep(env->CallStaticObjectMethod(thread,current));
+    if(!app||clearException(env,"bridge application"))return done({});
+    jclass context=(jclass)keep(env->GetObjectClass(app));
+    auto getResolver=env->GetMethodID(context,"getContentResolver","()Landroid/content/ContentResolver;");
+    if(!getResolver||clearException(env,"bridge resolver method"))return done({});
+    jobject resolver=keep(env->CallObjectMethod(app,getResolver));
+    if(!resolver||clearException(env,"bridge resolver"))return done({});
+    jclass resolverClass=(jclass)keep(env->GetObjectClass(resolver));
+    auto call=env->GetMethodID(resolverClass,"call","(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Landroid/os/Bundle;)Landroid/os/Bundle;");
+    if(!call||clearException(env,"bridge provider method"))return done({});
+    jstring authority=(jstring)keep(env->NewStringUTF("com.reaaurelis.levimusic.bridge.token"));
+    jstring method=(jstring)keep(env->NewStringUTF("getToken"));
+    jobject answer=keep(env->CallObjectMethod(resolver,call,authority,method,nullptr,nullptr));
+    if(!answer||clearException(env,"bridge provider call"))return done({});
+    jclass bundle=(jclass)keep(env->GetObjectClass(answer));
+    auto getString=env->GetMethodID(bundle,"getString","(Ljava/lang/String;)Ljava/lang/String;");
+    if(!getString||clearException(env,"bridge token method"))return done({});
+    jstring field=(jstring)keep(env->NewStringUTF("token"));
+    jstring value=(jstring)keep(env->CallObjectMethod(answer,getString,field));
+    if(!value||clearException(env,"bridge token value"))return done({});
+    return done(fromJava(env,value));
+}
+
 /**
  * Loads a Java WebView panel directly from browser.dex bundled in the standalone
  * .levipack. No companion APK is needed. This is experimental and opt-in; it
@@ -1291,7 +1328,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.11 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.12 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2102,6 +2139,7 @@ private:
         };
         auto lastPaint=std::chrono::steady_clock::now();
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
+        auto lastAutoBridge=std::chrono::steady_clock::now()-std::chrono::seconds(10);
         auto lastQueue=std::chrono::steady_clock::now()-std::chrono::seconds(3);
         std::string previousId,previousTitle,previousArtist,previousProvider,previousArt;
         bool lastBridgeConnected=false;
@@ -2138,6 +2176,20 @@ private:
             if(useBridge_) {
                 std::string key;
                 {std::lock_guard lock(mu_);key=bridgeKey_;}
+                if(std::chrono::steady_clock::now()-lastAutoBridge>std::chrono::seconds(8)){
+                    lastAutoBridge=std::chrono::steady_clock::now();
+                    const std::string found=automaticBridgeToken(env);
+                    if(validToken(found)&&found!=key&&!bridgeGet("/v1/health",found).empty()){
+                        key=found;
+                        try{
+                            std::filesystem::create_directories(self_.getConfigDir());
+                            std::ofstream file(self_.getConfigDir()/"bridge.token",std::ios::trunc);
+                            if(file)file<<found;
+                        }catch(...){}
+                        {std::lock_guard lock(mu_);bridgeKey_=found;}
+                        update("LeviMusic connected","Android Bridge","Connected automatically");
+                    }
+                }
                 if(hasJob) {
                     std::string action;
                     switch(job.action) {

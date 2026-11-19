@@ -7,8 +7,8 @@ android {
         applicationId 'com.reaaurelis.levimusic.bridge'
         minSdk 28
         targetSdk 34
-        versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10211')
-        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.2.11')
+        versionCode Integer.parseInt(System.getenv('LEVIMUSIC_ANDROID_VERSION_CODE') ?: '10212')
+        versionName (System.getenv('LEVIMUSIC_ANDROID_VERSION_NAME') ?: '1.2.12')
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17

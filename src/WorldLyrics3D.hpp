@@ -229,8 +229,12 @@ inline Vec3 lyricAnchor(Pose view,uint64_t serial){
     const float yaw=view.yaw*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
     const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
     const Vec3 side{-std::cos(yaw),0,-std::sin(yaw)};
-    return view.position+Vec3{0,1.6f,0}+forward*3.0f
-        +side*(float(int(serial%3)-1)*.35f);
+    // Stable world location for this lyric, distributed across a wider area.
+    const uint64_t h=(serial*0x9e3779b97f4a7c15ULL)^(serial>>13);
+    const float lateral=(float(h%1001)/1000.f-.5f)*3.4f;
+    const float distance=2.7f+float((h>>12)%1001)/1000.f*1.2f;
+    const float height=.55f+float((h>>24)%1001)/1000.f*.3f;
+    return view.position+Vec3{0,height,0}+forward*distance+side*lateral;
 }
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
@@ -270,7 +274,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         scene.appeared=now;
     }
-    else {scene.anchor=lyricAnchor(view,serial);scene.playerOrigin=view.position;}
+    // Do not follow camera rotation or player movement until the next line.
     scene.lastFrame=now;
     if(scene.pixels.empty())return;
     const Vec3 facing=normalized(cam-scene.anchor);
