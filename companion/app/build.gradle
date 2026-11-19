@@ -14,6 +14,11 @@ android {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
+    packaging {
+        resources {
+            pickFirsts += ['META-INF/CONTRIBUTORS.md', 'META-INF/LICENSE.md', 'META-INF/NOTICE.md']
+        }
+    }
     // The same private GitHub Actions signing key must be reused for every APK.
     signingConfigs {
         release {
