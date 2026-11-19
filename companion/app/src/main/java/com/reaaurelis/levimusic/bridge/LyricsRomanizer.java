@@ -44,6 +44,7 @@ public final class LyricsRomanizer {
     }
     private static String mora(char c){
         if(c>=0x3041&&c<=0x3096)c=(char)(c+0x60);
+        if(c=='ヴ')return "vu";
         final String kana="アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲンガギグゲゴザジズゼゾダヂヅデドバビブベボパピプペポ";
         final String[] latin={"a","i","u","e","o","ka","ki","ku","ke","ko","sa","shi","su","se","so","ta","chi","tsu","te","to","na","ni","nu","ne","no","ha","hi","fu","he","ho","ma","mi","mu","me","mo","ya","yu","yo","ra","ri","ru","re","ro","wa","o","n","ga","gi","gu","ge","go","za","ji","zu","ze","zo","da","ji","zu","de","do","ba","bi","bu","be","bo","pa","pi","pu","pe","po"};
         int at=kana.indexOf(c);
@@ -79,6 +80,22 @@ public final class LyricsRomanizer {
                     else if(part.equals("ji"))stem="j";
                     boolean special=part.equals("shi")||part.equals("chi")||part.equals("ji");
                     part=stem+(special?(next=='ャ'?"a":next=='ュ'?"u":"o"):(next=='ャ'?"ya":next=='ュ'?"yu":"yo"));i++;
+                } else {
+                    String small="ァィゥェォ";
+                    int vowel=small.indexOf(next);
+                    if(vowel>=0){
+                        String[] sounds={"a","i","u","e","o"};
+                        String stem=null;
+                        if(part.equals("fu"))stem="f";
+                        else if(part.equals("vu"))stem="v";
+                        else if(part.equals("te")||part.equals("to"))stem="t";
+                        else if(part.equals("de")||part.equals("do"))stem="d";
+                        else if(part.equals("shi"))stem="sh";
+                        else if(part.equals("chi"))stem="ch";
+                        else if(part.equals("ji"))stem="j";
+                        else if(part.equals("u"))stem="w";
+                        if(stem!=null){part=stem+sounds[vowel];i++;}
+                    }
                 }
             }
             if(geminate){
