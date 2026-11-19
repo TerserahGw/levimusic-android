@@ -17,7 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 
-/** Local LRC, LRCLIB, NetEase and original-video captions, in that order. */
+/** Local LRC, word-timed TTML, LRCLIB, NetEase and original-video captions. */
 public final class LyricsFinder {
     private static final String TAG="LeviMusicLyrics";
     private LyricsFinder(){}
@@ -28,7 +28,7 @@ public final class LyricsFinder {
         try{
             URLConnection connection=new URL(address).openConnection();
             connection.setConnectTimeout(4500);connection.setReadTimeout(6500);
-            connection.setRequestProperty("User-Agent","LeviMusic/1.2.7 (Android; lyrics client)");
+            connection.setRequestProperty("User-Agent","LeviMusic/1.3.0 (Android; lyrics client)");
             try(InputStream stream=connection.getInputStream()){
                 byte[] data=stream.readNBytes(500000);
                 return new String(data,StandardCharsets.UTF_8);
@@ -66,6 +66,36 @@ public final class LyricsFinder {
     }
     private static boolean hasTimedLyrics(String raw){
         return raw!=null&&raw.matches("(?s).*\\[\\d{1,3}:\\d{2}(?:[.\\:]\\d+)?\\].*");
+    }
+    // The public lrc.red catalogue indexes Apple-style TTML by recording ISRC.
+    // Match the recording before requesting its document to avoid wrong edits.
+    private static String lrcRed(String title,String artist,int duration){
+        try{
+            JSONObject search=new JSONObject(fetch("https://lrc.red/search.json?q="+enc(title+" "+artist)));
+            JSONArray hits=search.optJSONArray("hits");if(hits==null)return "";
+            int best=-1;String isrc="";
+            for(int i=0;i<Math.min(hits.length(),30);i++){
+                JSONObject hit=hits.optJSONObject(i);if(hit==null)continue;
+                String code=hit.optString("isrc").toUpperCase(Locale.ROOT);
+                if(!code.matches("[A-Z]{2}[A-Z0-9]{3}\\d{7}"))continue;
+                if(!normalize(title).equals(normalize(hit.optString("title"))))continue;
+                double seconds=hit.optDouble("duration",0);
+                if(duration>0&&seconds>0&&Math.abs(duration/1000.0-seconds)>3.0)continue;
+                int rank=score(title,artist,duration,hit.optString("title"),
+                    hit.optString("artist"),(long)(seconds*1000));
+                if(rank>best){best=rank;isrc=code;}
+            }
+            if(best<130||isrc.isEmpty())return "";
+            return WordTimedTtml.convert(fetch("https://lrc.red/s/"+isrc+".ttml"));
+        }catch(Exception ignored){return "";}
+    }
+    private static String betterLyrics(String title,String artist,int duration){
+        if(title.isEmpty()||artist.isEmpty()||duration<=0)return "";
+        try{
+            JSONObject answer=new JSONObject(fetch("https://lyrics-api.boidu.dev/getLyrics?s="+
+                enc(title)+"&a="+enc(artist)+"&d="+duration/1000));
+            return WordTimedTtml.convert(answer.optString("ttml"));
+        }catch(Exception ignored){return "";}
     }
     private static String lrclib(String title,String artist,int duration){
         try{
@@ -167,6 +197,8 @@ public final class LyricsFinder {
     }
     public static JSONObject find(Context context,String title,String artist,int duration,String videoUrl,String language){
         String raw=LyricsStore.get(context,title,artist),source="local LRC";
+        if(raw.isEmpty()){raw=lrcRed(title,artist,duration);source="lrc.red (word-timed)";}
+        if(raw.isEmpty()){raw=betterLyrics(title,artist,duration);source="BetterLyrics (word-timed)";}
         if(raw.isEmpty()){raw=lrclib(title,artist,duration);source="LRCLIB";}
         if(raw.isEmpty()){raw=netease(title,artist,duration);source="NetEase";}
         if(raw.isEmpty()){raw=captions(videoUrl);source="YouTube captions";}
@@ -177,3 +209,4 @@ public final class LyricsFinder {
         return result;
     }
 }
+

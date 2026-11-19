@@ -138,7 +138,7 @@ public final class LyricsRomanizer {
         for(String row:raw.split("\\r?\\n")){
             int bracket=row.lastIndexOf(']');
             if(bracket<0||!row.startsWith("["))continue;
-            String reading=line(row.substring(bracket+1),language);
+            String reading=line(row.substring(bracket+1).replaceAll("<\\d{1,3}:\\d{2}[.:]\\d{2,3}>",""),language);
             if(!reading.isEmpty())out.append(row,0,bracket+1).append(reading).append('\n');
         }
         return out.toString();
@@ -151,6 +151,7 @@ public final class LyricsRomanizer {
             if(row.trim().isEmpty())continue;
             int bracket=row.lastIndexOf(']');
             String original=bracket>=0&&row.startsWith("[")?row.substring(bracket+1):row;
+            original=original.replaceAll("<\\d{1,3}:\\d{2}[.:]\\d{2,3}>","");
             if(original.isEmpty())continue;
             output.append(original.trim()).append('\n');
             if(enabled){

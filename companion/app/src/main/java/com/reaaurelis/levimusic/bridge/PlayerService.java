@@ -8,6 +8,9 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.media.AudioManager;
+import android.media.audiofx.Visualizer;
+import android.Manifest;
+import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -42,6 +45,10 @@ public final class PlayerService extends MediaSessionService {
     private final ExecutorService resolver=Executors.newSingleThreadExecutor();
     private final ExecutorService radioWorker=Executors.newSingleThreadExecutor();
     private ExoPlayer player;
+    private Visualizer beatVisualizer;
+    private int beatSession=-1;
+    private volatile float beatValue=0f;
+    private volatile boolean beatEnabled=false;
     private MediaSession session;
     private volatile MusicCatalog.Song song;
     private volatile long positionMs=0L,durationMs=0L;
@@ -54,6 +61,57 @@ public final class PlayerService extends MediaSessionService {
     private boolean radioFilling=false, pendingNext=false;
 
     public static boolean isActive(){return active!=null;}
+    public static void setBeatEnabled(boolean enabled){
+        PlayerService current=active;
+        if(current!=null)current.handler.post(()->{
+            current.beatEnabled=enabled;
+            if(!enabled)current.releaseBeat();
+        });
+    }
+    public static JSONObject getBeatStatus(Context context){
+        PlayerService current=active;
+        boolean permitted=context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)==PackageManager.PERMISSION_GRANTED;
+        JSONObject result=new JSONObject();
+        try{result.put("enabled",current!=null&&current.beatEnabled)
+            .put("available",current!=null&&current.beatVisualizer!=null&&permitted)
+            .put("permissionRequired",!permitted)
+            .put("strength",current==null?0:current.beatValue);}
+        catch(Exception ignored){}
+        return result;
+    }
+    private void releaseBeat(){
+        beatValue=0f;beatSession=-1;
+        if(beatVisualizer!=null){
+            try{beatVisualizer.setEnabled(false);beatVisualizer.release();}catch(RuntimeException ignored){}
+            beatVisualizer=null;
+        }
+    }
+    private void captureBeat(){
+        if(!beatEnabled||player==null||!player.isPlaying()
+            ||checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED){
+            beatValue=0f;return;
+        }
+        int session=player.getAudioSessionId();
+        if(session<=0){beatValue=0f;return;}
+        if(beatVisualizer==null||beatSession!=session){
+            releaseBeat();
+            try{
+                beatVisualizer=new Visualizer(session);
+                beatVisualizer.setCaptureSize(Visualizer.getCaptureSizeRange()[0]);
+                beatVisualizer.setEnabled(true);beatSession=session;
+            }catch(RuntimeException ex){releaseBeat();return;}
+        }
+        try{
+            byte[] wave=new byte[beatVisualizer.getCaptureSize()];
+            if(beatVisualizer.getWaveForm(wave)!=Visualizer.SUCCESS)return;
+            // Waveform amplitude is real audio data from this player's session.
+            // Smooth the release so short transients remain visible for a frame.
+            double sum=0;
+            for(byte sample:wave){int centered=(sample&255)-128;sum+=centered*centered;}
+            float rms=(float)Math.sqrt(sum/wave.length)/65f;
+            beatValue=Math.max(Math.min(1f,rms),beatValue*.74f);
+        }catch(RuntimeException ex){releaseBeat();}
+    }
     public static JSONObject getStatus() {
         PlayerService current=active;
         if(current==null || current.song==null)return null;
@@ -199,8 +257,9 @@ public final class PlayerService extends MediaSessionService {
                     positionMs=Math.max(0,player.getCurrentPosition());
                     durationMs=Math.max(0,player.getDuration());
                     playing=player.isPlaying();
+                    captureBeat();
                 }catch(RuntimeException ignored){}
-                handler.postDelayed(this,400);
+                handler.postDelayed(this,beatEnabled?90:400);
             }
         }
     };
@@ -299,6 +358,7 @@ public final class PlayerService extends MediaSessionService {
     @Override public MediaSession onGetSession(MediaSession.ControllerInfo info){return session;}
     @Override public void onDestroy(){
         active=null;
+        releaseBeat();
         handler.removeCallbacks(snapshot);
         resolver.shutdownNow();
         radioWorker.shutdownNow();
@@ -307,3 +367,4 @@ public final class PlayerService extends MediaSessionService {
         super.onDestroy();
     }
 }
+

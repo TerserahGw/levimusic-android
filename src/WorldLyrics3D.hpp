@@ -39,6 +39,10 @@ inline std::atomic<int> matchingBindings{0}; // largest complete prefix of audit
 inline std::atomic<uint64_t> generation{0};
 inline std::atomic<int> lyricDistanceTenths{22},lyricScatterFov{100};
 inline std::atomic<int> lyricHeightTenths{13};
+inline std::atomic<int> lyricVerticalRangeTenths{8},lyricFontPercent{115};
+inline std::atomic<bool> lyricTrailFollow{false},experimentalBeats{false};
+inline std::atomic<float> beatStrength{0.f};
+inline std::atomic<int64_t> beatUpdated{0};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
 inline const Profile* profile=nullptr;
@@ -174,7 +178,7 @@ inline std::string latinDisplay(std::string_view s){
     }
     return out;
 }
-struct Pixel{float x,y;};
+struct Pixel{float x,y;uint8_t word=0;};
 inline std::vector<Pixel> glyphs(std::string_view text){
     std::vector<Pixel> result;result.reserve(2200);
     // Two bounded rows, up to 32 Latin glyphs in each.
@@ -183,10 +187,12 @@ inline std::vector<Pixel> glyphs(std::string_view text){
         if(text.size()>n){auto space=text.rfind(' ',n);if(space!=text.npos&&space>12)n=space;}
         const auto slice=text.substr(0,n);
         const float left=-float(slice.size()*6-1)*.5f;
+        uint8_t word=0;
         for(size_t k=0;k<slice.size();++k){
+            if(slice[k]==' '){++word;continue;}
             auto map=bitmap(slice[k]);
             for(int y=0;y<7;++y)for(int x=0;x<5;++x)
-                if(map[y][x]=='#')result.push_back({left+float(k*6+x),float(row?-8:2)+float(6-y)});
+                if(map[y][x]=='#')result.push_back({left+float(k*6+x),float(row?-8:2)+float(6-y),word});
         }
         text.remove_prefix(n);
         while(!text.empty()&&text.front()==' ')text.remove_prefix(1);
@@ -222,11 +228,15 @@ struct Panel{
     Vec3 anchor{},right{},facing{};
     std::vector<Pixel> pixels;
     int64_t born=0;
+    size_t letters=0;
+    float width=0;
+    std::array<uint8_t,8> wordLengths{};
 };
 struct Scene{
     uint64_t serial=0,generation=0;
     uintptr_t world=0,player=0,renderer=0;
     Vec3 origin{};
+    Vec3 lastPlayer{};
     int64_t lastFrame=0,previousFadeStart=0,previousUntil=0;
     std::vector<Panel> panels,previous;
 };
@@ -265,7 +275,22 @@ inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
         if(dot<-.85f){yaw+=(h&1?35.f:-35.f)*deg;forward={-std::sin(yaw),0,std::cos(yaw)};}
     }
     float distance=float(lyricDistanceTenths.load())*.1f+(thirdPerson?1.1f:0.f);
-    return view.position+Vec3{0,float(lyricHeightTenths.load())*.1f,0}+forward*distance;
+    const int range=std::clamp(lyricVerticalRangeTenths.load(),0,15);
+    const uint64_t vertical=((seed^0xd1b54a32d192ed03ULL)*0x94d049bb133111ebULL)>>24;
+    const float offset=range?float(int(vertical%uint64_t(2*range+1))-range)*.1f:0.f;
+    return view.position+Vec3{0,float(lyricHeightTenths.load())*.1f+offset,0}+forward*distance;
+}
+// Compare directions on the camera image as well as physical separation: panels
+// behind one another are unreadable even when their anchors are far apart.
+inline float panelClearance(Vec3 candidate,float width,Vec3 cam,const Panel& other){
+    Vec3 a=candidate-cam,b=other.anchor-cam;
+    float da=std::sqrt(magnitude2(a)),db=std::sqrt(magnitude2(b));
+    if(da<.01f||db<.01f)return -1.f;
+    float horizontal=std::abs(a.x/da-b.x/db)+std::abs(a.z/da-b.z/db);
+    float vertical=std::abs(a.y/da-b.y/db);
+    const float minH=(width+other.width)*.5f/std::min(da,db)+.07f;
+    const float minV=.18f/std::min(da,db)+.035f;
+    return std::max(horizontal/minH,vertical/minV);
 }
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
@@ -305,7 +330,26 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         const auto parts=splitLyric(latinDisplay(text));
         for(size_t i=0;i<parts.size();++i){
             Panel panel;
-            panel.anchor=lyricAnchor(view,cam,serial*17+i*89,thirdPerson);
+            panel.letters=parts[i].size();
+            size_t word=0;
+            for(char c:parts[i]){
+                if(c==' '){word=std::min<size_t>(word+1,7);continue;}
+                if(panel.wordLengths[word]<255)++panel.wordLengths[word];
+            }
+            panel.width=float(panel.letters)*6.f*.011f*float(lyricFontPercent.load())*.01f;
+            float best=-1.f;
+            // Include lyrics still fading from the previous line. A candidate
+            // is chosen before its first frame, so fixed mode never jitters.
+            for(size_t attempt=0;attempt<32;++attempt){
+                Vec3 candidate=lyricAnchor(view,cam,serial*733+i*89+attempt*137,thirdPerson);
+                float score=100.f;
+                for(const auto& old:scene.previous)
+                    score=std::min(score,panelClearance(candidate,panel.width,cam,old));
+                for(const auto& placed:scene.panels)
+                    score=std::min(score,panelClearance(candidate,panel.width,cam,placed));
+                if(score>best){best=score;panel.anchor=candidate;}
+                if(score>=1.f)break;
+            }
             panel.facing=normalized(cam-panel.anchor);
             panel.right=normalized({panel.facing.z,0,-panel.facing.x});
             panel.pixels=glyphs(parts[i]);
@@ -313,6 +357,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             scene.panels.push_back(std::move(panel));
         }
         scene.origin=view.position;
+        scene.lastPlayer=view.position;
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         if(!scene.previous.empty()){
@@ -322,9 +367,23 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         }
     }
     scene.lastFrame=now;
+    if(lyricTrailFollow.load()){
+        Vec3 delta=view.position-scene.lastPlayer;
+        // Teleports and dimension changes must not drag old text across worlds.
+        if(magnitude2(delta)<16.f){
+            auto follow=[&](std::vector<Panel>& panels){for(auto& p:panels){
+                float age=std::max(0.f,float(now-p.born));
+                p.anchor=p.anchor+delta*std::clamp(1.f-age/6500.f,.07f,.85f);
+            }};
+            follow(scene.panels);follow(scene.previous);
+        }
+    }
+    scene.lastPlayer=view.position;
     const bool fading=now<scene.previousUntil&&!scene.previous.empty();
     if(scene.panels.empty()&&!fading)return;
-    constexpr float scale=.011f;
+    const float baseScale=.011f*float(std::clamp(lyricFontPercent.load(),60,200))*.01f;
+    const bool beats=experimentalBeats.load()&&now-beatUpdated.load()<1200;
+    const float beat=beats?std::clamp(beatStrength.load(),0.f,1.f):0.f;
     ColorGuard guard(colors);
     size_t count=0;
     for(const auto& panel:scene.panels)if(now>=panel.born)count+=panel.pixels.size();
@@ -333,18 +392,31 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     tessBegin(tess,nullptr,1,int(count*20),0);
     auto draw=[&](const Panel& panel,float alpha,float lift){
         if(alpha<=0.f)return;
-        const Vec3 right=panel.right,up{0,1,0};
-        auto quad=[&](Vec3 tl){
-            auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
+        const float age=std::max(0.f,float(now-panel.born));
+        const float scale=baseScale*(1.f+(beats?beat*.34f:0.f))*(beats?
+            std::clamp(1.12f-float(panel.letters)*.008f,.82f,1.1f):1.f);
+        const float tilt=beats?std::sin(float(now)*.013f+float(panel.letters))*.19f*beat:0.f;
+        const Vec3 right=panel.right*std::cos(tilt)+Vec3{0,1,0}*std::sin(tilt);
+        const Vec3 up=Vec3{0,1,0}*std::cos(tilt)-panel.right*std::sin(tilt);
+        if(lyricTrailFollow.load())lift+=std::min(age/5500.f*.9f,.9f);
+        auto quad=[&](Vec3 tl,float glyphScale){
+            auto tr=tl+right*(glyphScale*.88f),bl=tl-up*(glyphScale*.88f),br=tr-up*(glyphScale*.88f);
             for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
         };
         for(int pass=0;pass<5;++pass){
             const bool outline=pass<4;
-            tessColor(tess,outline?0.f:1.f,outline?0.f:1.f,outline?0.f:1.f,alpha*(outline?.45f:1.f));
             const float dx=pass==0?-.12f:pass==1?.12f:0.f;
             const float dy=pass==2?-.12f:pass==3?.12f:0.f;
             auto origin=panel.anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
-            for(const auto& p:panel.pixels)quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
+            for(const auto& p:panel.pixels){
+                const float accent=beats&&((p.word+panel.letters)%3!=0)?beat:0.f;
+                const float wordScale=beats?std::clamp(1.14f-
+                    float(panel.wordLengths[std::min<size_t>(p.word,7)])*.025f+.10f*beat,
+                    .80f,1.19f):1.f;
+                tessColor(tess,outline?0.f:1.f,outline?0.f:1.f-.38f*accent,
+                          outline?0.f:1.f-.65f*accent,alpha*(outline?.45f:1.f));
+                quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale),scale*wordScale);
+            }
         }
     };
     if(fading){

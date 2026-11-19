@@ -470,6 +470,13 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
             const double seconds = std::stod(row.substr(colon + 1, end - colon - 1));
             if (minutes < 0 || minutes > 240 || seconds < 0 || seconds >= 60) continue;
             std::string line = row.substr(end + 1);
+            for(size_t mark=line.find('<');mark!=std::string::npos;mark=line.find('<',mark)){
+                size_t close=line.find('>',mark+1);
+                if(close==std::string::npos||close-mark>14){++mark;continue;}
+                const auto stamp=line.substr(mark+1,close-mark-1);
+                if(stamp.find(':')==std::string::npos){++mark;continue;}
+                line.erase(mark,close-mark+1);
+            }
             if (line.empty()) continue;
             lines.push_back({static_cast<int>(minutes * 60000 + seconds * 1000), line});
         } catch (...) { /* skip invalid timestamps */ }
@@ -1307,7 +1314,7 @@ class LeviMusic {
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<bool> animation_{true};
-    std::atomic<bool> browserEnabled_{false},worldLyrics3D_{false},romanizeLyrics_{true};
+    std::atomic<bool> browserEnabled_{false},worldLyrics3D_{true},romanizeLyrics_{true};
     std::atomic<bool> lyricsRebuild_{false};
     std::map<std::string,std::string> savedSettings_;
     bool restoringSettings_=false;
@@ -1338,7 +1345,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.2.14 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.0 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1359,9 +1366,13 @@ public:
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
-            .config("worldLyrics3D","3D Floating Lyrics (Experimental, client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","false"))
+            .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
             .config("lyricDistance","3D Lyrics Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
             .config("lyricHeight","3D Lyrics Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
+            .config("lyricVerticalRange","3D Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","8"),"0","15")
+            .config("lyricFontSize","3D Lyrics Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("lyricFontSize","115"),"60","200")
+            .config("lyricTrailFollow","3D Lyrics Follow Player and Rise",pl::modmenu::ConfigType::Toggle,remembered("lyricTrailFollow","false"))
+            .config("lyricBeats","Experimental 3D Lyrics Beats (Bridge audio)",pl::modmenu::ConfigType::Toggle,remembered("lyricBeats","false"))
             .config("lyricScatterFov","3D Lyrics Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","100"),"0","140")
             .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,remembered("romanizeLyrics","true"))
 #if defined(LEVI_STANDALONE)
@@ -1476,6 +1487,15 @@ private:
             try{lm_world3d::lyricDistanceTenths=std::clamp(std::stoi(std::string(v)),12,60);}catch(...){}
         } else if(k=="lyricHeight") {
             try{lm_world3d::lyricHeightTenths=std::clamp(std::stoi(std::string(v)),0,30);}catch(...){}
+        } else if(k=="lyricVerticalRange") {
+            try{lm_world3d::lyricVerticalRangeTenths=std::clamp(std::stoi(std::string(v)),0,15);}catch(...){}
+        } else if(k=="lyricFontSize") {
+            try{lm_world3d::lyricFontPercent=std::clamp(std::stoi(std::string(v)),60,200);}catch(...){}
+        } else if(k=="lyricTrailFollow") {
+            lm_world3d::lyricTrailFollow=v=="true"||v=="1";
+        } else if(k=="lyricBeats") {
+            lm_world3d::experimentalBeats=v=="true"||v=="1";
+            cv_.notify_all();
         } else if(k=="lyricScatterFov") {
             try{lm_world3d::lyricScatterFov=std::clamp(std::stoi(std::string(v)),0,140);}catch(...){}
         } else if(k=="embeddedBrowser") {
@@ -2180,6 +2200,8 @@ private:
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
         auto lastAutoBridge=std::chrono::steady_clock::now()-std::chrono::seconds(10);
         auto lastQueue=std::chrono::steady_clock::now()-std::chrono::seconds(3);
+        auto lastBeat=std::chrono::steady_clock::now()-std::chrono::seconds(3);
+        bool beatSent=false;
         std::string previousId,previousTitle,previousArtist,previousProvider,previousArt;
         bool lastBridgeConnected=false;
         while(true){
@@ -2229,6 +2251,26 @@ private:
                         update("LeviMusic connected","Android Bridge","Connected automatically");
                     }
                 }
+            const bool wantBeat=lm_world3d::experimentalBeats.load()&&worldLyrics3D_.load()
+                &&useBridge_.load();
+            auto beatNow=std::chrono::steady_clock::now();
+            if(!key.empty()&&(wantBeat!=beatSent||
+                (wantBeat&&beatNow-lastBeat>std::chrono::milliseconds(180)))){
+                std::string payload=bridgeGet(wantBeat?"/v1/beat?enabled=1":"/v1/beat?enabled=0",key);
+                lastBeat=beatNow;
+                if(!payload.empty()){
+                    beatSent=wantBeat;
+                    auto root=makeJson(env,payload);
+                    if(root){
+                        const bool available=optString(env,root,"available")=="true";
+                        try{lm_world3d::beatStrength=available?
+                            std::clamp(std::stof(optString(env,root,"strength")),0.f,1.f):0.f;}
+                        catch(...){lm_world3d::beatStrength=0.f;}
+                        if(available)lm_world3d::beatUpdated=lm_world3d::nowMs();
+                        env->DeleteLocalRef(root);
+                    }
+                }
+            }
                 if(hasJob) {
                     std::string action;
                     switch(job.action) {

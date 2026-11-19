@@ -53,6 +53,13 @@ int main(){
     auto third=lyricAnchor(pose,{100.f,68.f,196.f},47,true);
     assert(magnitude2(third-thirdNarrow)<.0001f);
     assert(magnitude2(third-pose.position)>magnitude2(firstWide-pose.position));
+    lyricVerticalRangeTenths=0;
+    auto levelAnchor=lyricAnchor(pose,cam,47,false);
+    lyricVerticalRangeTenths=15;
+    auto variedAnchor=lyricAnchor(pose,cam,47,false);
+    assert(std::abs(variedAnchor.y-levelAnchor.y)<=1.5001f);
+    assert(std::abs(variedAnchor.y-levelAnchor.y)>.001f);
+    lyricVerticalRangeTenths=8;
     assert(splitLyric("One long lyric line that should appear across different parts").size()>1);
     for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=22);
     auto longWord=splitLyric("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
@@ -73,14 +80,26 @@ int main(){
     assert(magnitude2(scene.panels[0].anchor-scene.panels[1].anchor)>.1f);
     assert(!scene.previous.empty()&&scene.previousUntil>nowMs());
     assert(scene.previousFadeStart>nowMs());
+    for(size_t i=1;i<scene.panels.size();++i)
+        assert(panelClearance(scene.panels[i].anchor,scene.panels[i].width,cam,scene.panels[i-1])>.7f);
+    lyricTrailFollow=true;
+    auto trail=scene.panels.front().anchor;
+    pose.position.x+=.5f;
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.panels.front().anchor.x>trail.x);
+    lyricTrailFollow=false;
+    experimentalBeats=true;beatStrength=.8f;beatUpdated=nowMs();
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(meshes==7&&declared>0);
+    experimentalBeats=false;
     publish("");
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==6&&!scene.previous.empty());
+    assert(meshes==8&&!scene.previous.empty());
     scene.previousUntil=nowMs()-1;
     renderHook(renderer.data(),screen.data(),nullptr);
-    assert(meshes==6);
+    assert(meshes==8);
     enabled=false;renderHook(renderer.data(),screen.data(),nullptr);
-    assert(originals==8&&meshes==6);
+    assert(originals==10&&meshes==8);
     return 0;
 }
 

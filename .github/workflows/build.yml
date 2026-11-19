@@ -203,14 +203,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.2.14-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.3.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.2.14-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.3.0-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -283,7 +283,7 @@ jobs:
               *(changes),
               "",
               "## Instalasi",
-              "Full mod: Bridge APK + LeviPack. Standalone: ChruPipe API client (requires self-hosted server). The 3D renderer is experimental and requires compatible Minecraft native signatures. Never load both native variants.",
+              "Full mod: Bridge APK + LeviPack. Standalone: ChruPipe API client (requires self-hosted server). The 3D renderer requires compatible Minecraft native signatures; experimental audio beats need the optional audio analysis permission in the Bridge app. Never load both native variants.",
               "",
               "## Catatan kompatibilitas",
               "- Versi 1.2.7. Lirik dari LRC lokal, LRCLIB, NetEase dan caption manual YouTube (jika tersedia); teks asli tetap tampil dengan bacaan Latin kecil di bawahnya. Bacaan kanji Jepang memakai kamus Kuromoji. Pengambilan lirik mod dipisahkan dari kontrol player.",
@@ -294,6 +294,7 @@ jobs:
               "- Versi 1.2.12: lirik lebih rendah di first person, setiap baris menetap pada satu koordinat world sampai baris berikutnya, sebaran kiri-kanan diperlebar. Bridge memberikan token secara otomatis hanya kepada proses Minecraft; Pair manual tetap tersedia sebagai cadangan.",
               "- Versi 1.2.13: jarak default lirik 2,2 blok dan bisa diatur 1,2–6,0 blok; FOV sebaran horizontal bisa diatur 0–140 derajat. Lirik fade in dan fade out, dan pengaturan mod disimpan lalu dipulihkan saat dibuka kembali.",
               "- Versi 1.2.14: tinggi spawn lirik bisa diatur 0–3 blok; baris panjang dipecah menjadi beberapa potongan yang muncul bertahap di posisi berbeda. Posisi dan rotasi tiap potongan menetap, lirik lama baru memudar setelah separuh potongan baru muncul. FOV hanya untuk first person; kamera lain menyebar 360° dengan jarak tambahan dan menghindari tertutup pemain.",
+              "- Versi 1.3.0: 3D Floating Lyrics aktif secara default, ukuran font 60–200% (default 115%), sebaran vertikal ±0–1,5 blok (default ±0,8), pemilihan posisi menghindari panel aktif, pilihan world-fixed atau mengikuti pemain dan naik perlahan. Mode Experimental Beats bereaksi terhadap waveform pemutar LeviMusic dengan warna per kata, kemiringan, dan ukuran dinamis; izinkan Audio Analysis di Settings. Sumber lirik lrc.red dan BetterLyrics mendukung TTML bertimestamp kata dan tetap memakai fallback lama.",
               "- Full mod provides Up Next radio (current + three related recommendations) with queue editing. Availability and relevance depend on unofficial YouTube extraction.",
               "- Build berhasil bukan bukti uji perangkat: tampilan dan interaksi renderer 3D harus dicoba di LeviLauncher Android. Panel 3D hanya terlihat oleh pemain lokal, termasuk saat masuk server publik atau dunia teman, tanpa addon per world.",
               "",

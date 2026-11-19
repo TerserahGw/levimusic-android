@@ -604,6 +604,15 @@ public final class MainActivity extends Activity {
         TextView note=text("Original lyrics stay visible. Japanese kanji readings use a Japanese dictionary; choose Japanese for titles written only in kanji.",12,SECONDARY,false);
         note.setPadding(dp(14),0,dp(14),dp(20));
         add(list,note,-1,-2);
+        TextView beats=text("Allow audio analysis for experimental 3D beats  ›",15,PRIMARY,true);
+        beats.setPadding(dp(14),dp(18),dp(14),dp(18));
+        beats.setOnClickListener(v->{
+            if(checkSelfPermission(Manifest.permission.RECORD_AUDIO)!=PackageManager.PERMISSION_GRANTED)
+                requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO},28);
+            else new AlertDialog.Builder(this).setMessage("Audio analysis is ready for songs played in LeviMusic. Enable 3D Lyrics Beats in the Minecraft mod.")
+                .setPositiveButton("OK",null).show();
+        });
+        add(list,beats,-1,72);
         TextView connection=text("Minecraft connection  ›",16,PRIMARY,true);
         connection.setPadding(dp(14),dp(18),dp(14),dp(18));
         connection.setBackground(bg(SURFACE,14));
@@ -787,4 +796,5 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(poll);io.shutdownNow();artIo.shutdownNow();super.onDestroy();
     }
 }
+
 

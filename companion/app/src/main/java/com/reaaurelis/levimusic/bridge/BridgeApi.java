@@ -201,6 +201,12 @@ public final class BridgeApi {
             if(parts.length<3||!"GET".equals(parts[0])) {
                 status=405;json=new JSONObject().put("error","GET only");
             }else if(path.equals("/v1/status"))json=state();
+            else if(path.startsWith("/v1/beat")){
+                String setting=getParam(path,"enabled");
+                if("1".equals(setting)||"0".equals(setting))
+                    PlayerService.setBeatEnabled("1".equals(setting));
+                json=PlayerService.getBeatStatus(context);
+            }
             else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.2.4").put("api",3);
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
@@ -243,7 +249,8 @@ public final class BridgeApi {
             else if(path.equals("/v1/capabilities"))
                 json=new JSONObject().put("api",2).put("playlist",true).put("search",true)
                     .put("player",true).put("radio3",true)
-                    .put("queueEditing",true).put("pairing","local-clipboard");
+                    .put("queueEditing",true).put("audioBeats",true)
+                    .put("pairing","local-clipboard");
             else if(path.equals("/v1/playlists")||path.startsWith("/v1/playlists?")){
                 String filter=URLDecoder.decode(getParam(path,"query"),"UTF-8");
                 json=PlaylistStore.list(context,filter);
@@ -298,4 +305,5 @@ public final class BridgeApi {
         os.write(content);os.flush();
     }
 }
+
 
