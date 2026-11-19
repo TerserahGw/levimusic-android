@@ -224,6 +224,14 @@ struct Scene{
     std::vector<Pixel> pixels;
 };
 inline Scene scene; // render thread only
+inline Vec3 lyricAnchor(Pose view,uint64_t serial){
+    constexpr float deg=.01745329251994f;
+    const float yaw=view.yaw*deg,pitch=std::clamp(view.pitch,-70.f,70.f)*deg;
+    const Vec3 forward{-std::sin(yaw)*std::cos(pitch),-std::sin(pitch),std::cos(yaw)*std::cos(pitch)};
+    const Vec3 side{-std::cos(yaw),0,-std::sin(yaw)};
+    return view.position+Vec3{0,1.6f,0}+forward*3.0f
+        +side*(float(int(serial%3)-1)*.35f);
+}
 struct ColorGuard{
     float* holder;std::array<float,4> saved;
     explicit ColorGuard(float* p):holder(p){std::memcpy(saved.data(),p,16);for(int i=0;i<4;++i)p[i]=1.f;}
@@ -256,17 +264,13 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         ||magnitude2(cam-scene.anchor)>1024.f;
     if(scene.serial!=serial||reset){
         scene.pixels=glyphs(latinDisplay(text));
-        constexpr float deg=.01745329251994f;
-        const float yaw=view.yaw*deg;
-        const Vec3 forward{-std::sin(yaw),0,std::cos(yaw)};
-        const Vec3 side{-std::cos(yaw),0,-std::sin(yaw)};
-        scene.anchor=view.position+forward*2.0f+side*(float(int(serial%3)-1)*.35f)+Vec3{0,2.15f,0};
+        scene.anchor=lyricAnchor(view,serial);
         scene.playerOrigin=view.position;
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         scene.appeared=now;
     }
-    else {scene.anchor=scene.anchor+(view.position-scene.playerOrigin);scene.playerOrigin=view.position;}
+    else {scene.anchor=lyricAnchor(view,serial);scene.playerOrigin=view.position;}
     scene.lastFrame=now;
     if(scene.pixels.empty())return;
     const Vec3 facing=normalized(cam-scene.anchor);

@@ -1,4 +1,4 @@
-# LeviMusic 1.2.10 — feature status
+# LeviMusic 1.2.11 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -34,4 +34,5 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - v1.2.8: Adds a Build ID checked native 3D profile for Minecraft 1.26.62.1 using the user's actual ARM64 game binary. Hook installation should now proceed on that exact binary; a device test is required to verify the panel appears and follows the camera.
 - v1.2.9: On the exact audited game Build ID, recognize existing mod hook stubs if the following function body still matches; keep hook chaining. Anchor world lyrics on player position, reduce the glyph scale and outline weight, render mixed-case Latin glyphs, and correct Japanese small-tsu and contracted syllables. Coexistence with independently hooked mods still requires an on-device test.
 - v1.2.10: Improve loanword romanization, including フェ as fe, ティ as ti, and ヴァ as va.
+- v1.2.11: Keep the 3D lyric origin attached to the player while placing the panel along the player's vertical look direction. Reposition as the player turns, and shorten the forward distance so nearby walls are less likely to hide it. Fixes active renderer status while the lyric is outside the visible field.
 

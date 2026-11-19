@@ -43,14 +43,21 @@ int main(){
     assert(shader[0]==.2f&&shader[1]==.3f&&shader[2]==.4f&&shader[3]==.5f);
     assert(active());
     const auto anchor=scene.anchor;
+    Pose lookingDown=pose;lookingDown.pitch=60.f;
+    const auto down=lyricAnchor(lookingDown,lyricSerial);
+    assert(down.y<anchor.y-2.4f);
+    assert(std::abs(down.x-lookingDown.position.x)<5.f);
     cam.x+=1.f;ptr(rp,profile->camera,cam);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==2&&scene.anchor.x==anchor.x);
     pose.position.x+=1.f;
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==3&&std::abs(scene.anchor.x-anchor.x-1.f)<.001f);
+    pose.pitch=60.f;
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(meshes==4&&scene.anchor.y<anchor.y-2.4f);
     enabled=false;renderHook(renderer.data(),screen.data(),nullptr);
-    assert(originals==4&&meshes==3);
+    assert(originals==5&&meshes==4);
     return 0;
 }
 
