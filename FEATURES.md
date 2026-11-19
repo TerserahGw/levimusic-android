@@ -1,4 +1,4 @@
-# LeviMusic 1.3.1 — feature status
+# LeviMusic 1.3.2 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -50,3 +50,8 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - Segments max 10 characters, sequential reading order in a stable row layout. Their reveal cadence follows the current lyric line length. Previous panels fade during the next lyric and current panels fade near their cue end.
 - Follow-player mode filters player motion to reduce jitter, with a non-linear rise that accelerates toward line end. All 3D panels sway gently regardless of follow mode.
 - Experimental Beats adapts to RMS changes and low-frequency FFT transients instead of a quiet fixed amplitude. The mod shows whether Android audio permission or an active LeviMusic player is missing.
+
+## v1.3.2
+- Beat events from the Bridge trigger a short whole-segment entrance pulse and may align the next lyric segment reveal, with a 240 ms fallback when audio is quiet. No continuous beat tilt or per-glyph scaling.
+- Subtle shared float (small vertical bob and tilt) on each complete segment. Follow-player mode moves a persistent visual anchor toward a filtered player target with an aging spring, instead of scaling the full spawn-to-player displacement.
+- Approximately 80% of lyric segments remain white; occasional words use light pastel accents.

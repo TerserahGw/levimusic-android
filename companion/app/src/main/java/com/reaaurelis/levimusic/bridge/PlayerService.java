@@ -50,6 +50,8 @@ public final class PlayerService extends MediaSessionService {
     private int beatSession=-1;
     private volatile float beatValue=0f;
     private volatile float beatRaw=0f;
+    private volatile long beatCount=0L;
+    private long lastBeatPulseAt=0L;
     private float beatAverage=.04f;
     private float bassAverage=.04f;
     private volatile boolean beatCaptured=false;
@@ -83,6 +85,7 @@ public final class PlayerService extends MediaSessionService {
             .put("available",current!=null&&current.beatCaptured&&current.playing&&permitted)
             .put("permissionRequired",!permitted)
             .put("strength",current==null?0:current.beatValue)
+            .put("beatCount",current==null?0:current.beatCount)
             .put("rawLevel",current==null?0:current.beatRaw)
             .put("reason",!permitted?"grant RECORD_AUDIO in LeviMusic Settings":
                 current==null?"open LeviMusic player":
@@ -142,6 +145,10 @@ public final class PlayerService extends MediaSessionService {
             bassAverage=bassAverage*.94f+bass*.06f;
             float onset=Math.max(0f,(rms-beatAverage)/(beatAverage+.025f));
             float bassHit=Math.max(0f,(bass-bassAverage)/(bassAverage+.025f));
+            long tick=SystemClock.uptimeMillis();
+            if((onset>.34f||bassHit>.36f)&&tick-lastBeatPulseAt>220){
+                ++beatCount;lastBeatPulseAt=tick;
+            }
             float visible=Math.min(1f,Math.max(onset*1.8f,bassHit*1.4f)
                 +Math.min(.38f,rms*1.3f));
             beatValue=Math.max(visible,beatValue*.77f);

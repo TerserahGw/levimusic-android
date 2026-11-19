@@ -6,7 +6,7 @@ float maxChroma=0.f;
 float shader[4]{.2f,.3f,.4f,.5f};
 void original(void*,void*,void*){++originals;}
 void begin(void*,void*,int mode,int count,int){assert(mode==1);declared=count;batchVertices=0;}
-void color(void*,float r,float,float b,float){assert(shader[0]==1.f);maxChroma=std::max(maxChroma,r-b);}
+void color(void*,float r,float,float b,float){assert(shader[0]==1.f);maxChroma=std::max(maxChroma,std::abs(r-b));}
 void vertex(void*,float x,float y,float z){assert(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(z));++vertices;++batchVertices;}
 void mesh(void*,void*,void* material,char*){assert(material);assert(batchVertices==declared);++meshes;}
 }
@@ -71,6 +71,12 @@ int main(){
     assert(firstPanel.x<secondPanel.x&&firstPanel.y>fifthPanel.y);
     assert(cueFade(0,0,4000)>cueFade(3800,0,4000));
     assert(cueFade(4700,0,4000)==0.f);
+    assert(!shouldReveal(100,100,true,false));
+    assert(shouldReveal(100,100,true,true));
+    assert(shouldReveal(341,100,true,false));
+    int white=0;
+    for(int i=0;i<20;++i)if(lyricTint(i,0)==std::array<float,3>{1.f,1.f,1.f})++white;
+    assert(white>=16);
     cam.x+=1.f;ptr(rp,profile->camera,cam);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==2&&scene.panels.front().anchor.x==anchor.x&&scene.panels.front().right.x==right.x);
@@ -91,16 +97,22 @@ int main(){
         assert(magnitude2(scene.panels[i].anchor-scene.panels[i-1].anchor)>.1f);
     lyricTrailFollow=true;
     auto trail=scene.panels.front().anchor;
+    scene.filteredPlayer=scene.panels.front().spawnPlayer;
     auto filtered=scene.filteredPlayer;
-    pose.position.x+=.5f;
-    scene.lastFrame=nowMs()-80;
+    pose.position.x=filtered.x+2.f;
+    scene.lastFrame=nowMs()-100;
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(scene.panels.front().anchor.x==trail.x);
     assert(scene.filteredPlayer.x>filtered.x&&scene.filteredPlayer.x<pose.position.x);
+    assert(scene.panels.front().visualAnchor.x>trail.x&&
+           scene.panels.front().visualAnchor.x<trail.x+2.f);
     lyricTrailFollow=false;
     experimentalBeats=true;beatStrength=.8f;beatUpdated=nowMs();
+    scene.panels[1].born=nowMs();scene.panels[1].partIndex=4;
+    beatPulseSerial=1;beatPulseTime=nowMs();
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(meshes==7&&declared>0&&maxChroma>.1f);
+    assert(scene.panels[1].appeared>0&&scene.panels[1].entryStrength>.4f);
     experimentalBeats=false;
     publish("");
     renderHook(renderer.data(),screen.data(),nullptr);

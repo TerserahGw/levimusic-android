@@ -1345,7 +1345,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.1 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.2 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2279,6 +2279,13 @@ private:
                         try{lm_world3d::beatStrength=available?
                             std::clamp(std::stof(optString(env,root,"strength")),0.f,1.f):0.f;}
                         catch(...){lm_world3d::beatStrength=0.f;}
+                        if(available)try{
+                            auto next=std::stoull(optString(env,root,"beatCount"));
+                            if(next!=lm_world3d::beatPulseSerial.load()){
+                                lm_world3d::beatPulseSerial=next;
+                                lm_world3d::beatPulseTime=lm_world3d::nowMs();
+                            }
+                        }catch(...){}
                         if(available)lm_world3d::beatUpdated=lm_world3d::nowMs();
                         env->DeleteLocalRef(root);
                     }
