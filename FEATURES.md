@@ -1,4 +1,4 @@
-# LeviMusic 1.2.5 — feature status
+# LeviMusic 1.2.6 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -19,7 +19,7 @@
 
 The opt-in native renderer draws lyrics as camera-facing glyphs at a fixed position in the Minecraft world. A new timestamp chooses a new nearby location. Rendering is local to LeviLauncher; there are no blocks, entities, world packs or packets, so multiplayer players do not see it. The audio playback worker does not scan Minecraft signatures or wait for game-render calls.
 
-This experimental path is enabled only when the game ELF Build ID and seven native function patterns match the audited World Analysis 1.26.52 or 1.26.60 profiles. Unknown versions or altered hooks keep the 2D floating lyrics active. The mod displays the 3D status in its player card. A compiled build cannot establish that it works on a real device; test both the visuals and Play/Pause/Next in game.
+This experimental path uses an exact ELF Build ID when available, or resolves all seven native signatures from one audited Android layout on a later hotfix. A partial or altered match leaves 3D inactive, with a visible status. The 3D switch never silently draws 2D; the separate Legacy 2D option is available. A compiled build cannot establish that it works on a real device; test both the visuals and Play/Pause/Next in game.
 
 
 ## Other
@@ -29,4 +29,5 @@ This experimental path is enabled only when the game ELF Build ID and seven nati
 - The standard release remains stable; the 3D setting is individually labeled Experimental and defaults OFF. GitHub Actions compilation does not confirm runtime stability.
 - v1.2.4: Android Home/Playlists/Settings, mini and expanded player, song options, ICU romanization default-on. Native 3D hook suspended; floating 2D fallback is client-only.
 - v1.2.5: World Analysis-style native billboard glyph renderer, exact game-build checks, asynchronous preparation, client-only world positioning, 2D fallback on unsupported builds.
+- v1.2.6: Fixed romanization in Bridge mode and immediate re-render on toggle; added verified signature-based hotfix matching, and removed the misleading 2D display from the 3D option.
 

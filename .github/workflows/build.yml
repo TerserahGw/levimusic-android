@@ -203,14 +203,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.2.5-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.2.6-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.2.5-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.2.6-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -286,7 +286,7 @@ jobs:
               "Full mod: Bridge APK + LeviPack. Standalone: ChruPipe API client (requires self-hosted server). Experimental native 3D lyrics work locally without a world addon on validated Minecraft builds. Never load both native variants.",
               "",
               "## Catatan kompatibilitas",
-              "- Versi 1.2.5. Mod dan APK harus dipasang bersama untuk mode Bridge. Opsi 3D Floating Lyrics masih eksperimental dan OFF secara default. Renderer hanya mencoba build Minecraft ARM64 dengan identitas ELF dan pola fungsi yang tervalidasi dari World Analysis (1.26.52 / 1.26.60); lainnya otomatis memakai lirik floating 2D.",
+              "- Versi 1.2.6. Bridge sekarang meromanisasi lirik dan perubahan toggle berlaku pada lagu yang sedang diputar. Renderer 3D mencocokkan seluruh signature satu profil Android saat identitas build hotfix berbeda. Jika tetap tidak cocok, mod menunjukkan status kesalahan 3D secara jelas; opsi 3D tidak lagi diam-diam menggambar 2D.",
               "- Full mod provides Up Next radio (current + three related recommendations) with queue editing. Availability and relevance depend on unofficial YouTube extraction.",
               "- Build berhasil bukan bukti uji perangkat: tampilan dan interaksi renderer 3D harus dicoba di LeviLauncher Android. Panel 3D hanya terlihat oleh pemain lokal, termasuk saat masuk server publik atau dunia teman, tanpa addon per world.",
               "",

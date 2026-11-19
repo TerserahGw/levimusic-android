@@ -1223,7 +1223,7 @@ class LeviMusic {
     std::vector<std::string> playlistNames_;
     std::string activePlaylist_;
     int libraryMode_=0; // 0 Search, 1 saved playlists, 2 saved tracks, 3 Up Next radio/playlist queue
-    std::vector<Lyric> lyrics_;
+    std::vector<Lyric> lyrics_, lyricsSource_;
     std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
     std::string info_="Tap to open your music library", lyric_, apiKey_, bridgeKey_;
 #if defined(LEVI_STANDALONE)
@@ -1237,6 +1237,7 @@ class LeviMusic {
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<bool> animation_{true};
     std::atomic<bool> browserEnabled_{false},worldLyrics3D_{false},romanizeLyrics_{true};
+    std::atomic<bool> lyricsRebuild_{false};
 #if defined(LEVI_STANDALONE)
     std::atomic<bool> useBridge_{false},lyricsBelow_{false},floatingLyrics_{false};
 #else
@@ -1326,6 +1327,8 @@ private:
     void setConfig(std::string_view k,std::string_view v){
         if(k=="romanizeLyrics"){
             romanizeLyrics_=v=="true"||v=="1";
+            lyricsRebuild_=true;
+            cv_.notify_all();
         } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
             lm_world3d::request(worldLyrics3D_);
@@ -1674,7 +1677,9 @@ private:
             }
             // No background: white text + black multi-pass outline.
             // LRC lines remain until the NEXT timestamp, never a fixed 5-second cutoff.
-            if(lyricsOn_ && !(worldLyrics3D_ && lm_world3d::active()) && !timedLyrics.empty() && elapsed>=0) {
+            // The 3D switch never silently draws a 2D lyric. The separate
+            // Legacy 2D setting remains available if the game is unsupported.
+            if(lyricsOn_ && (!worldLyrics3D_ || floatingLyrics_) && !timedLyrics.empty() && elapsed>=0) {
                 int active=-1;
                 for(size_t i=0;i<timedLyrics.size();i++) {
                     if(timedLyrics[i].ms>elapsed)break;
@@ -1966,7 +1971,7 @@ private:
                 if(selected_<0||selected_>=static_cast<int>(results_.size()))return;
                 tr=results_[static_cast<size_t>(selected_)];
                 vol=volume_;key=apiKey_;playing_=false;elapsed_=0;total_=0;
-                lyrics_.clear();lyric_.clear();
+                lyrics_.clear();lyricsSource_.clear();lyric_.clear();
             }
 #if defined(LEVI_STANDALONE)
             std::string server;
@@ -2006,10 +2011,12 @@ private:
             update(tr.title,tr.artist,"Streaming online (Audius)");
 #endif
             std::vector<Lyric> found=searchLyrics(env,tr,player.duration(env));
+            auto shown=found;
+            if(romanizeLyrics_)romanizeLyrics(env,shown);
             {
                 std::lock_guard lock(mu_);
-                if(romanizeLyrics_)romanizeLyrics(env,found);
-                lyrics_=std::move(found);
+                lyricsSource_=std::move(found);
+                lyrics_=std::move(shown);
                 lyric_=lyrics_.empty()?"No synchronized lyrics":"...";
             }
         };
@@ -2033,6 +2040,21 @@ private:
             // Hook preparation is separate from playback and never scans the
             // entire game library during a music command.
             lm_world3d::request(worldLyrics3D_);
+            if(lyricsRebuild_.exchange(false)){
+                std::vector<Lyric> raw;
+                {std::lock_guard lock(mu_);raw=lyricsSource_;}
+                if(romanizeLyrics_)romanizeLyrics(env,raw);
+                {
+                    std::lock_guard lock(mu_);
+                    lyrics_=std::move(raw);
+                    lyric_.clear();
+                    for(const auto& item:lyrics_){
+                        if(item.ms>elapsed_)break;
+                        lyric_=item.line;
+                    }
+                    lyricChanged_=std::chrono::steady_clock::now();
+                }
+            }
             if(useBridge_) {
                 std::string key;
                 {std::lock_guard lock(mu_);key=bridgeKey_;}
@@ -2254,7 +2276,7 @@ private:
                             artist_="Spotify / YouTube Music";
                             info_=key.empty()?"Paste Bridge Key in LeviMusic settings":
                                   "Start LeviMusic Bridge; grant Notification Access";
-                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();coverImageId_.clear();coverImageId_.clear();
+                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();lyricsSource_.clear();coverImageId_.clear();coverImageId_.clear();
                         }
                     } else if(!state.available) {
                         lastBridgeConnected=true;
@@ -2264,7 +2286,7 @@ private:
                             title_="Choose a song";
                             artist_="Spotify / YouTube Music";
                             info_="Start music in the official app";
-                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();
+                            playing_=false;elapsed_=0;total_=0;lyric_.clear();lyrics_.clear();lyricsSource_.clear();
                         }
                     } else {
                         lastBridgeConnected=true;
@@ -2274,7 +2296,7 @@ private:
                             previousTitle=state.title;previousArtist=state.artist;previousProvider=state.provider;
                             {
                                 std::lock_guard lock(mu_);
-                                lyrics_.clear();lyric_.clear();
+                                lyrics_.clear();lyricsSource_.clear();lyric_.clear();
                             }
                         }
                         {
@@ -2302,9 +2324,12 @@ private:
                             Track track;
                             track.title=state.title;track.artist=state.artist;
                             auto found=searchLyrics(env,track,state.duration,key);
+                            auto shown=found;
+                            if(romanizeLyrics_)romanizeLyrics(env,shown);
                             {
                                 std::lock_guard lock(mu_);
-                                lyrics_=std::move(found);
+                                lyricsSource_=std::move(found);
+                                lyrics_=std::move(shown);
                                 lyric_=lyrics_.empty()?"":"";
                                 lyricChanged_=std::chrono::steady_clock::now();
                             }
@@ -2379,7 +2404,7 @@ private:
                     case Action::Stop:
                         player.release(env);
                         {std::lock_guard lock(mu_);
-                            playing_=false;elapsed_=0;total_=0;lyrics_.clear();lyric_.clear();
+                            playing_=false;elapsed_=0;total_=0;lyrics_.clear();lyricsSource_.clear();lyric_.clear();
                         }
                         update("LeviMusic","Stopped","Choose a song to play");break;
                     case Action::SetVolume:{

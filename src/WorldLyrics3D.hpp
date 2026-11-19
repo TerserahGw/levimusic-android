@@ -3,6 +3,7 @@
 // itself derived from BedrockTools by RadiantByte. GPL-3.0-only.
 #include "WorldLyricsBindings.hpp"
 #include <pl/memory/Hook.hpp>
+#include <pl/memory/Signature.hpp>
 #include <android/log.h>
 #include <link.h>
 #include <algorithm>
@@ -33,6 +34,7 @@ enum class State {Idle,Preparing,Ready,Unsupported,BindingMismatch,HookFailed};
 inline std::atomic<State> state{State::Idle};
 inline std::atomic<bool> enabled{false},installed{false};
 inline std::atomic<int64_t> lastDraw{0};
+inline std::atomic<int> renderStage{0}; // 0 no callback, 1 no player, 2 no LRC, 3 no material, 4 drawing
 inline std::atomic<uint64_t> generation{0};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
@@ -198,13 +200,14 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     if(originalRender)originalRender(renderer,ctx,arg);
     if(!enabled.load(std::memory_order_relaxed)||!installed.load(std::memory_order_acquire)
        ||!profile||!valid(renderer)||!valid(ctx))return;
+    renderStage=1;
     const int64_t now=nowMs();
     Pose view;
     {std::unique_lock lock(poseMutex,std::try_to_lock);if(!lock)return;view=pose;}
     if(!view.world||!view.time||now-view.time>1500)return;
     std::string text;uint64_t serial;
     {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;text=currentLine;serial=lyricSerial;}
-    if(text.empty())return;
+    if(text.empty()){renderStage=2;return;}
     auto* rp=read<void*>(renderer,profile->rendererPlayer);
     auto* tess=read<void*>(ctx,profile->tessellator);
     auto* colors=read<float*>(ctx,0x30);
@@ -212,7 +215,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const Vec3 cam=read<Vec3>(rp,profile->camera);
     if(!std::isfinite(cam.x)||!std::isfinite(cam.y)||!std::isfinite(cam.z))return;
     resolveMaterial(now);
-    if(!material)return;
+    if(!material){renderStage=3;return;}
     const uint64_t gen=generation.load();
     const bool reset=scene.generation!=gen||scene.world!=view.world||scene.player!=view.player
         ||scene.renderer!=reinterpret_cast<uintptr_t>(rp)||now-scene.lastFrame>1500
@@ -250,17 +253,25 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }
     alignas(8) char texture[0x58]{};
     renderMesh(ctx,tess,&material,texture);
-    if(enabled.load()&&gen==generation.load())lastDraw=now;
+    if(enabled.load()&&gen==generation.load()){renderStage=4;lastDraw=now;}
 }
 inline bool active(){int64_t n=lastDraw.load();return enabled.load()&&n>0&&nowMs()-n<500;}
 inline const char* status(){
     if(!enabled.load())return "3D off";
     switch(state.load()){
         case State::Idle:case State::Preparing:return "Preparing 3D renderer";
-        case State::Unsupported:return "3D unsupported on this Minecraft build (2D)";
-        case State::BindingMismatch:return "3D signature conflict (2D)";
-        case State::HookFailed:return "3D renderer hook failed (2D)";
-        case State::Ready:return active()?"3D lyrics active":"3D ready / waiting for world lyrics";
+        case State::Unsupported:return "3D: game renderer signatures unavailable";
+        case State::BindingMismatch:return "3D: renderer bindings changed";
+        case State::HookFailed:return "3D: renderer hook failed";
+        case State::Ready:
+            if(active())return "3D lyrics active";
+            switch(renderStage.load()){
+                case 1:return "3D: waiting for local player";
+                case 2:return "3D: waiting for synced lyrics";
+                case 3:return "3D: game material unavailable";
+                case 4:return "3D: waiting for next world frame";
+                default:return "3D: waiting for world renderer";
+            }
     }
     return "";
 }
@@ -296,15 +307,39 @@ inline Image findImage(){
 }
 inline void prepare(){
     auto image=findImage();
-    if(!image.selected){state=State::Unsupported;return;}
+    if(!image.headers){state=State::Unsupported;return;}
     std::array<uintptr_t,BindingCount> addresses{};
-    for(size_t i=0;i<addresses.size();++i){
-        const auto& binding=image.selected->bindings[i];auto at=image.base+binding.rva;
-        if(!image.contains(at,binding.pattern.size(),PF_R|PF_X)
-           ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern)){
-            state=State::BindingMismatch;return;
+    auto exact=[&](const Profile& candidate){
+        for(size_t i=0;i<addresses.size();++i){
+            const auto& binding=candidate.bindings[i];auto at=image.base+binding.rva;
+            if(!image.contains(at,binding.pattern.size(),PF_R|PF_X)
+               ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern))return false;
+            addresses[i]=at;
         }
-        addresses[i]=at;
+        return true;
+    };
+    const Profile* selected=nullptr;
+    if(image.selected&&exact(*image.selected))selected=image.selected;
+    // The Android LHolo package also resolves native signatures at runtime.
+    // Accept a later hotfix only when EVERY function from one audited layout
+    // still has the same unique instruction signature. Keep this off the music
+    // worker and decline partial matches rather than mixing incompatible ABIs.
+    if(!selected){
+        for(const auto& candidate:profiles){
+            std::array<uintptr_t,BindingCount> found{};
+            bool complete=true;
+            for(size_t i=0;i<found.size();++i){
+                const auto& binding=candidate.bindings[i];
+                auto at=pl::memory::resolveSignature(binding.pattern.data(),"libminecraftpe.so");
+                if(!at||!image.contains(at,binding.pattern.size(),PF_R|PF_X)
+                   ||!matchesPattern({reinterpret_cast<const uint8_t*>(at),binding.pattern.size()},binding.pattern)){
+                    complete=false;break;
+                }
+                found[i]=at;
+            }
+            if(complete){selected=&candidate;addresses=found;break;}
+        }
+        if(!selected){state=image.selected?State::BindingMismatch:State::Unsupported;return;}
     }
     // World Analysis resolves the material group from ADRP x0 / ADD x0
     // at the verified common-material function, then skips 32 bytes.
@@ -316,7 +351,7 @@ inline void prepare(){
     auto group=uintptr_t(int64_t(at&~uintptr_t(0xfff))+imm*4096)
         +(((b>>10)&0xfff)<<((b&0x400000)?12:0))+32;
     if(!image.contains(group,sizeof(void*),PF_R)){state=State::BindingMismatch;return;}
-    profile=image.selected;materialGroup=reinterpret_cast<void*>(group);
+    profile=selected;materialGroup=reinterpret_cast<void*>(group);
     tessBegin=reinterpret_cast<TessBegin>(addresses[Begin]);
     tessColor=reinterpret_cast<TessColor>(addresses[Color]);
     tessVertex=reinterpret_cast<TessVertex>(addresses[Vertex]);
@@ -329,10 +364,10 @@ inline void prepare(){
     if(pl::memory::hook(renderTarget,reinterpret_cast<void*>(&renderHook),
                         reinterpret_cast<void**>(&originalRender))!=0){state=State::HookFailed;return;}
     renderHooked=true;installed.store(true,std::memory_order_release);state=State::Ready;
-    __android_log_print(ANDROID_LOG_INFO,"LeviMusicWorld3D","world renderer ready: %s",profile->name.data());
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicWorld3D","world renderer ready: %s (%s)",profile->name.data(),image.selected?"exact build":"matching hotfix signatures");
 }
 inline void request(bool value){
-    if(enabled.exchange(value)!=value){++generation;lastDraw=0;}
+    if(enabled.exchange(value)!=value){++generation;lastDraw=0;renderStage=0;}
     if(!value)return;
     std::lock_guard lock(lifecycle);
     if(state.load()!=State::Idle)return;
