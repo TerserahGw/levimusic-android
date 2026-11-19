@@ -71,6 +71,12 @@ int main(){
     assert(firstPanel.x<secondPanel.x&&firstPanel.y>fifthPanel.y);
     assert(cueFade(0,0,4000)>cueFade(3800,0,4000));
     assert(cueFade(4700,0,4000)==0.f);
+    assert(riseForProgress(0.f)==0.f);
+    assert(riseForProgress(.5f)>0.f&&riseForProgress(.5f)<riseForProgress(1.f));
+    assert(riseForProgress(1.f)<.7f);
+    const float corrected=advanceCueClock(700.f,620.f,16.f,true);
+    assert(corrected>700.f&&corrected<716.f); // correction cannot jerk backward
+    assert(advanceCueClock(700.f,2500.f,16.f,true)==2500.f); // deliberate seek
     assert(!shouldReveal(100,100,true,false));
     assert(shouldReveal(100,100,true,true));
     assert(shouldReveal(341,100,true,false));
@@ -106,6 +112,7 @@ int main(){
     assert(scene.filteredPlayer.x>filtered.x&&scene.filteredPlayer.x<pose.position.x);
     assert(scene.panels.front().visualAnchor.x>trail.x&&
            scene.panels.front().visualAnchor.x<trail.x+2.f);
+    assert(scene.panels.front().visualLift>0.f&&scene.panels.front().visualLift<.7f);
     lyricTrailFollow=false;
     experimentalBeats=true;beatStrength=.8f;beatUpdated=nowMs();
     scene.panels[1].born=nowMs();scene.panels[1].partIndex=4;

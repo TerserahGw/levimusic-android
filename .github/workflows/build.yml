@@ -203,14 +203,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.3.2-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.3.3-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.3.2-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.3.3-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -297,6 +297,7 @@ jobs:
               "- Versi 1.3.0: 3D Floating Lyrics aktif secara default, ukuran font 60–200% (default 115%), sebaran vertikal ±0–1,5 blok (default ±0,8), pemilihan posisi menghindari panel aktif, pilihan world-fixed atau mengikuti pemain dan naik perlahan. Mode Experimental Beats bereaksi terhadap waveform pemutar LeviMusic dengan warna per kata, kemiringan, dan ukuran dinamis; izinkan Audio Analysis di Settings. Sumber lirik lrc.red dan BetterLyrics mendukung TTML bertimestamp kata dan tetap memakai fallback lama.",
               "- Versi 1.3.1: potongan lirik maksimal 10 karakter disusun kiri-ke-kanan lalu atas-ke-bawah dan muncul sesuai durasi baris. Panel menghindari panel aktif; gerak ikuti pemain menggunakan filter posisi dan kenaikan nonlinier sesuai progres. Semua panel bergoyang halus; lirik lama memudar saat transisi dan lirik aktif memudar mendekati akhir. Beats menggunakan deteksi perubahan amplitudo dan frekuensi bass yang adaptif, menampilkan status izin/audio di kartu mod.",
               "- Versi 1.3.2: animasi mengambang diperkecil menjadi gerak utuh tiap potongan; Beats kini memakai pulsa audio untuk memicu kemunculan dan efek singkat saat masuk tanpa goyang kata terus-menerus. Lirik mengikuti pemain dengan inersia nyata menggunakan posisi visual yang diredam dan makin berat seiring progres. Mayoritas kata tetap putih, dengan aksen pastel pada sebagian kecil kata.",
+              "- Versi 1.3.3: kenaikan panel mengikuti jam lirik yang bergerak mulus pada setiap world frame, dengan koreksi posisi Bridge dibatasi dan lompatan hanya untuk seek. Target tinggi akhir diturunkan menjadi sekitar 0,62 blok dan gerak vertikal panel diredam agar tidak patah-patah saat data waktu datang bertahap.",
               "- Full mod provides Up Next radio (current + three related recommendations) with queue editing. Availability and relevance depend on unofficial YouTube extraction.",
               "- Build berhasil bukan bukti uji perangkat: tampilan dan interaksi renderer 3D harus dicoba di LeviLauncher Android. Panel 3D hanya terlihat oleh pemain lokal, termasuk saat masuk server publik atau dunia teman, tanpa addon per world.",
               "",

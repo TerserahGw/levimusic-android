@@ -1,4 +1,4 @@
-# LeviMusic 1.3.2 — feature status
+# LeviMusic 1.3.3 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -55,3 +55,6 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - Beat events from the Bridge trigger a short whole-segment entrance pulse and may align the next lyric segment reveal, with a 240 ms fallback when audio is quiet. No continuous beat tilt or per-glyph scaling.
 - Subtle shared float (small vertical bob and tilt) on each complete segment. Follow-player mode moves a persistent visual anchor toward a filtered player target with an aging spring, instead of scaling the full spawn-to-player displacement.
 - Approximately 80% of lyric segments remain white; occasional words use light pastel accents.
+
+## v1.3.3
+- Rise animation advances on the renderer clock between audio position updates, with bounded drift correction and seek detection. Each panel filters its vertical target independently. End-of-line rise is adjusted from 0.94 to about 0.62 blocks for a gentler motion.

@@ -47,6 +47,7 @@ inline std::atomic<uint64_t> beatPulseSerial{0};
 inline std::atomic<int64_t> beatPulseTime{0};
 inline std::atomic<int> beatState{0}; // 0 off, 1 needs permission, 2 waiting for audio, 3 receiving audio
 inline std::atomic<int> cueStartMs{0},cueEndMs{0},cuePositionMs{0};
+inline std::atomic<int64_t> cueSampleAt{0};
 inline std::atomic<bool> cuePlaying{false};
 inline std::mutex lifecycle,lyricsMutex,poseMutex;
 inline std::thread installer;
@@ -207,6 +208,7 @@ inline std::vector<Pixel> glyphs(std::string_view text){
 inline void publish(std::string_view value,int start=0,int end=0,int position=0,bool playing=false){
     cueStartMs=std::max(0,start);cueEndMs=std::max(start+1,end);
     cuePositionMs=std::max(0,position);cuePlaying=playing;
+    cueSampleAt=nowMs();
     std::lock_guard lock(lyricsMutex);
     auto bounded=value.substr(0,512);
     if(currentLine==bounded)return;
@@ -241,6 +243,7 @@ struct Panel{
     float entryStrength=0.f;
     int partIndex=0,partCount=1;
     int cueStart=0,cueEnd=1;
+    float visualLift=0.f;
     size_t letters=0;
     float width=0;
 };
@@ -251,6 +254,7 @@ struct Scene{
     Vec3 lastPlayer{};
     Vec3 filteredPlayer{};
     uint64_t lastBeatPulse=0;
+    float cueClock=0.f;
     int64_t lastFrame=0,previousFadeStart=0,previousUntil=0;
     std::vector<Panel> panels,previous;
 };
@@ -277,12 +281,21 @@ inline std::vector<std::string> splitLyric(std::string_view text){
     return result;
 }
 inline float smoothstep(float t){t=std::clamp(t,0.f,1.f);return t*t*(3.f-2.f*t);}
-inline float cueProgress(int position,int start,int end){
+inline float cueProgress(float position,int start,int end){
     return std::clamp(float(position-start)/float(std::max(end-start,1)),0.f,1.f);
 }
-inline float cueFade(int position,int start,int end){
+inline float cueFade(float position,int start,int end){
     const int window=std::clamp((end-start)/5,450,1100);
     return 1.f-smoothstep(float(position-(end-window))/float(window+500));
+}
+inline float riseForProgress(float progress){
+    progress=std::clamp(progress,0.f,1.f);
+    return .08f*progress+.54f*progress*progress;
+}
+inline float advanceCueClock(float current,float observed,float dt,bool playing){
+    if(std::abs(observed-current)>1200.f)return observed; // intentional seek
+    const float next=current+(playing?dt:0.f);
+    return next+std::clamp(observed-next,-dt*.18f,dt*.18f);
 }
 inline bool shouldReveal(int64_t now,int64_t due,bool beats,bool freshPulse){
     return now>=due&&(!beats||freshPulse||now-due>=240);
@@ -363,8 +376,13 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const bool reset=scene.generation!=gen||scene.world!=view.world||scene.player!=view.player
         ||scene.renderer!=reinterpret_cast<uintptr_t>(rp)||now-scene.lastFrame>1500
         ||(!scene.panels.empty()&&magnitude2(cam-scene.panels.front().anchor)>1024.f);
-    const int start=cueStartMs.load(),end=cueEndMs.load(),position=cuePositionMs.load();
-    if(scene.serial!=serial||reset){
+    const int start=cueStartMs.load(),end=cueEndMs.load();
+    const bool playing=cuePlaying.load();
+    const int64_t sampleAge=std::clamp<int64_t>(now-cueSampleAt.load(),0,1200);
+    const float observed=float(cuePositionMs.load())+(playing?float(sampleAge):0.f);
+    float position=observed;
+    const bool newCue=scene.serial!=serial||reset;
+    if(newCue){
         if(reset){scene.previous.clear();scene.previousUntil=0;}
         else if(scene.serial!=serial)scene.previous=std::move(scene.panels);
         scene.panels.clear();
@@ -385,8 +403,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
                 for(const auto& old:scene.previous){
                     Vec3 occupied=old.visualAnchor;
                     if(lyricTrailFollow.load()){
-                        const float progress=cueProgress(position,old.cueStart,old.cueEnd);
-                        occupied=occupied+Vec3{0,.09f*progress+.85f*progress*progress,0};
+                        occupied=occupied+Vec3{0,old.visualLift,0};
                     }
                     score=std::min(score,panelClearance(point,width,cam,occupied,old.width));
                 }
@@ -416,6 +433,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         scene.origin=view.position;
         scene.lastPlayer=view.position;
         if(reset)scene.filteredPlayer=view.position;
+        scene.cueClock=observed;
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         if(!scene.previous.empty()){
@@ -424,6 +442,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         }
     }
     const float dt=std::clamp(float(now-scene.lastFrame),0.f,200.f);
+    if(!newCue)scene.cueClock=advanceCueClock(scene.cueClock,observed,dt,playing);
+    position=scene.cueClock;
     if(magnitude2(view.position-scene.filteredPlayer)<64.f){
         const float weight=1.f-std::exp(-dt/175.f);
         scene.filteredPlayer=scene.filteredPlayer+(view.position-scene.filteredPlayer)*weight;
@@ -436,6 +456,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     bool freshPulse=beats&&pulse!=scene.lastBeatPulse&&now-beatPulseTime.load()<240;
     if(pulse!=scene.lastBeatPulse&&!freshPulse)scene.lastBeatPulse=pulse;
     const float followDt=1.f-std::exp(-dt*.001f*7.f);
+    const float liftDt=1.f-std::exp(-dt/135.f);
     auto follow=[&](std::vector<Panel>& panels){for(auto& panel:panels){
         if(lyricTrailFollow.load()){
             const float age=cueProgress(position,panel.cueStart,panel.cueEnd);
@@ -445,7 +466,9 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             const Vec3 target=panel.anchor+(scene.filteredPlayer-panel.spawnPlayer)*gain;
             panel.visualAnchor=panel.visualAnchor+(target-panel.visualAnchor)*
                 (followDt*(1.f-.48f*age));
-        }else panel.visualAnchor=panel.anchor;
+            const float targetLift=riseForProgress(age);
+            panel.visualLift+=(targetLift-panel.visualLift)*liftDt;
+        }else{panel.visualAnchor=panel.anchor;panel.visualLift=0.f;}
     }};
     follow(scene.panels);follow(scene.previous);
     for(auto& panel:scene.panels)if(!panel.appeared&&
@@ -469,7 +492,6 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     tessBegin(tess,nullptr,1,int(count*20),0);
     auto draw=[&](const Panel& panel,float alpha,float lift){
         if(alpha<=0.f)return;
-        const float progress=cueProgress(position,panel.cueStart,panel.cueEnd);
         const float entryAge=std::max(0.f,float(now-panel.appeared));
         const float pulseFade=1.f-smoothstep(entryAge/340.f);
         const float scale=baseScale*std::clamp(1.06f-float(panel.letters)*.006f,.94f,1.04f)
@@ -484,9 +506,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         lift+=.022f*std::sin(t*1.15f+panel.partIndex*.32f)
               +panel.entryStrength*.055f*pulseFade;
         if(lyricTrailFollow.load()){
-            // Quadratic lift accelerates through the line instead of pausing
-            // after its appearance and racing at a fixed speed near its end.
-            lift+=.09f*progress+.85f*progress*progress;
+            lift+=panel.visualLift;
         }
         auto quad=[&](Vec3 tl){
             auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
