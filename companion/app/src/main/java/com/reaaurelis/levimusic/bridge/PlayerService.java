@@ -162,6 +162,14 @@ public final class PlayerService extends MediaSessionService {
         if(current==null || current.song==null)return null;
         return current.makeStatus();
     }
+    /** Read on the main thread for frame-accurate lyric highlighting between status snapshots. */
+    public static long getAccuratePosition() {
+        PlayerService current=active;
+        if(current==null)return 0;
+        try{return current.player==null?current.positionMs:
+            Math.max(0,current.player.getCurrentPosition());}
+        catch(RuntimeException ignored){return current.positionMs;}
+    }
     public static boolean play(Context ctx,MusicCatalog.Song s) {
         if(s==null)return false;
         PlayerService instance=active;

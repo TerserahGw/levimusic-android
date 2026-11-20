@@ -621,10 +621,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             draw(panel,panel.transitionAlpha,.1f,true);
     }
     for(auto& panel:scene.panels)if(panel.appeared){
-        float appear=std::clamp(float(now-panel.appeared)/220.f,.05f,1.f);
+        const float appear=std::max(.03f,smoothstep(float(now-panel.appeared)/350.f));
         float focus=panel.partIndex==currentPart?1.f:.68f;
         panel.visibleAlpha=appear*focus*activeFade;
-        draw(panel,panel.visibleAlpha,(1.f-appear)*(-.12f));
+        draw(panel,panel.visibleAlpha,(1.f-appear)*(-.09f));
     }
     alignas(8) char texture[0x58]{};
     renderMesh(ctx,tess,&material,texture);

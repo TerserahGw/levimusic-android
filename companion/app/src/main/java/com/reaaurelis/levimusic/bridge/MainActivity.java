@@ -41,9 +41,9 @@ import java.util.concurrent.Executors;
 import java.util.Locale;
 
 public final class MainActivity extends Activity {
-    private static final int BG=0xFF111216, SURFACE=0xFF1C1E23, SURFACE_ALT=0xFF282B30;
-    private static final int PRIMARY=0xFFF4F4F6, SECONDARY=0xFFA0A3AB;
-    private static final int SOFT=0xFF777B83;
+    private static final int BG=0xFF10191E, SURFACE=0xFF1B292E, SURFACE_ALT=0xFF2B3C42;
+    private static final int PRIMARY=0xFFF7FAFC, SECONDARY=0xFFB1C1C7;
+    private static final int SOFT=0xFF80969E, ACCENT=0xFF91E9DB;
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService io=Executors.newSingleThreadExecutor();
     private final ExecutorService artIo=Executors.newFixedThreadPool(3);
@@ -51,8 +51,14 @@ public final class MainActivity extends Activity {
     private LinearLayout list;
     private TextView libraryTitle;
     private boolean showingPlaylists=false;
-    private LinearLayout mainArea, fullPlayer, miniPlayer, navigation;
-    private TextView miniTitle, miniArtist, playerDetail;
+    private LinearLayout mainArea, fullPlayer, miniPlayer, navigation, queueList;
+    private ScrollView queueScroll;
+    private LyricKaraokePanel lyricPanel;
+    private TextView miniTitle, miniArtist, queueTab, lyricsTab, playerEyebrow, heroNow;
+    private ImageView largeCover,miniCover;
+    private View searchBar,homeHero;
+    private int detailTab=0;
+    private String loadedLyricId="",requestedLyricId="",loadedQueueId="";
     private ImageButton miniPlay;
     private int activeTab=0;
     private java.util.List<MusicCatalog.Song> lastSearch=java.util.List.of();
@@ -66,6 +72,14 @@ public final class MainActivity extends Activity {
     private SeekBar timeline;
     private boolean dragging=false,searching=false;
     private int currentDuration=0;
+    private final Runnable lyricTicker=new Runnable(){
+        @Override public void run(){
+            if(fullPlayer!=null&&fullPlayer.getVisibility()==View.VISIBLE&&detailTab==1&&lyricPanel!=null){
+                lyricPanel.update(PlayerService.getAccuratePosition());
+            }
+            handler.postDelayed(this,33);
+        }
+    };
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -78,11 +92,16 @@ public final class MainActivity extends Activity {
         Intent ready=new Intent(this,PlayerService.class).setAction(PlayerService.ACTION_READY);
         try { startForegroundService(ready); } catch(Exception ex){ android.util.Log.w("LeviMusic","Could not warm up media service",ex); }
         handler.post(poll);
+        handler.post(lyricTicker);
     }
     private int dp(float n){return (int)(getResources().getDisplayMetrics().density*n+.5f);}
     private GradientDrawable bg(int fill,float radius){
         GradientDrawable d=new GradientDrawable();
         d.setColor(fill);d.setCornerRadius(dp(radius));return d;
+    }
+    private GradientDrawable glow(int top,int bottom,float radius){
+        GradientDrawable d=new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            new int[]{top,bottom});d.setCornerRadius(dp(radius));return d;
     }
     private TextView text(String str,int sp,int color,boolean bold){
         TextView t=new TextView(this);
@@ -102,13 +121,14 @@ public final class MainActivity extends Activity {
     private void buildUI(){
         LinearLayout root=column();
         root.setBackgroundColor(BG);
-        root.setPadding(dp(22),dp(13),dp(22),dp(16));
+        root.setPadding(dp(18),dp(11),dp(18),dp(12));
 
         LinearLayout header=new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout titles=column();
-        add(titles,text("LeviMusic",25,PRIMARY,true),-1,-2);
-        TextView sub=text("Listen while you play",12,SECONDARY,false);
+        add(titles,text("LeviMusic",27,PRIMARY,true),-1,-2);
+        TextView sub=text("YOUR SOUNDTRACK IN EVERY WORLD",10,ACCENT,true);
+        sub.setLetterSpacing(.11f);
         sub.setPadding(0,dp(2),0,0);add(titles,sub,-1,-2);
         header.addView(titles,new LinearLayout.LayoutParams(0,-2,1));
         ImageButton settings=icon(R.drawable.ic_settings,42);
@@ -117,36 +137,51 @@ public final class MainActivity extends Activity {
         add(header,settings,42,42);
         add(root,header,-1,61);
 
-        LinearLayout searchBar=new LinearLayout(this);
-        searchBar.setGravity(Gravity.CENTER_VERTICAL);
-        searchBar.setBackground(bg(SURFACE,17));
-        searchBar.setPadding(dp(10),dp(5),dp(8),dp(5));
+        LinearLayout searchBox=new LinearLayout(this);
+        searchBar=searchBox;
+        searchBox.setGravity(Gravity.CENTER_VERTICAL);
+        searchBox.setBackground(bg(SURFACE,19));
+        searchBox.setPadding(dp(10),dp(5),dp(8),dp(5));
         searchInput=new EditText(this);
         searchInput.setSingleLine(true);
         searchInput.setTextSize(15);
         searchInput.setHintTextColor(SOFT);
         searchInput.setTextColor(PRIMARY);
-        searchInput.setHint("Search songs or artists");
+        searchInput.setHint("Lagu, artis, atau suasana…");
         searchInput.setPadding(dp(12),0,dp(10),0);
         searchInput.setBackgroundColor(Color.TRANSPARENT);
         searchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         searchInput.setInputType(InputType.TYPE_CLASS_TEXT);
-        searchBar.addView(searchInput,new LinearLayout.LayoutParams(0,dp(42),1));
+        searchBox.addView(searchInput,new LinearLayout.LayoutParams(0,dp(42),1));
         ImageButton go=icon(R.drawable.ic_search,40);
         go.setOnClickListener(v->search());
-        add(searchBar,go,40,40);
+        add(searchBox,go,40,40);
         searchInput.setOnEditorActionListener((v,action,event)->{
             if(action==EditorInfo.IME_ACTION_SEARCH){search();return true;}return false;
         });
         LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(-1,dp(56));
         searchParams.topMargin=dp(14);
-        root.addView(searchBar,searchParams);
+        root.addView(searchBox,searchParams);
         mainArea=column();
         root.addView(mainArea,new LinearLayout.LayoutParams(-1,0,1));
 
+        LinearLayout hero=column();homeHero=hero;
+        hero.setBackground(glow(0xFF315E5D,0xFF21353F,22));
+        hero.setPadding(dp(20),dp(15),dp(18),dp(15));
+        TextView eyebrow=text("✦  SOUNDTRACK FOR YOUR WORLD",10,ACCENT,true);
+        eyebrow.setLetterSpacing(.11f);add(hero,eyebrow,-1,-2);
+        heroNow=text("Dunia baru, musik baru.",19,PRIMARY,true);
+        heroNow.setSingleLine(true);heroNow.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        heroNow.setPadding(0,dp(8),0,dp(2));add(hero,heroNow,-1,-2);
+        TextView hint=text("Cari lagu atau lanjutkan dari mini player",12,SECONDARY,false);
+        add(hero,hint,-1,-2);
+        hero.setOnClickListener(v->expandPlayer(true));
+        LinearLayout.LayoutParams heroParams=new LinearLayout.LayoutParams(-1,-2);
+        heroParams.topMargin=dp(14);mainArea.addView(hero,heroParams);
+
         LinearLayout listTitle=new LinearLayout(this);
         listTitle.setGravity(Gravity.CENTER_VERTICAL);
-        libraryTitle=text("Discover",16,PRIMARY,true);
+        libraryTitle=text("Jelajahi musik",18,PRIMARY,true);
         listTitle.addView(libraryTitle,new LinearLayout.LayoutParams(0,-2,1));
         TextView playlistTab=text("Playlists",13,PRIMARY,true);
         playlistTab.setPadding(dp(9),dp(10),dp(9),dp(10));
@@ -173,7 +208,7 @@ public final class MainActivity extends Activity {
         list.setPadding(0,0,0,dp(22));
         scroller.addView(list);
         mainArea.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
-        empty=text("Search for your next song.\nYour music will keep playing while you explore Minecraft.",
+        empty=text("Temukan musik untuk menemani dunia Minecraft-mu.\nCari lagu di atas, lalu buka mini player untuk lirik dan antrean.",
                 14,SECONDARY,false);
         empty.setGravity(Gravity.CENTER);
         empty.setLineSpacing(dp(5),1.0f);
@@ -181,9 +216,9 @@ public final class MainActivity extends Activity {
         add(list,empty,-1,-2);
 
         LinearLayout player=column();
-        player.setBackground(bg(SURFACE,22));
+        player.setBackground(glow(0xFF20393E,SURFACE,25));
         player.setPadding(dp(18),dp(15),dp(18),dp(12));
-        LinearLayout.LayoutParams playerParams=new LinearLayout.LayoutParams(-1,-2);
+        LinearLayout.LayoutParams playerParams=new LinearLayout.LayoutParams(-1,0,1);
         playerParams.topMargin=dp(8);
         fullPlayer=player;
         root.addView(player,playerParams);
@@ -195,7 +230,7 @@ public final class MainActivity extends Activity {
         currentCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
         currentCover.setBackground(bg(SURFACE_ALT,14));
         currentCover.setClipToOutline(true);
-        add(row,currentCover,52,52);
+        add(row,currentCover,44,44);
         LinearLayout now=column();
         now.setPadding(dp(14),0,0,0);
         currentTitle=text("Nothing playing",16,PRIMARY,true);
@@ -206,11 +241,24 @@ public final class MainActivity extends Activity {
         currentArtist.setSingleLine(true);currentArtist.setEllipsize(android.text.TextUtils.TruncateAt.END);
         add(now,currentArtist,-1,-2);
         row.addView(now,new LinearLayout.LayoutParams(0,-2,1));
-        add(player,row,-1,55);
+        add(player,row,-1,49);
+
+        playerEyebrow=text("NOW PLAYING  ·  BRIDGE",11,ACCENT,true);
+        playerEyebrow.setLetterSpacing(.1f);
+        playerEyebrow.setPadding(0,dp(14),0,dp(12));
+        add(player,playerEyebrow,-1,-2);
+        largeCover=new ImageView(this);
+        largeCover.setImageResource(R.drawable.ic_launcher);
+        largeCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        largeCover.setBackground(bg(SURFACE_ALT,20));
+        largeCover.setClipToOutline(true);
+        LinearLayout.LayoutParams artSize=new LinearLayout.LayoutParams(dp(164),dp(164));
+        artSize.gravity=Gravity.CENTER_HORIZONTAL;artSize.bottomMargin=dp(14);
+        player.addView(largeCover,artSize);
 
         timeline=new SeekBar(this);
         timeline.setMax(1000);
-        timeline.setProgressTintList(android.content.res.ColorStateList.valueOf(PRIMARY));
+        timeline.setProgressTintList(android.content.res.ColorStateList.valueOf(ACCENT));
         timeline.setProgressBackgroundTintList(android.content.res.ColorStateList.valueOf(0xFF3D4048));
         timeline.setThumbTintList(android.content.res.ColorStateList.valueOf(PRIMARY));
         timeline.setPadding(dp(1),dp(5),dp(1),dp(0));
@@ -234,7 +282,7 @@ public final class MainActivity extends Activity {
         previous.setOnClickListener(v->PlayerService.command("previous",0));
         add(controls,previous,49,47);
         playButton=icon(R.drawable.ic_play,50);
-        playButton.setBackground(bg(0xFF383C43,16));
+        playButton.setBackground(bg(0xFF397B75,16));
         LinearLayout.LayoutParams mainPlay=new LinearLayout.LayoutParams(dp(70),dp(53));
         mainPlay.leftMargin=dp(15);mainPlay.rightMargin=dp(15);
         controls.addView(playButton,mainPlay);
@@ -247,15 +295,21 @@ public final class MainActivity extends Activity {
         add(controls,next,49,47);
         add(player,controls,-1,58);
 
-        headerStatus=text("Search & play • ExoPlayer",10,SOFT,false);
+        headerStatus=text("Bridge siap menghubungkan musik dan Minecraft",10,SOFT,false);
         headerStatus.setGravity(Gravity.CENTER);
         headerStatus.setPadding(0,dp(9),0,0);
         add(root,headerStatus,-1,25);
         miniPlayer=new LinearLayout(this);
         miniPlayer.setGravity(Gravity.CENTER_VERTICAL);
-        miniPlayer.setBackground(bg(SURFACE_ALT,18));
+        miniPlayer.setBackground(glow(0xFF314A50,0xFF24363D,20));
         miniPlayer.setPadding(dp(14),0,dp(8),0);
+        miniCover=new ImageView(this);
+        miniCover.setImageResource(R.drawable.ic_launcher);
+        miniCover.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        miniCover.setBackground(bg(SURFACE,11));miniCover.setClipToOutline(true);
+        add(miniPlayer,miniCover,43,43);
         LinearLayout labels=column();
+        labels.setPadding(dp(12),0,0,0);
         miniTitle=text("Nothing playing",14,PRIMARY,true);
         miniTitle.setSingleLine(true);
         miniTitle.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -273,7 +327,7 @@ public final class MainActivity extends Activity {
         navigation=new LinearLayout(this);
         for(int i=0;i<3;i++){
             final int tab=i;
-            TextView button=text(i==0?"Home":i==1?"Playlists":"Settings",13,i==0?PRIMARY:SOFT,true);
+            TextView button=text(i==0?"⌂  Home":i==1?"♫  Playlist":"⚙  Settings",13,i==0?ACCENT:SOFT,true);
             button.setGravity(Gravity.CENTER);
             button.setOnClickListener(v->selectTab(tab));
             navigation.addView(button,new LinearLayout.LayoutParams(0,dp(54),1));
@@ -292,7 +346,7 @@ public final class MainActivity extends Activity {
         return b;
     }
     private void search(){
-        showingPlaylists=false;libraryTitle.setText("Discover");
+        showingPlaylists=false;libraryTitle.setText("Jelajahi musik");
         String query=searchInput.getText().toString().trim();
         if(query.isEmpty()||searching)return;
         searching=true;
@@ -320,7 +374,7 @@ public final class MainActivity extends Activity {
     private void render(List<MusicCatalog.Song> songs){
         searching=false;
         lastSearch=new java.util.ArrayList<>(songs);
-        showingPlaylists=false;libraryTitle.setText("Discover");
+        showingPlaylists=false;libraryTitle.setText("Jelajahi musik");
         trackCount.setText(songs.size()+" results");
         list.removeAllViews();
         if(songs.isEmpty()){
@@ -574,13 +628,14 @@ public final class MainActivity extends Activity {
     private void selectTab(int tab){
         activeTab=tab;
         expandPlayer(false);
-        searchInput.setVisibility(tab==0?View.VISIBLE:View.GONE);
+        searchBar.setVisibility(tab==0?View.VISIBLE:View.GONE);
         mainArea.setVisibility(View.VISIBLE);
-        if(tab==0){render(lastSearch);libraryTitle.setText("Discover");}
+        homeHero.setVisibility(tab==0?View.VISIBLE:View.GONE);
+        if(tab==0){render(lastSearch);libraryTitle.setText("Jelajahi musik");}
         else if(tab==1)showPlaylists();
         else showSettingsTab();
         for(int i=0;i<navigation.getChildCount();i++)
-            ((TextView)navigation.getChildAt(i)).setTextColor(i==tab?PRIMARY:SOFT);
+            ((TextView)navigation.getChildAt(i)).setTextColor(i==tab?ACCENT:SOFT);
     }
     private void showSettingsTab(){
         libraryTitle.setText("Settings");
@@ -628,62 +683,120 @@ public final class MainActivity extends Activity {
         fullPlayer.setVisibility(expanded?View.VISIBLE:View.GONE);
         miniPlayer.setVisibility(expanded?View.GONE:View.VISIBLE);
         navigation.setVisibility(expanded?View.GONE:View.VISIBLE);
+        searchBar.setVisibility(expanded?View.GONE:activeTab==0?View.VISIBLE:View.GONE);
         if(expanded){
-            if(playerDetail==null){
+            if(queueList==null){
                 LinearLayout tabs=new LinearLayout(this);
-                TextView queue=text("Up Next",15,PRIMARY,true);
-                queue.setPadding(dp(14),dp(16),dp(14),dp(16));
-                queue.setOnClickListener(v->showUpNext());
-                tabs.addView(queue,new LinearLayout.LayoutParams(0,-2,1));
-                TextView lyric=text("Lyrics",15,PRIMARY,true);
-                lyric.setPadding(dp(14),dp(16),dp(14),dp(16));
-                lyric.setOnClickListener(v->showPlayerLyrics());
-                tabs.addView(lyric,new LinearLayout.LayoutParams(0,-2,1));
+                tabs.setPadding(0,dp(14),0,dp(8));
+                queueTab=text("♫  Up Next",15,PRIMARY,true);
+                queueTab.setGravity(Gravity.CENTER);queueTab.setPadding(dp(6),dp(12),dp(6),dp(12));
+                queueTab.setOnClickListener(v->showUpNext());
+                tabs.addView(queueTab,new LinearLayout.LayoutParams(0,-2,1));
+                lyricsTab=text("✦  Lyrics",15,SECONDARY,true);
+                lyricsTab.setGravity(Gravity.CENTER);lyricsTab.setPadding(dp(6),dp(12),dp(6),dp(12));
+                lyricsTab.setOnClickListener(v->showPlayerLyrics());
+                tabs.addView(lyricsTab,new LinearLayout.LayoutParams(0,-2,1));
                 add(fullPlayer,tabs,-1,-2);
-                ScrollView scroll=new ScrollView(this);
-                playerDetail=text("",15,SECONDARY,false);
-                playerDetail.setPadding(dp(14),dp(12),dp(14),dp(12));
-                scroll.addView(playerDetail);
-                add(fullPlayer,scroll,-1,210);
-                TextView close=text("⌄  Back to library",14,SECONDARY,true);
+                queueScroll=new ScrollView(this);
+                queueScroll.setFillViewport(true);queueScroll.setVerticalScrollBarEnabled(false);
+                queueList=column();queueList.setPadding(dp(4),dp(8),dp(4),dp(30));
+                queueScroll.addView(queueList);
+                fullPlayer.addView(queueScroll,new LinearLayout.LayoutParams(-1,0,1));
+                lyricPanel=new LyricKaraokePanel(this);
+                fullPlayer.addView(lyricPanel,new LinearLayout.LayoutParams(-1,0,1));
+                lyricPanel.setVisibility(View.GONE);
+                TextView close=text("⌄  Kembali ke beranda",14,SECONDARY,true);
                 close.setGravity(Gravity.CENTER);
                 close.setOnClickListener(v->expandPlayer(false));
-                add(fullPlayer,close,-1,46);
+                add(fullPlayer,close,-1,40);
             }
-            showUpNext();
+            if(detailTab==1)showPlayerLyrics();else showUpNext();
         }
     }
+    private void setDetailTab(int tab){
+        detailTab=tab;
+        queueScroll.setVisibility(tab==0?View.VISIBLE:View.GONE);
+        lyricPanel.setVisibility(tab==1?View.VISIBLE:View.GONE);
+        queueTab.setTextColor(tab==0?ACCENT:SECONDARY);
+        lyricsTab.setTextColor(tab==1?ACCENT:SECONDARY);
+        queueTab.setBackground(bg(tab==0?SURFACE_ALT:SURFACE,14));
+        lyricsTab.setBackground(bg(tab==1?SURFACE_ALT:SURFACE,14));
+    }
     private void showUpNext(){
+        if(queueList==null)return;
+        setDetailTab(0);
         JSONObject state=PlayerService.getStatus();
         String id=state==null?"":state.optString("id");
         org.json.JSONArray tracks=MusicCatalog.queueJson(id).optJSONArray("tracks");
-        StringBuilder summary=new StringBuilder();
+        queueList.removeAllViews();
+        TextView eyebrow=text("ANTREAN PUTAR",11,ACCENT,true);
+        eyebrow.setLetterSpacing(.12f);eyebrow.setPadding(dp(12),dp(8),0,dp(16));
+        add(queueList,eyebrow,-1,-2);
         if(tracks!=null)for(int i=0;i<tracks.length();i++){
-            JSONObject song=tracks.optJSONObject(i);
-            if(song!=null)summary.append(i==0?"NOW PLAYING  ":"NEXT  ")
-                .append(song.optString("title")).append(" • ")
-                .append(song.optString("artist")).append("\n\n");
+            JSONObject item=tracks.optJSONObject(i);
+            if(item==null)continue;
+            String trackId=item.optString("id");
+            MusicCatalog.Song song=MusicCatalog.find(trackId);
+            LinearLayout row=new LinearLayout(this);row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setBackground(bg(i==0?0xFF2D5052:SURFACE_ALT,16));
+            row.setPadding(dp(12),dp(9),dp(10),dp(9));
+            TextView order=text(i==0?"▶":String.format(Locale.ROOT,"%02d",i+1),13,ACCENT,true);
+            order.setGravity(Gravity.CENTER);add(row,order,34,42);
+            LinearLayout detail=column();detail.setPadding(dp(8),0,dp(4),0);
+            TextView name=text(item.optString("title"),14,PRIMARY,true);
+            name.setSingleLine(true);name.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            add(detail,name,-1,-2);
+            TextView artist=text(item.optString("artist"),11,SECONDARY,false);
+            artist.setSingleLine(true);artist.setEllipsize(android.text.TextUtils.TruncateAt.END);
+            add(detail,artist,-1,-2);
+            row.addView(detail,new LinearLayout.LayoutParams(0,-2,1));
+            if(i>0){
+                TextView remove=text("×",22,SECONDARY,false);remove.setGravity(Gravity.CENTER);
+                remove.setOnClickListener(v->{MusicCatalog.removeUpcoming(trackId,id);
+                    PlayerService.requestRadioRefill();showUpNext();});
+                add(row,remove,38,42);
+            }
+            if(song!=null)row.setOnClickListener(v->{PlayerService.play(this,song);showUpNext();});
+            LinearLayout.LayoutParams slot=new LinearLayout.LayoutParams(-1,-2);
+            slot.bottomMargin=dp(8);queueList.addView(row,slot);
         }
-        playerDetail.setText(summary.length()==0?"Queue is empty":summary.toString());
+        if(tracks==null||tracks.length()==0){
+            TextView help=text("Antrean masih kosong. Cari lagu dan tambahkan lewat menu ⋮.",14,SECONDARY,false);
+            help.setPadding(dp(14),dp(20),dp(14),dp(20));add(queueList,help,-1,-2);
+        }
+        loadedQueueId=id;
     }
     private void showPlayerLyrics(){
+        if(lyricPanel==null)return;
+        setDetailTab(1);
         JSONObject state=PlayerService.getStatus();
         if(state==null||!state.optBoolean("available")){
-            playerDetail.setText("Play a song to see its lyrics");return;
+            lyricPanel.showMessage("Putar lagu untuk melihat lirik tersinkron");return;
         }
+        String id=state.optString("id");
+        if(id.equals(loadedLyricId)||id.equals(requestedLyricId))return;
         String title=state.optString("title"),artist=state.optString("artist");
         int duration=state.optInt("durationMs");
-        MusicCatalog.Song song=MusicCatalog.find(state.optString("id"));
-        playerDetail.setText("Loading lyrics…");
+        MusicCatalog.Song song=MusicCatalog.find(id);
+        requestedLyricId=id;
+        lyricPanel.showMessage("Mencari lirik tersinkron…");
         io.execute(()->{
             JSONObject result=LyricsFinder.find(this,title,artist,duration,
                 song==null?"":song.url,LyricsStore.romanizationLanguage(this));
             String raw=result.optString("syncedLyrics");
-            final CharSequence display=raw.isEmpty()?"Lyrics unavailable. Import an LRC file in Settings.":
-                LyricsRomanizer.richDisplay(raw,title,LyricsStore.romanizationLanguage(this),
-                    LyricsStore.romanizeEnabled(this));
-            runOnUiThread(()->playerDetail.setText(display));
+            String reading=raw.isEmpty()||!LyricsStore.romanizeEnabled(this)?"":
+                LyricsRomanizer.lrc(raw,title,LyricsStore.romanizationLanguage(this));
+            runOnUiThread(()->{
+                if(!id.equals(requestedLyricId))return;
+                loadedLyricId=id;requestedLyricId="";
+                lyricPanel.setLyrics(raw,reading,result.optString("source"));
+                lyricPanel.update(PlayerService.getAccuratePosition());
+            });
         });
+    }
+    @Override public void onBackPressed(){
+        if(fullPlayer.getVisibility()==View.VISIBLE){expandPlayer(false);return;}
+        super.onBackPressed();
     }
     private static String format(long ms){
         long seconds=Math.max(0,ms/1000);
@@ -697,6 +810,7 @@ public final class MainActivity extends Activity {
                 currentArtist.setText(state.optString("artist",""));
                 miniTitle.setText(state.optString("title","Nothing playing"));
                 miniArtist.setText(state.optString("artist",""));
+                heroNow.setText(state.optString("title","Dunia baru, musik baru."));
                 miniPlay.setImageResource(state.optBoolean("playing")?R.drawable.ic_pause:R.drawable.ic_play);
                 boolean playing=state.optBoolean("playing");
                 playButton.setImageResource(playing?R.drawable.ic_pause:R.drawable.ic_play);
@@ -708,12 +822,21 @@ public final class MainActivity extends Activity {
                 timeLabel.setText(format(position)+" / "+format(duration));
                 headerStatus.setText(state.optString("message",""));
                 showCover(state.optString("art",""));
+                String id=state.optString("id");
+                if(fullPlayer.getVisibility()==View.VISIBLE){
+                    if(detailTab==1&&!id.equals(loadedLyricId)&&!id.equals(requestedLyricId))
+                        showPlayerLyrics();
+                    else if(detailTab==0&&!id.equals(loadedQueueId))showUpNext();
+                }
             }
             handler.postDelayed(this,450);
         }
     };
     private void loadArtInto(ImageView target,String url){
-        if(url==null||!url.startsWith("https://"))return;
+        if(url==null||!url.startsWith("https://")){
+            target.setTag(null);target.setImageResource(R.drawable.ic_launcher);return;
+        }
+        if(url.equals(target.getTag()))return;
         target.setTag(url);
         Bitmap cached;
         synchronized(coverCache){cached=coverCache.get(url);}
@@ -742,6 +865,8 @@ public final class MainActivity extends Activity {
         if(url==null)url="";
         if(url.equals(currentCoverUrl))return;
         currentCoverUrl=url;
+        loadArtInto(largeCover,url);
+        loadArtInto(miniCover,url);
         if(url.isEmpty()||!url.startsWith("https://")){
             currentCover.setImageResource(R.drawable.ic_launcher);
             return;
@@ -793,7 +918,8 @@ public final class MainActivity extends Activity {
             .show();
     }
     @Override public void onDestroy(){
-        handler.removeCallbacks(poll);io.shutdownNow();artIo.shutdownNow();super.onDestroy();
+        handler.removeCallbacks(poll);handler.removeCallbacks(lyricTicker);
+        io.shutdownNow();artIo.shutdownNow();super.onDestroy();
     }
 }
 

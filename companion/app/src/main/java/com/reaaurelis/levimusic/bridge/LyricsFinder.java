@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 /** Local LRC, word-timed TTML, multiple synced providers and video captions. */
 public final class LyricsFinder {
     private static final String TAG="LeviMusicLyrics";
-    private static final ExecutorService SOURCES=Executors.newFixedThreadPool(7,task->{
+    private static final ExecutorService SOURCES=Executors.newFixedThreadPool(8,task->{
         Thread thread=new Thread(task,"LeviMusic-LyricsSource");thread.setDaemon(true);return thread;
     });
     private LyricsFinder(){}
@@ -37,7 +37,7 @@ public final class LyricsFinder {
         try{
             URLConnection connection=new URL(address).openConnection();
             connection.setConnectTimeout(4500);connection.setReadTimeout(6500);
-            connection.setRequestProperty("User-Agent","LeviMusic/1.3.5 (Android; lyrics client)");
+            connection.setRequestProperty("User-Agent","LeviMusic/1.3.6 (Android; lyrics client)");
             try(InputStream stream=connection.getInputStream()){
                 byte[] data=stream.readNBytes(500000);
                 return new String(data,StandardCharsets.UTF_8);
@@ -129,6 +129,15 @@ public final class LyricsFinder {
             JSONObject answer=new JSONObject(fetch("https://lyrics-api.boidu.dev/kugou/getLyrics?s="+
                 enc(title)+"&a="+enc(artist)+"&d="+duration/1000));
             String raw=answer.optString("lyrics");
+            return usable(raw,duration)?raw:"";
+        }catch(Exception ignored){return "";}
+    }
+    private static String qq(String title,String artist,int duration){
+        if(title.isEmpty()||artist.isEmpty()||duration<=0)return "";
+        try{
+            JSONObject answer=new JSONObject(fetch("https://api.betterlyrics.org/qq/getLyrics?s="+
+                enc(title)+"&a="+enc(artist)+"&d="+duration/1000));
+            String raw=WordTimedQrc.convert(answer.optString("lyrics"),title,artist,duration);
             return usable(raw,duration)?raw:"";
         }catch(Exception ignored){return "";}
     }
@@ -288,6 +297,7 @@ public final class LyricsFinder {
             tasks.add(completed.submit(()->new Found(lrclib(title,artist,duration),"LRCLIB",50)));
             tasks.add(completed.submit(()->new Found(netease(title,artist,duration),"NetEase",45)));
             tasks.add(completed.submit(()->new Found(kugou(title,artist,duration),"KuGou / BetterLyrics",40)));
+            tasks.add(completed.submit(()->new Found(qq(title,artist,duration),"QQ Music / BetterLyrics",84)));
             tasks.add(completed.submit(()->{
                 String[] result=liriqo(title,artist,duration);
                 return new Found(result[0],result[1],result[0].contains("<")?78:55);
@@ -303,7 +313,7 @@ public final class LyricsFinder {
                     Found found=next.get();
                     if(found.quality>best&&usable(found.lyrics,duration)){
                         raw=found.lyrics;source=found.provider;best=found.quality;
-                        if(best>=80)break;
+                        if(best>=84)break;
                     }
                 }catch(Exception ignored){/* an unavailable source does not block the rest */}
             }

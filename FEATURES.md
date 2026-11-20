@@ -1,4 +1,4 @@
-# LeviMusic 1.3.5 — feature status
+# LeviMusic 1.3.6 — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -67,3 +67,9 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - Continue each segment’s actual opacity into staggered, ordered old-to-new transitions; remove the pre-end fade that made previous lyrics reappear. Crossfade the legacy 2D lyrics at timestamp boundaries.
 - First Person placement choices: grid, fan, staggered grid. Other cameras: adjustable arc, full ring, or gently varied full ring (default); all maintain lyric order.
 - Add KuGou and LiriQo fallback to the Bridge lyrics engine, validate recording metadata and timed lines, and retain native word timings when supplied.
+
+## v1.3.6
+- Ease each 3D lyric segment into view over 350 ms while the previous words continue their ordered exit.
+- Add QQ Music QRC as a word-timed Bridge source; keep all existing providers as fallbacks. The uploaded Node `lirik.js` is not bundled into Android; its QRC format is implemented natively in Java.
+- Redesign Bridge colors, artwork, expanded player, editable queue, and an active-line lyric timeline with word highlights when authentic word timings exist. Original text remains above the smaller romanization.
+- Minecraft 1.26.66.1 renderer support remains unverified until its ARM64 `libminecraftpe.so` is audited. The mod manifest does not impose a Minecraft version range, but 3D declines mismatched native signatures.

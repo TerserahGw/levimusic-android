@@ -104,6 +104,14 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Verify word-timed QRC conversion
+        run: |
+          mkdir -p build/qrc-test
+          javac -encoding UTF-8 -d build/qrc-test \
+            companion/app/src/main/java/com/reaaurelis/levimusic/bridge/WordTimedQrc.java \
+            tests/QrcParserSmoke.java
+          java -cp build/qrc-test com.reaaurelis.levimusic.bridge.QrcParserSmoke
+
       - name: Compile browser Java into self-contained DEX
         shell: bash
         run: |
@@ -203,14 +211,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.3.5-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.3.6-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.3.5-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.3.6-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -265,12 +273,12 @@ jobs:
               "Mod musik client-only untuk Minecraft Bedrock melalui LeviLauncher Android ARM64. Lirik 3D tampil di world hanya untuk pemain lokal; Bridge APK menyediakan pemutar, antrean, dan lirik tersinkron.",
               "",
               "## Versi Minecraft yang didukung untuk lirik 3D",
-              "- 1.26.52, 1.26.60, dan 1.26.62.1 pada profil ARM64 dengan Build ID yang cocok. Versi/binary lain tidak dijamin dapat memakai renderer 3D.",
+              "- 1.26.52, 1.26.60, dan 1.26.62.1 pada profil ARM64 dengan Build ID yang cocok. Minecraft 1.26.66.1 dapat menjalankan mod musik jika loader memuatnya, tetapi renderer 3D menunggu pemeriksaan binary ARM64 versi tersebut.",
               "",
-              "## Perubahan dari v1.3.4",
-              "- Pergantian lirik 3D lebih halus: kata lama memudar berurutan sambil potongan baru mulai muncul. Opacity diteruskan saat transisi agar tidak muncul kembali sekejap. Lirik 2D juga saling crossfade.",
-              "- Tiga pilihan susunan per mode kamera. First Person: kisi, kipas, atau bertingkat. Kamera lain: busur, cincin 360°, atau cincin acak yang tetap berurutan. Pengaturannya tersimpan terpisah.",
-              "- Fallback lirik bertambah lewat KuGou dan LiriQo (multi-provider). Validasi judul, artis, durasi, dan timestamp diperketat; timing kata dipertahankan jika tersedia. Cakupan bergantung pada ketersediaan sumber.",
+              "## Perubahan dari v1.3.5",
+              "- Potongan lirik 3D muncul dengan easing lebih halus; transisi lirik lama berurutan tetap berjalan.",
+              "- Sumber QQ Music/QRC ditambahkan untuk timestamp per kata. Sumber LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, lirik lokal, dan subtitle tetap menjadi fallback.",
+              "- Bridge tampil baru dengan pemutar penuh, antrean yang bisa disentuh, artwork besar, dan lirik aktif yang mengikuti waktu serta kata saat timestamp kata tersedia. Romanisasi tampil kecil di bawah teks asli.",
               "",
               "Gunakan LeviPack biasa bersama Bridge APK untuk pemutar lengkap. Paket Standalone ditujukan bagi pengguna server ChruPipe sendiri; jangan aktifkan kedua varian LeviPack sekaligus.",
               "",
