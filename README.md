@@ -1,34 +1,92 @@
-# LeviMusic v1.2.4
+# LeviMusic Online
 
-Author: **ReaAurelis** | Android ARM64 Minecraft Bedrock via LeviLauncher.  
-**Status:** CI-compiled, game-runtime behavior NOT confirmed.
+**A client-side music player with synchronized lyrics for Minecraft Bedrock on LeviLauncher Android (ARM64).**
 
-## What's new
+[![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
+[![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-### SEARCH / PLAYLIST / LYRICS tabs
-The full mod's right side is a single tabbed pane instead of separate permanent Search and Lyrics columns. The left side remains the current Music Player. Search provides music results and **+** action for adding songs to Up Next. Playlist has **UP NEXT** for the temporary recommendation radio and **SAVED** for existing user playlists. Lyrics shows the current synchronized LRC line and the lines around it. Pagination and buttons use dedicated slots so touch areas do not overlap.
+**Latest documented release:** v1.3.6 (20 November 2026)  
+**Author:** ReaAurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
-### Autoplay starts from your selected result, not search ranking
-If you search 'Another Love' and tap result #2, result #2 is the start of a **new temporary radio**, not a command to play search result #3 next. LeviMusic uses YouTube's related-video suggestions through NewPipeExtractor (with similarity-search fallback) to **try to keep three future songs ready**. The Up Next view shows the current song and the next three, and allows removing suggestions, selecting one to play, or adding a song from Search using **+**. The queue is refreshed as songs change.
+LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional experimental 3D floating lyrics rendered locally in your Minecraft world.
 
-Playlist tracks saved by the user continue in their explicit playlist order. A related recommendation is not necessarily exactly what Spotify or YouTube's proprietary recommendations would choose; the extraction API is unofficial and can stop working.
+**[Download the latest release](https://github.com/TerserahGw/levimusic-android/releases/latest)** · [All releases](https://github.com/TerserahGw/levimusic-android/releases) · [Feature details](FEATURES.md)
 
-### Floating lyrics in 1.2.4
-The native world renderer remains in source but is suspended because its version-specific Minecraft hooks can freeze the game. The setting now displays a client-only 2D floating lyric overlay when synchronized lyrics are available. True 3D world lyrics need a verified renderer integration and are not provided by this release.
+## Features
 
-### Installation
-- **Full version:** install both LeviMusic Bridge APK and the full `LeviMusic-1.2.4-arm64-v8a.levipack` file. Existing Bridge pairing and playlist storage should persist on a regular in-place signed APK update.
-- **Standalone:** install `LeviMusic-Standalone-1.2.4-arm64-v8a.levipack` only. Requires a separately running **ChruPipe** self-hosted server (Ktor backend); configure server URL in LeviMusic. The separate built-in WebView remains an optional, visible browser experiment, not the native music backend. The editable 3-song radio queue requires the full Bridge variant.
-- **Never load both native .levipack variants simultaneously.**
+- **Music player and discovery:** play music using the Android Bridge, browse/search tracks, see artwork, and control playback.
+- **Search / Playlist / Lyrics tabs:** a touch-friendly in-game interface for landscape Android.
+- **Editable Up Next:** starting a song creates a temporary related-track radio with up to three future suggestions when available. Remove, play, or add songs to the queue. Saved playlists retain their own order.
+- **Synchronized lyrics:** active-line highlights and word-by-word timing when a source provides authentic word timestamps. Smaller romanized readings appear beneath the original text.
+- **Multiple lyric sources:** QQ Music/QRC, LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, local lyrics, and supported caption fallbacks. Results vary by song and provider availability.
+- **Experimental 3D floating lyrics:** client-only world-space lyric panels with segmented transitions, multiple layouts, and configurable camera-related positioning. No per-world addon is required; other multiplayer users do not see your lyrics.
+- **Legacy 2D lyrics:** available separately when 3D rendering is unsupported or disabled.
 
-### Troubleshooting
-- Up Next empty after starting radio: verify the Bridge APK is connected and the unofficial YouTube related-video extractor still functions. The queue is populated asynchronously and may contain fewer than three suggestions.
-- In-game audio sources still follow platform terms. The app's NewPipeExtractor is unofficial; standalone ChruPipe needs a server running.
+This project is an unofficial community mod. It is not affiliated with Mojang, Microsoft, or the LeviLauncher maintainers.
 
-## Sources and acknowledgments
-- [BedrockTools world-render sample](https://github.com/QYCottage/BedrockTools/blob/main/src/modules/visual/breadcrumbs.cpp) (GPLv3; referenced for render hooks, signatures, and offsets).
-- [GitHub Releases](https://github.com/TerserahGw/levimusic-android/releases).
-- [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
-## v1.2.4
+## Compatibility
 
-The Android companion now has Home, Playlists and Settings tabs, a persistent mini player, an expanded player with Up Next and Lyrics, and a three-dot song menu for Play, Add to Up Next and Add to playlist. Romanization is on by default, using Android ICU for supported non-Latin scripts; it can be turned off in Settings or the in-game mod config. The world-space native hook is suspended after reports of a frozen player; the experimental toggle displays client-only 2D floating subtitles until a Minecraft version-specific native renderer is validated. The 3D feature is not available in this build.
+| Component | Requirements / limitations |
+| --- | --- |
+| Device | Android **ARM64 (arm64-v8a)** |
+| Game / launcher | Minecraft Bedrock running through LeviLauncher Android with a compatible native mod loader |
+| Core music features | Depend on successful mod loading and a working Bridge connection (or a separately configured ChruPipe backend for Standalone) |
+| 3D world lyrics | Native profiles for Minecraft **1.26.52**, **1.26.60**, and **1.26.62.1**, and only when the ARM64 binary's Build ID/signatures match |
+| Minecraft 1.26.66.1 | Core music may work if the loader accepts the mod, but **3D world-lyrics compatibility has not been verified** |
+
+**Important:** A successful CI build does not prove on-device compatibility. The renderer checks native game signatures and may refuse to activate on an unmatched game binary. Do not assume all Minecraft patch versions support 3D lyrics.
+
+## Installation
+
+Choose **one** of the following modes. **Do not install or enable both LeviPack variants at the same time.**
+
+### Option A — Full mode (recommended)
+
+Download both files from the **same release**:
+
+1. **LeviMusic-1.3.6-arm64-v8a.levipack** — import/install this in LeviLauncher.
+2. **LeviMusic-Bridge-1.3.6.apk** — install the Android companion app.
+
+Open the Bridge, complete the available pairing/connection steps, then launch Minecraft through LeviLauncher. Full mode provides the Android music player, playlists, editable queue, and synchronized lyric integration.
+
+Current v1.3.6 downloads:
+- [Full LeviPack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.3.6/LeviMusic-1.3.6-arm64-v8a.levipack)
+- [Bridge APK](https://github.com/TerserahGw/levimusic-android/releases/download/v1.3.6/LeviMusic-Bridge-1.3.6.apk)
+
+**Note for External Mods catalog users:** the catalog can distribute the LeviPack, but the **Bridge APK must also be installed separately** from GitHub Releases for full mode.
+
+### Option B — Standalone mode (advanced)
+
+Download [LeviMusic-Standalone-1.3.6-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.3.6/LeviMusic-Standalone-1.3.6-arm64-v8a.levipack) instead of the full LeviPack.
+
+This variant requires your **own running ChruPipe server**. Configure its server URL in LeviMusic before attempting playback. Standalone does **not** provide all of the Bridge variant's queue editing features. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
+
+For newer releases, use the matching files from the [latest release page](https://github.com/TerserahGw/levimusic-android/releases/latest) rather than mixing versions.
+
+## What's new in v1.3.6
+
+- More fluid 3D lyric-segment entrances, with overlapping, ordered fades for old and new words.
+- Added QQ Music QRC word-timing support alongside existing lyric-source fallbacks.
+- Redesigned Bridge UI with larger artwork, an expanded player, touch-friendly queue, and timestamp-following lyrics with word highlights when timing data is available.
+- **Minecraft 1.26.66.1 3D world lyrics remain unverified.**
+
+Read the [v1.3.6 release notes](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.3.6) and [detailed feature history](FEATURES.md).
+
+## Troubleshooting
+
+- **Music controls do not respond:** confirm the Bridge APK and full LeviPack use the same release version and that pairing is complete.
+- **No 3D lyrics:** check the exact Minecraft ARM64 build; turn on the 3D feature only on compatible builds. Try Legacy 2D lyrics separately. See [3D technical notes](docs/WORLD_LYRICS_3D.md).
+- **No lyric lines or recommendations:** third-party sources may be unavailable, rate-limited, or missing timestamp information for that recording.
+- **Standalone cannot play:** check that your own ChruPipe server is running and that the configured URL is reachable.
+
+Please report reproducible issues through [GitHub Issues](https://github.com/TerserahGw/levimusic-android/issues), including Minecraft version, device architecture, mod version, and relevant logs without private tokens.
+
+## Distribution and updates
+
+- GitHub Releases: [download and changelog](https://github.com/TerserahGw/levimusic-android/releases).
+- LeviLauncher **External Mods / LeviModHub**: catalog metadata lives in [levimod.json](levimod.json), once the catalog entry is accepted by its maintainers.
+- For a future release, keep the **version** and **minecraft_versions** in levimod.json aligned with its Git tag and verified support. Catalog entries must not claim unsupported renderer versions.
+
+## License and acknowledgments
+
+Licensed under **[GNU GPL v3](LICENSE)**. See [third-party licenses and acknowledgments](THIRD_PARTY_LICENSES.md) for external components and credited references. Respect applicable platform terms for any online media sources.

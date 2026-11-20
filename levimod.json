@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "levimusic",
+  "version": "1.3.6",
+  "minecraft_versions": [
+    "1.26.52",
+    "1.26.60",
+    "1.26.62.1"
+  ],
+  "info": {
+    "name": "LeviMusic Online",
+    "author": "ReaAurelis",
+    "summary": "Client-side music player with synchronized and experimental 3D lyrics for LeviLauncher Android. Full mode also requires the Bridge APK.",
+    "description": "LeviMusic adds music search, playback controls, artwork, editable Up Next queue, saved playlists, word-synchronized lyrics, romanization, and optional client-only 3D world lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. For the full player, install the separate LeviMusic Bridge APK from GitHub Releases alongside the standard LeviPack. The Standalone LeviPack instead requires your own ChruPipe server. 3D world lyrics depend on a matching Minecraft ARM64 Build ID; Minecraft 1.26.66.1 3D support is not verified.",
+    "homepage_url": "https://github.com/TerserahGw/levimusic-android",
+    "tags": [
+      "Music",
+      "Client",
+      "UI",
+      "Visual"
+    ]
+  },
+  "release_assets": {
+    "include": [
+      "*.levipack"
+    ],
+    "labels": {
+      "LeviMusic-1.3.6-arm64-v8a.levipack": "Full mod — requires Bridge APK",
+      "LeviMusic-Standalone-1.3.6-arm64-v8a.levipack": "Standalone — requires ChruPipe server"
+    }
+  },
+  "changelog": "v1.3.6: Smoother segmented 3D lyric transitions; QQ Music QRC word-timing support; redesigned Android Bridge player, artwork, queue, and synchronized word-highlighting lyric timeline. 3D support for Minecraft 1.26.66.1 is not verified."
+}
