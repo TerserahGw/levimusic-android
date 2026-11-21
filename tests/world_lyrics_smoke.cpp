@@ -15,6 +15,8 @@ int main(){
     auto pixels=glyphs("HELLO 123");
     assert(!pixels.empty() && pixels.size()*20 < 50000);
     assert(latinDisplay("lirik") == "lirik");
+    assert(latinDisplay("yomi \xe6\x97\xa5\xe6\x9c\xac") == "yomi ");
+    assert(latinDisplay("\xe6\x97\xa5\xe6\x9c\xac").find('?')==std::string::npos);
     assert(!glyphs("lirik").empty());
     assert(matchesPattern({reinterpret_cast<const uint8_t*>("\xEE\x0F\x16\xFC"),4}, "EE 0F ? FC"));
     assert(!matchesPattern({reinterpret_cast<const uint8_t*>("\xEE\x0F\x16\xFC"),4}, "EE 0F 17 FC"));

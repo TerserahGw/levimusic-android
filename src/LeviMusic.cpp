@@ -48,6 +48,7 @@ struct Lyric {
     int ms = 0;
     std::string line;
     std::string romanized;
+    std::string romanizedWorld;
 };
 
 enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
@@ -133,7 +134,8 @@ std::string encode(JNIEnv* env, const std::string& value) {
 }
 
 // No external binaries / local MP3s. Java's platform HTTPS stack performs fetches.
-std::string getHttp(JNIEnv* env, const std::string& url) {
+std::string getHttp(JNIEnv* env, const std::string& url,
+                    const std::string& postBody={}) {
     if (url.rfind("https://", 0) != 0) return {};
     jclass urlClass = env->FindClass("java/net/URL");
     if (!urlClass || clearException(env, "URL class")) return {};
@@ -155,6 +157,42 @@ std::string getHttp(JNIEnv* env, const std::string& url) {
             if (connectTimeout) env->CallVoidMethod(conn, connectTimeout, 8000);
             if (readTimeout) env->CallVoidMethod(conn, readTimeout,
                 url.find("aurelis-symphony.go.altare.global")!=std::string::npos?30000:8000);
+            if(!postBody.empty()&&postBody.size()<24000){
+                jclass http=env->FindClass("java/net/HttpURLConnection");
+                auto method=http?env->GetMethodID(http,"setRequestMethod","(Ljava/lang/String;)V"):nullptr;
+                auto enable=env->GetMethodID(connClass,"setDoOutput","(Z)V");
+                auto header=env->GetMethodID(connClass,"setRequestProperty",
+                    "(Ljava/lang/String;Ljava/lang/String;)V");
+                auto output=env->GetMethodID(connClass,"getOutputStream","()Ljava/io/OutputStream;");
+                jstring post=env->NewStringUTF("POST");
+                jstring name=env->NewStringUTF("Content-Type");
+                jstring mime=env->NewStringUTF("application/json; charset=utf-8");
+                if(method)env->CallVoidMethod(conn,method,post);
+                if(enable)env->CallVoidMethod(conn,enable,JNI_TRUE);
+                if(header)env->CallVoidMethod(conn,header,name,mime);
+                if(output){
+                    jobject streamOut=env->CallObjectMethod(conn,output);
+                    if(streamOut&&!clearException(env,"Aurelis POST stream")){
+                        jclass outClass=env->FindClass("java/io/OutputStream");
+                        auto write=outClass?env->GetMethodID(outClass,"write","([B)V"):nullptr;
+                        auto close=outClass?env->GetMethodID(outClass,"close","()V"):nullptr;
+                        jbyteArray data=env->NewByteArray(static_cast<jsize>(postBody.size()));
+                        if(data){env->SetByteArrayRegion(data,0,static_cast<jsize>(postBody.size()),
+                            reinterpret_cast<const jbyte*>(postBody.data()));
+                            if(write)env->CallVoidMethod(streamOut,write,data);
+                            env->DeleteLocalRef(data);
+                        }
+                        if(close)env->CallVoidMethod(streamOut,close);
+                        if(outClass)env->DeleteLocalRef(outClass);
+                        env->DeleteLocalRef(streamOut);
+                    }
+                }
+                clearException(env,"Aurelis POST request");
+                if(post)env->DeleteLocalRef(post);
+                if(name)env->DeleteLocalRef(name);
+                if(mime)env->DeleteLocalRef(mime);
+                if(http)env->DeleteLocalRef(http);
+            }
             // LRCLIB encourages a descriptive client header; some edges reject
             // default Java URLConnection clients.
             if(url.find("lrclib.net")!=std::string::npos){
@@ -511,12 +549,81 @@ std::string aurelisStream(JNIEnv* env,const std::string& server,const std::strin
 }
 std::vector<Lyric> aurelisLyrics(JNIEnv* env,const std::string& server,
                                 const Track& tr,int durationMs){
-    std::string path="/api/v1/lyrics/lrc?track="+encode(env,tr.title)+
+    std::string path="/api/v1/lyrics?track="+encode(env,tr.title)+
         "&artist="+encode(env,tr.artist)+"&duration="+
         std::to_string(std::max(0,durationMs)/1000);
-    auto raw=chruRequest(env,server,path);
-    if(raw.empty()||raw[0]!='[')return {};
-    return parseLrc(raw);
+    std::vector<Lyric> output;
+    auto root=makeJson(env,chruRequest(env,server,path));
+    if(!root)return output;
+    auto result=optObject(env,root,"result");
+    auto lines=optArray(env,result,"lines");
+    if(lines){
+        jclass cls=env->FindClass("org/json/JSONArray");
+        auto size=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+        auto item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+        int n=size?env->CallIntMethod(lines,size):0;
+        if(clearException(env,"Aurelis lyric length"))n=0;
+        for(int i=0;i<std::min(n,350);++i){
+            jobject row=item?env->CallObjectMethod(lines,item,i):nullptr;
+            if(!row||clearException(env,"Aurelis lyric row"))continue;
+            std::string words=optString(env,row,"text");
+            std::string seconds=optString(env,row,"time");
+            // Some enhanced LRC providers strip spaces around word timestamps.
+            // Rebuild Latin word boundaries from the timed words when the line
+            // itself has lost them; preserve CJK lines and already spaced text.
+            if(words.find(' ')==std::string::npos){
+                auto timed=optArray(env,row,"words");
+                if(timed){
+                    jclass wordClass=env->FindClass("org/json/JSONArray");
+                    auto wordCount=wordClass?env->GetMethodID(wordClass,"length","()I"):nullptr;
+                    auto wordAt=wordClass?env->GetMethodID(wordClass,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+                    int count=wordCount?env->CallIntMethod(timed,wordCount):0;
+                    if(clearException(env,"Aurelis timed word count"))count=0;
+                    if(count>=3&&count<=100&&
+                       std::all_of(words.begin(),words.end(),[](unsigned char c){return c<128;})){
+                        std::string spaced;
+                        int fragments=0,singleLetters=0;
+                        for(int w=0;w<count;++w){
+                            jobject token=wordAt?env->CallObjectMethod(timed,wordAt,w):nullptr;
+                            if(!token||clearException(env,"Aurelis timed word"))continue;
+                            std::string part=optString(env,token,"text");
+                            env->DeleteLocalRef(token);
+                            auto first=part.find_first_not_of(" \t\r\n");
+                            if(first==part.npos)continue;
+                            auto last=part.find_last_not_of(" \t\r\n");
+                            part=part.substr(first,last-first+1);
+                            ++fragments;
+                            if(part.size()==1&&std::isalpha(static_cast<unsigned char>(part[0])))++singleLetters;
+                            if(!spaced.empty()&&std::string(",.!?;:)]}").find(part.front())==std::string::npos&&
+                               spaced.back()!='\''&&spaced.back()!='-')spaced+=' ';
+                            spaced+=part;
+                        }
+                        std::string compact;
+                        for(unsigned char ch:spaced)if(!std::isspace(ch))compact+=static_cast<char>(ch);
+                        if(fragments>=3&&singleLetters*2<fragments&&spaced.size()<1000&&
+                           compact==words)
+                            words=std::move(spaced);
+                    }
+                    if(wordClass)env->DeleteLocalRef(wordClass);
+                    env->DeleteLocalRef(timed);
+                }
+            }
+            try{
+                if(!words.empty()&&!seconds.empty()&&seconds!="null"){
+                    double at=std::stod(seconds);
+                    if(std::isfinite(at)&&at>=0&&at<14400&&
+                       (output.empty()||at*1000>=output.back().ms))
+                        output.push_back({static_cast<int>(std::round(at*1000)),words});
+                }
+            }catch(...){}
+            env->DeleteLocalRef(row);
+        }
+        if(cls)env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(lines);
+    }
+    if(result)env->DeleteLocalRef(result);
+    env->DeleteLocalRef(root);
+    return output;
 }
 #endif
 
@@ -765,7 +872,61 @@ void romanizeLyrics(JNIEnv* env,std::vector<Lyric>& lines){
             if(result!=lyric.line)lyric.romanized=std::move(result);
         }
     }
+    for(auto& lyric:lines)if(!lyric.romanized.empty())
+        lyric.romanizedWorld=romanizeLine(env,lyric.romanized);
 }
+#if defined(LEVI_STANDALONE)
+std::string jsonQuoted(std::string_view value){
+    std::string out="\"";
+    for(unsigned char ch:value){
+        if(ch=='\"'||ch=='\\'){out+='\\';out+=static_cast<char>(ch);}
+        else if(ch=='\n')out+="\\n";
+        else if(ch=='\r')out+="\\r";
+        else if(ch=='\t')out+="\\t";
+        else if(ch<32)out+=' ';
+        else out+=static_cast<char>(ch);
+    }
+    return out+'\"';
+}
+void aurelisRomanize(JNIEnv* env,const std::string& server,
+                     std::vector<Lyric>& lines,const std::string& language){
+    std::string base=server;
+    while(!base.empty()&&base.back()=='/')base.pop_back();
+    if(base.rfind("https://",0)!=0)return;
+    for(size_t first=0;first<lines.size();first+=48){
+        size_t end=std::min(lines.size(),first+48);
+        std::string body="{\"language\":"+jsonQuoted(language)+",\"texts\":[";
+        for(size_t i=first;i<end;++i){
+            if(i>first)body+=',';
+            body+=jsonQuoted(lines[i].line.substr(0,320));
+        }
+        body+="]}";
+        auto root=makeJson(env,getHttp(env,base+"/api/v2/romanize",body));
+        if(!root)continue;
+        auto list=optArray(env,root,"lines");
+        if(list){
+            jclass cls=env->FindClass("org/json/JSONArray");
+            auto size=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+            auto item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+            int count=size?env->CallIntMethod(list,size):0;
+            if(clearException(env,"Aurelis romanize length"))count=0;
+            for(int n=0;n<count&&first+static_cast<size_t>(n)<end;++n){
+                jobject row=item?env->CallObjectMethod(list,item,n):nullptr;
+                if(!row||clearException(env,"Aurelis romanize row"))continue;
+                auto reading=optString(env,row,"text");
+                if(optString(env,row,"complete")=="true"&&
+                   reading!=lines[first+static_cast<size_t>(n)].line&&
+                   reading.find_first_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")!=std::string::npos)
+                    lines[first+static_cast<size_t>(n)].romanized=std::move(reading);
+                env->DeleteLocalRef(row);
+            }
+            if(cls)env->DeleteLocalRef(cls);
+            env->DeleteLocalRef(list);
+        }
+        env->DeleteLocalRef(root);
+    }
+}
+#endif
 
 // Probe Audius redirects on the music worker (never on the game UI thread).
 // Android's MediaPlayer is more reliable when given the final HTTPS audio URL.
@@ -1356,7 +1517,12 @@ class LeviMusic {
     std::mutex mu_;
     std::condition_variable cv_;
     std::deque<Job> jobs_;
-    struct LyricRequest {Track track;int duration=0;std::string key;uint64_t serial=0;};
+    struct LyricRequest {
+        Track track;int duration=0;std::string key;uint64_t serial=0;
+        bool standalone=false,rebuild=false;
+        std::string server,language;
+        std::vector<Lyric> original;
+    };
     LyricRequest lyricRequest_;
     uint64_t lyricSerial_=0;
     bool lyricPending_=false;
@@ -1374,6 +1540,7 @@ class LeviMusic {
     std::string info_="Tap to open your music library", lyric_, apiKey_, bridgeKey_;
 #if defined(LEVI_STANDALONE)
     std::string chruBase_="https://aurelis-symphony.go.altare.global";
+    std::string romanizationLanguage_="auto";
 #endif
     std::string coverUrl_,coverImageId_;
     int coverCount_=0;
@@ -1417,7 +1584,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.0 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.1 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1460,6 +1627,8 @@ public:
 #if defined(LEVI_STANDALONE)
             .config("chruServer","Aurelis Symphony API URL (hosted default)",
                     pl::modmenu::ConfigType::Text,remembered("chruServer","https://aurelis-symphony.go.altare.global"))
+            .config("romanizeLanguage","Romanization language (auto / ja / ko / zh)",
+                    pl::modmenu::ConfigType::Text,remembered("romanizeLanguage","auto"))
 #else
             .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,remembered("apiKey",""))
 #endif
@@ -1529,9 +1698,21 @@ private:
                 if(shutdown_)return;
                 req=lyricRequest_;lyricPending_=false;
             }
-            auto found=searchLyrics(scope.env,req.track,req.duration,req.key);
+            std::vector<Lyric> found;
+            if(req.rebuild)found=std::move(req.original);
+            else {
+#if defined(LEVI_STANDALONE)
+                if(req.standalone)found=aurelisLyrics(scope.env,req.server,req.track,req.duration);
+#endif
+                if(found.empty())found=searchLyrics(scope.env,req.track,req.duration,req.key);
+            }
             auto shown=found;
-            if(romanizeLyrics_)romanizeLyrics(scope.env,shown);
+            if(romanizeLyrics_){
+#if defined(LEVI_STANDALONE)
+                if(req.standalone)aurelisRomanize(scope.env,req.server,shown,req.language);
+#endif
+                romanizeLyrics(scope.env,shown);
+            }
             {
                 std::lock_guard lock(mu_);
                 if(shutdown_||req.serial!=lyricSerial_)continue;
@@ -1545,10 +1726,15 @@ private:
             }
         }
     }
-    void queueLyrics(const Track& track,int duration,const std::string& key){
+    void queueLyrics(const Track& track,int duration,const std::string& key,bool standalone=false){
         {
             std::lock_guard lock(mu_);
             lyricRequest_={track,duration,key,++lyricSerial_};
+            lyricRequest_.standalone=standalone;
+#if defined(LEVI_STANDALONE)
+            lyricRequest_.server=chruBase_;
+            lyricRequest_.language=romanizationLanguage_;
+#endif
             lyricPending_=true;
         }
         lyricCv_.notify_one();
@@ -1612,7 +1798,11 @@ private:
         } else {
             std::lock_guard lock(mu_);
 #if defined(LEVI_STANDALONE)
-            if(k=="chruServer"){
+            if(k=="romanizeLanguage"){
+                if(v=="auto"||v=="ja"||v=="ko"||v=="zh")
+                    romanizationLanguage_=std::string(v);
+                lyricsRebuild_=true;
+            }else if(k=="chruServer"){
                 std::string requested(v);
                 if(requested.size()<350 &&
                    (requested.rfind("https://",0)==0 ||
@@ -1863,6 +2053,7 @@ private:
         // Client-only native 3D scene: independent from Behavior Packs or servers.
         if(worldLyrics3D_){
             std::string worldLine=lyric;
+            bool worldHasReading=false;
             int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
             for(size_t i=0;i<timedLyrics.size();++i){
                 const auto& item=timedLyrics[i];
@@ -1870,9 +2061,15 @@ private:
                     cueStart=item.ms;
                     cueEnd=i+1<timedLyrics.size()?timedLyrics[i+1].ms:
                         (total>item.ms?total:item.ms+3500);
-                    if(romanizeLyrics_&&!item.romanized.empty())worldLine=item.romanized;
+                    if(romanizeLyrics_&&!item.romanized.empty()){
+                        worldLine=item.romanizedWorld.empty()?item.romanized:item.romanizedWorld;
+                        worldHasReading=true;
+                    }
                 }
             }
+            if(!worldHasReading&&std::any_of(worldLine.begin(),worldLine.end(),
+                [](unsigned char ch){return ch>=128;}))
+                worldLine=romanizeLyrics_?"Romanization unavailable":"Enable romanization for 3D lyrics";
             lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?worldLine:std::string{},
                                  cueStart,cueEnd,elapsed,playing);
         }
@@ -2011,7 +2208,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.0 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.1 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -2265,7 +2462,7 @@ private:
                 }
                 standaloneQueueSelection_=false;
                 vol=volume_;key=apiKey_;playing_=false;elapsed_=0;total_=0;
-                lyrics_.clear();lyricsSource_.clear();lyric_.clear();
+                lyrics_.clear();lyricsSource_.clear();lyric_.clear();++lyricSerial_;
             }
 #if defined(LEVI_STANDALONE)
             std::string server;
@@ -2310,20 +2507,13 @@ private:
 #else
             update(tr.title,tr.artist,"Streaming online (Audius)");
 #endif
-            std::vector<Lyric> found;
+            queueLyrics(tr,player.duration(env),key,
 #if defined(LEVI_STANDALONE)
-            {std::string server;{std::lock_guard lock(mu_);server=chruBase_;}
-             found=aurelisLyrics(env,server,tr,player.duration(env));}
+                        true
+#else
+                        false
 #endif
-            if(found.empty())found=searchLyrics(env,tr,player.duration(env));
-            auto shown=found;
-            if(romanizeLyrics_)romanizeLyrics(env,shown);
-            {
-                std::lock_guard lock(mu_);
-                lyricsSource_=std::move(found);
-                lyrics_=std::move(shown);
-                lyric_=lyrics_.empty()?"No synchronized lyrics":"...";
-            }
+            );
 #if defined(LEVI_STANDALONE)
             bool needSuggestions;
             {std::lock_guard lock(mu_);needSuggestions=queueTracks_.size()<4;}
@@ -2365,9 +2555,28 @@ private:
             // entire game library during a music command.
             lm_world3d::request(worldLyrics3D_);
             if(lyricsRebuild_.exchange(false)){
+#if defined(LEVI_STANDALONE)
+                if(!useBridge_){
+                    std::lock_guard lock(mu_);
+                    if(!lyricsSource_.empty()){
+                        lyricRequest_={};
+                        lyricRequest_.original=lyricsSource_;
+                        lyricRequest_.rebuild=true;
+                        lyricRequest_.standalone=true;
+                        lyricRequest_.server=chruBase_;
+                        lyricRequest_.language=romanizationLanguage_;
+                        lyricRequest_.serial=++lyricSerial_;
+                        lyricPending_=true;
+                        lyricCv_.notify_one();
+                    }
+                }else
+#endif
+                {
                 std::vector<Lyric> raw;
                 {std::lock_guard lock(mu_);raw=lyricsSource_;}
-                if(romanizeLyrics_)romanizeLyrics(env,raw);
+                if(romanizeLyrics_){
+                    romanizeLyrics(env,raw);
+                }
                 {
                     std::lock_guard lock(mu_);
                     lyrics_=std::move(raw);
@@ -2377,6 +2586,7 @@ private:
                         lyric_=item.line;
                     }
                     lyricChanged_=std::chrono::steady_clock::now();
+                }
                 }
             }
             if(useBridge_) {

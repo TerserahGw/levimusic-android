@@ -182,7 +182,9 @@ inline std::string latinDisplay(std::string_view s){
     std::string out;
     for(unsigned char c:s){
         if(out.size()>=96)break;
-        if(c>=128){if((c&0xC0)!=0x80)out+='?';continue;}
+        // A missing glyph must not become a row of question marks in world space.
+        // Romanized text is folded to ASCII before it reaches this bitmap renderer.
+        if(c>=128)continue;
         if(c=='\n'||c=='\r'||c=='\t')out+=' ';
         else if(c>=32&&c<127)out+=static_cast<char>(c);
     }
