@@ -1,4 +1,4 @@
-# LeviMusic 1.3.6 — feature status
+# LeviMusic 1.4.0 beta — feature status
 
 ## Three-way music library UI
 - New two-column layout: Now Playing on the left, a single right-hand pane with **SEARCH / PLAYLIST / LYRICS tabs**.
@@ -24,7 +24,7 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 
 ## Other
 - The full mod retains the Android Bridge APK with Search, Media3 playback, ChruPipe-free remote controls, saved playlists, artwork, and online LRCLIB lyrics.
-- Standalone retains its externally hosted ChruPipe backend requirement and optional visible WebView; it does not provide full Bridge queue editing.
+- Standalone defaults to the hosted Aurelis Symphony API for search, audio stream resolution, lyrics, and radio suggestions. No Bridge APK or user-run server is needed. Online YouTube audio remains conditional on the provider; the standalone WebView remains optional.
 - Signed APK update chain retained from 1.2.0. Do not load full and standalone .levipacks together.
 - The standard release remains stable; the 3D setting is individually labeled Experimental and defaults OFF. GitHub Actions compilation does not confirm runtime stability.
 - v1.2.4: Android Home/Playlists/Settings, mini and expanded player, song options, ICU romanization default-on. Native 3D hook suspended; floating 2D fallback is client-only.
@@ -73,3 +73,8 @@ This experimental path uses an exact ELF Build ID when available, or resolves al
 - Add QQ Music QRC as a word-timed Bridge source; keep all existing providers as fallbacks. The uploaded Node `lirik.js` is not bundled into Android; its QRC format is implemented natively in Java.
 - Redesign Bridge colors, artwork, expanded player, editable queue, and an active-line lyric timeline with word highlights when authentic word timings exist. Original text remains above the smaller romanization.
 - Minecraft 1.26.66.1 renderer support remains unverified until its ARM64 `libminecraftpe.so` is audited. The mod manifest does not impose a Minecraft version range, but 3D declines mismatched native signatures.
+
+## v1.4.0 beta
+- Standalone defaults to the owner-hosted Aurelis Symphony API without a per-user server. Search, direct playback URL resolution/probe, synchronized LRC, and related tracks are integrated.
+- Up Next in Standalone accepts search results, plays selected recommendations, removes items, and attempts automatic advance at song end. External audio may return HTTP 424 or fail during playback; bundled originals are more reliable.
+- The Full/Bridge variant keeps its separate Android companion path. Minecraft 1.26.66.1 native 3D renderer is still unverified.

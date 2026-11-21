@@ -5,7 +5,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Latest documented release:** v1.3.6 (20 November 2026)  
+**Latest beta:** v1.4.0 beta (21 November 2026) · **Stable:** v1.3.6  
 **Author:** ReaAurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional experimental 3D floating lyrics rendered locally in your Minecraft world.
@@ -30,7 +30,7 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 | --- | --- |
 | Device | Android **ARM64 (arm64-v8a)** |
 | Game / launcher | Minecraft Bedrock running through LeviLauncher Android with a compatible native mod loader |
-| Core music features | Depend on successful mod loading and a working Bridge connection (or a separately configured ChruPipe backend for Standalone) |
+| Core music features | Full mode uses Bridge; Standalone defaults to the hosted Aurelis Symphony API and needs internet access, without a user-run server |
 | 3D world lyrics | Native profiles for Minecraft **1.26.52**, **1.26.60**, and **1.26.62.1**, and only when the ARM64 binary's Build ID/signatures match |
 | Minecraft 1.26.66.1 | Core music may work if the loader accepts the mod, but **3D world-lyrics compatibility has not been verified** |
 
@@ -55,15 +55,21 @@ Current v1.3.6 downloads:
 
 **Note for External Mods catalog users:** the catalog can distribute the LeviPack, but the **Bridge APK must also be installed separately** from GitHub Releases for full mode.
 
-### Option B — Standalone mode (advanced)
+### Option B — Standalone mode (v1.4.0 beta)
 
-Download [LeviMusic-Standalone-1.3.6-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.3.6/LeviMusic-Standalone-1.3.6-arm64-v8a.levipack) instead of the full LeviPack.
+Download [LeviMusic-Standalone-1.4.0-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.0-beta/LeviMusic-Standalone-1.4.0-arm64-v8a.levipack) instead of the full LeviPack.
 
-This variant requires your **own running ChruPipe server**. Configure its server URL in LeviMusic before attempting playback. Standalone does **not** provide all of the Bridge variant's queue editing features. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
+This beta uses the **hosted Aurelis Symphony API** by default. No Bridge APK, local backend, account, or user-run server is required. It offers search, direct audio resolution, synchronized lyrics, and an editable radio queue. Internet access and the hosted service are required. YouTube audio can return HTTP 424 or stop if the upstream blocks streaming; the bundled original demo tracks are more reliable. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
 
 For newer releases, use the matching files from the [latest release page](https://github.com/TerserahGw/levimusic-android/releases/latest) rather than mixing versions.
 
-## What's new in v1.3.6
+## What's new in v1.4.0 beta
+
+- Standalone now uses Aurelis Symphony by default for search, stream resolution, lyrics, and recommendations, without an APK or personal server.
+- Search results can enter an editable Up Next queue and advance automatically at song end.
+- The full LeviPack and Bridge APK remain available as separate packages.
+
+## Stable v1.3.6
 
 - More fluid 3D lyric-segment entrances, with overlapping, ordered fades for old and new words.
 - Added QQ Music QRC word-timing support alongside existing lyric-source fallbacks.
@@ -77,7 +83,7 @@ Read the [v1.3.6 release notes](https://github.com/TerserahGw/levimusic-android/
 - **Music controls do not respond:** confirm the Bridge APK and full LeviPack use the same release version and that pairing is complete.
 - **No 3D lyrics:** check the exact Minecraft ARM64 build; turn on the 3D feature only on compatible builds. Try Legacy 2D lyrics separately. See [3D technical notes](docs/WORLD_LYRICS_3D.md).
 - **No lyric lines or recommendations:** third-party sources may be unavailable, rate-limited, or missing timestamp information for that recording.
-- **Standalone cannot play:** check that your own ChruPipe server is running and that the configured URL is reachable.
+- **Standalone cannot play:** check access to the hosted Aurelis Symphony API. An individual YouTube stream can be blocked despite successful search; test an original demo track to separate server connectivity from upstream audio restrictions.
 
 Please report reproducible issues through [GitHub Issues](https://github.com/TerserahGw/levimusic-android/issues), including Minecraft version, device architecture, mod version, and relevant logs without private tokens.
 

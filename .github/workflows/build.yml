@@ -27,10 +27,11 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --force --tags origin
-          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-beta$' | sort -V | tail -n 1 || true)"
           previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
           if [[ -n "$existing" ]]; then
             version="${existing#v}"
+            version="${version%-beta}"
             already_released=true
           else
             minimum="$(tr -d '\r\n ' < VERSION)"
@@ -46,7 +47,7 @@ jobs:
           fi
           {
             echo "version=$version"
-            echo "tag=v$version"
+            echo "tag=v$version-beta"
             echo "previous_tag=$previous"
             echo "already_released=$already_released"
           } >> "$GITHUB_OUTPUT"
@@ -211,14 +212,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.3.6-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.4.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.3.6-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.4.0-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -268,19 +269,19 @@ jobs:
 
           version = os.environ["VERSION"]
           notes = "\n".join([
-              f"# LeviMusic Online v{version}",
+              f"# LeviMusic Online v{version} beta",
               "",
               "Mod musik client-only untuk Minecraft Bedrock melalui LeviLauncher Android ARM64. Lirik 3D tampil di world hanya untuk pemain lokal; Bridge APK menyediakan pemutar, antrean, dan lirik tersinkron.",
               "",
               "## Versi Minecraft yang didukung untuk lirik 3D",
               "- 1.26.52, 1.26.60, dan 1.26.62.1 pada profil ARM64 dengan Build ID yang cocok. Minecraft 1.26.66.1 dapat menjalankan mod musik jika loader memuatnya, tetapi renderer 3D menunggu pemeriksaan binary ARM64 versi tersebut.",
               "",
-              "## Perubahan dari v1.3.5",
-              "- Potongan lirik 3D muncul dengan easing lebih halus; transisi lirik lama berurutan tetap berjalan.",
-              "- Sumber QQ Music/QRC ditambahkan untuk timestamp per kata. Sumber LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, lirik lokal, dan subtitle tetap menjadi fallback.",
-              "- Bridge tampil baru dengan pemutar penuh, antrean yang bisa disentuh, artwork besar, dan lirik aktif yang mengikuti waktu serta kata saat timestamp kata tersedia. Romanisasi tampil kecil di bawah teks asli.",
+              "## Perubahan dari v1.3.6",
+              "- Standalone kini menggunakan API Aurelis Symphony bawaan untuk mencari lagu, memilih stream audio, menampilkan lirik, dan membuat rekomendasi antrean. Pengguna tidak perlu menyalakan server sendiri atau memasang Bridge APK.",
+              "- Up Next Standalone dapat ditambah, diputar, dihapus, dan melanjutkan lagu berikutnya secara otomatis. Audio YouTube tetap bergantung pada ketersediaan stream server; jika diblokir, lagu itu mungkin tidak dapat diputar.",
+              "- Varian Full dan Bridge APK tetap tersedia. Renderer lirik 3D pada Minecraft 1.26.66.1 belum tervalidasi.",
               "",
-              "Gunakan LeviPack biasa bersama Bridge APK untuk pemutar lengkap. Paket Standalone ditujukan bagi pengguna server ChruPipe sendiri; jangan aktifkan kedua varian LeviPack sekaligus.",
+              "Gunakan paket Standalone tanpa Bridge APK; koneksi internet ke Aurelis Symphony tetap diperlukan. Jangan aktifkan kedua varian LeviPack sekaligus.",
               "",
           ])
           Path("release-notes.md").write_text(notes, encoding="utf-8")
@@ -301,7 +302,8 @@ jobs:
           set -euo pipefail
           gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
             --target "$GITHUB_SHA" \
-            --title "LeviMusic Online v$VERSION" \
+            --prerelease \
+            --title "LeviMusic Online v$VERSION beta" \
             --notes-file release-notes.md
           echo "Published release $TAG with $PACKAGE."
 

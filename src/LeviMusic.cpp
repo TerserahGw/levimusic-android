@@ -1,6 +1,4 @@
-// LeviMusic for LeviLauncher Android, v1.0.1 RC
-// Music discovery / playback: Audius public API (not Spotify/YouTube scraping).
-// Lyrics: optional LRCLIB synchronized lyrics, only when available.
+// LeviMusic for LeviLauncher Android: Bridge and Aurelis-powered Standalone.
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
 #include <pl/Input.hpp>
@@ -155,7 +153,8 @@ std::string getHttp(JNIEnv* env, const std::string& url) {
             jmethodID readTimeout = env->GetMethodID(connClass, "setReadTimeout", "(I)V");
             jmethodID input = env->GetMethodID(connClass, "getInputStream", "()Ljava/io/InputStream;");
             if (connectTimeout) env->CallVoidMethod(conn, connectTimeout, 8000);
-            if (readTimeout) env->CallVoidMethod(conn, readTimeout, 8000);
+            if (readTimeout) env->CallVoidMethod(conn, readTimeout,
+                url.find("aurelis-symphony.go.altare.global")!=std::string::npos?30000:8000);
             // LRCLIB encourages a descriptive client header; some edges reject
             // default Java URLConnection clients.
             if(url.find("lrclib.net")!=std::string::npos){
@@ -299,10 +298,9 @@ std::vector<Track> searchAudius(JNIEnv* env, const std::string& query) {
 }
 
 
+std::vector<Lyric> parseLrc(const std::string& raw);
 #if defined(LEVI_STANDALONE)
-// ChruPipe is a self-hosted Kotlin/Ktor+NewPipeExtractor server, NOT a native
-// library. This lightweight standalone client talks directly to its public
-// /search and /stream JSON endpoints. No LeviMusic Bridge APK or Audius is used.
+// Standalone uses the owner's hosted Aurelis Symphony API by default.
 // Loopback HTTP uses a POSIX socket because Minecraft's Android network security
 // policy may reject cleartext Java URLConnection. Remote servers must use HTTPS.
 std::string decodeChunked(std::string_view data) {
@@ -388,7 +386,7 @@ std::string chruRequest(JNIEnv* env,const std::string& server,const std::string&
        root=="http://localhost")return chruLoopbackGet(root+path);
     return {}; // No cleartext remote URLs or SSRF to LAN hosts.
 }
-std::vector<Track> searchChruPipe(JNIEnv* env,const std::string& server,
+[[maybe_unused]] std::vector<Track> searchChruPipe(JNIEnv* env,const std::string& server,
                                   const std::string& query) {
     std::vector<Track> tracks;
     if(query.empty())return tracks;
@@ -421,7 +419,7 @@ std::vector<Track> searchChruPipe(JNIEnv* env,const std::string& server,
     env->DeleteLocalRef(root);
     return tracks;
 }
-std::string streamChruPipe(JNIEnv* env,const std::string& server,
+[[maybe_unused]] std::string streamChruPipe(JNIEnv* env,const std::string& server,
                             const std::string& contentUrl) {
     auto body=chruRequest(env,server,"/stream?url="+encode(env,contentUrl));
     jobject root=makeJson(env,body);
@@ -452,6 +450,73 @@ std::string streamChruPipe(JNIEnv* env,const std::string& server,
     }
     env->DeleteLocalRef(root);
     return selected;
+}
+std::vector<Track> searchAurelis(JNIEnv* env,const std::string& server,
+                                 const std::string& query,const std::string& artist={}){
+    std::vector<Track> tracks;
+    auto path=artist.empty()?"/api/v1/search?provider=youtube&q="+encode(env,query)+"&limit=24":
+        "/api/v1/recommendations?track="+encode(env,query)+"&artist="+
+        encode(env,artist)+"&limit=6";
+    auto body=chruRequest(env,server,path);
+    jobject root=makeJson(env,body);
+    if(!root)return tracks;
+    jobject array=optArray(env,root,"tracks");
+    if(array){
+        jclass cls=env->FindClass("org/json/JSONArray");
+        jmethodID length=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+        jmethodID item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+        int count=length?env->CallIntMethod(array,length):0;
+        if(clearException(env,"Aurelis search length"))count=0;
+        for(int i=0;i<std::min(count,24);++i){
+            jobject obj=item?env->CallObjectMethod(array,item,i):nullptr;
+            if(!obj||clearException(env,"Aurelis search item"))continue;
+            Track tr;
+            tr.id=optString(env,obj,"id");
+            tr.title=optString(env,obj,"title");
+            tr.artist=optString(env,obj,"artist");
+            tr.art=optString(env,obj,"artwork");
+            if(tr.id.size()>=4&&tr.id.size()<=80&&
+               tr.id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")==std::string::npos
+               &&!tr.title.empty())tracks.push_back(std::move(tr));
+            env->DeleteLocalRef(obj);
+        }
+        if(cls)env->DeleteLocalRef(cls);
+        env->DeleteLocalRef(array);
+    }
+    env->DeleteLocalRef(root);
+    return tracks;
+}
+std::string aurelisStream(JNIEnv* env,const std::string& server,const std::string& id){
+    if(id.empty()||id.size()>80||id.find_first_not_of(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)return {};
+    jobject root=makeJson(env,chruRequest(env,server,"/api/v2/playback/"+id));
+    if(!root)return {};
+    const auto relative=optString(env,root,"streamUrl");
+    const auto probe=optString(env,root,"probeUrl");
+    env->DeleteLocalRef(root);
+    if(relative.rfind("/demo/",0)!=0&&relative.rfind("/api/v2/audio/",0)!=0)return {};
+    if(relative.find('?')!=std::string::npos||relative.find('#')!=std::string::npos||
+       relative.find("..")!=std::string::npos)return {};
+    if(!probe.empty()){
+        if(probe.rfind("/api/v2/audio/",0)!=0||probe.find("..")!=std::string::npos)return {};
+        jobject status=makeJson(env,chruRequest(env,server,probe));
+        if(!status)return {};
+        bool available=optString(env,status,"ok")=="true";
+        env->DeleteLocalRef(status);
+        if(!available)return {};
+    }
+    std::string base=server;
+    while(!base.empty()&&base.back()=='/')base.pop_back();
+    return base+relative;
+}
+std::vector<Lyric> aurelisLyrics(JNIEnv* env,const std::string& server,
+                                const Track& tr,int durationMs){
+    std::string path="/api/v1/lyrics/lrc?track="+encode(env,tr.title)+
+        "&artist="+encode(env,tr.artist)+"&duration="+
+        std::to_string(std::max(0,durationMs)/1000);
+    auto raw=chruRequest(env,server,path);
+    if(raw.empty()||raw[0]!='[')return {};
+    return parseLrc(raw);
 }
 #endif
 
@@ -932,9 +997,11 @@ public:
         env->DeleteGlobalRef(player_);
         player_ = nullptr;
     }
-    bool startUrl(JNIEnv* env, const std::string& url, int volume) {
+    bool startUrl(JNIEnv* env, const std::string& url, int volume,
+                  bool trustedFirstParty=false) {
         release(env);
-        const std::string playableUrl=resolveStreamUrl(env,url);
+        const std::string playableUrl=trustedFirstParty&&url.rfind("https://",0)==0?
+            url:resolveStreamUrl(env,url);
         if(playableUrl.empty())return false;
         jclass cls = env->FindClass("android/media/MediaPlayer");
         if (!cls || clearException(env, "MediaPlayer class")) return false;
@@ -1297,6 +1364,7 @@ class LeviMusic {
     std::vector<Track> results_;
     std::vector<Track> searchCache_;
     std::vector<Track> queueTracks_;
+    bool standaloneQueueSelection_=false;
     int rightTab_=0; // 0 Search, 1 Playlist / Up Next, 2 Lyrics
     std::vector<std::string> playlistNames_;
     std::string activePlaylist_;
@@ -1305,7 +1373,7 @@ class LeviMusic {
     std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
     std::string info_="Tap to open your music library", lyric_, apiKey_, bridgeKey_;
 #if defined(LEVI_STANDALONE)
-    std::string chruBase_="http://127.0.0.1:8080";
+    std::string chruBase_="https://aurelis-symphony.go.altare.global";
 #endif
     std::string coverUrl_,coverImageId_;
     int coverCount_=0;
@@ -1341,11 +1409,15 @@ public:
                 if(eq!=std::string::npos&&eq<40&&row.size()<512)
                     savedSettings_[row.substr(0,eq)]=row.substr(eq+1);
             }
+#if defined(LEVI_STANDALONE)
+            if(savedSettings_["chruServer"]=="http://127.0.0.1:8080")
+                savedSettings_["chruServer"]="https://aurelis-symphony.go.altare.global";
+#endif
             std::ifstream keyFile(self_.getConfigDir()/"bridge.token");
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.3.6 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.0 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1386,8 +1458,8 @@ public:
             .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,remembered("embeddedBrowser","false"))
 #endif
 #if defined(LEVI_STANDALONE)
-            .config("chruServer","ChruPipe server URL (local 127.0.0.1:8080 or HTTPS)",
-                    pl::modmenu::ConfigType::Text,remembered("chruServer","http://127.0.0.1:8080"))
+            .config("chruServer","Aurelis Symphony API URL (hosted default)",
+                    pl::modmenu::ConfigType::Text,remembered("chruServer","https://aurelis-symphony.go.altare.global"))
 #else
             .config("apiKey","Audius API Key (optional)",pl::modmenu::ConfigType::Text,remembered("apiKey",""))
 #endif
@@ -1645,6 +1717,11 @@ private:
                 pl::input::hideKeyboard();
                 if(useBridge_)addJob(Action::QueueRefresh);
             }else if(tab==1 && l.queueSaved.contains(e.x,e.y)){
+                if(!useBridge_){
+                    update("Standalone radio","Up Next",
+                           "Use + in Search to add songs to your queue");
+                    return true;
+                }
                 {std::lock_guard lock(mu_);libraryMode_=1;page_=0;selected_=-1;typing_=false;}
                 pl::input::hideKeyboard();
                 if(useBridge_)addJob(Action::PlaylistList);
@@ -1934,7 +2011,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.2.3 • REAAURELIS",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.0 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -2007,7 +2084,7 @@ private:
         text(l.left.x+34*u,l.left.y+l.left.h-4*u,
              streamingBridge?("AUTOPLAY NEXT • BRIDGE"):
 #if defined(LEVI_STANDALONE)
-             ("CHRUPIPE • "+std::to_string(volume)+"%"),
+             ("AURELIS • "+std::to_string(volume)+"%"),
 #else
              ("AUDIUS • "+std::to_string(volume)+"%"),
 #endif
@@ -2114,19 +2191,16 @@ private:
             if(tracks.empty()){
                 text(l.right.x+18*u,l.right.y+169*u,
                      "Search for a song to start your radio.",12*u,C_DIM,57);
-            }else drawSongs(tracks,false,streamingBridge,false);
+            }else drawSongs(tracks,false,true,false);
         }else if(rightTab==1){
             box(l.queueNow,libraryMode==3?0xFF50555EU:0xFF2C3037U,7.f);
             text(l.queueNow.x+11*u,l.queueNow.y+20*u,
                  "UP NEXT",10.5f*u,libraryMode==3?C_TEXT:C_DIM,15);
             box(l.queueSaved,(libraryMode==1||libraryMode==2)?0xFF50555EU:0xFF2C3037U,7.f);
             text(l.queueSaved.x+10*u,l.queueSaved.y+20*u,
-                 "SAVED",10.5f*u,libraryMode!=3?C_TEXT:C_DIM,14);
-            if(!streamingBridge){
-                text(l.right.x+18*u,l.right.y+150*u,
-                     "Up Next is available in the Android Bridge version.",
-                     11.5f*u,C_DIM,66);
-            }else if(libraryMode==3){
+                 streamingBridge?"SAVED":"AURELIS",10.5f*u,
+                 streamingBridge&&libraryMode!=3?C_TEXT:C_DIM,14);
+            if(libraryMode==3){
                 text(l.right.x+15*u,l.right.y+106*u,
                      "RADIO • CURRENT TRACK + 3 RECOMMENDATIONS",10.6f*u,C_DIM,61);
                 if(queueTracks.empty()){
@@ -2183,21 +2257,28 @@ private:
                 std::lock_guard lock(mu_);
                 if(selected_<0||selected_>=static_cast<int>(results_.size()))return;
                 tr=results_[static_cast<size_t>(selected_)];
+                if(!standaloneQueueSelection_){queueTracks_.clear();queueTracks_.push_back(tr);}
+                else if(queueTracks_.empty()||queueTracks_.front().id!=tr.id){
+                    queueTracks_.erase(std::remove_if(queueTracks_.begin(),queueTracks_.end(),
+                        [&](const Track& item){return item.id==tr.id;}),queueTracks_.end());
+                    queueTracks_.insert(queueTracks_.begin(),tr);
+                }
+                standaloneQueueSelection_=false;
                 vol=volume_;key=apiKey_;playing_=false;elapsed_=0;total_=0;
                 lyrics_.clear();lyricsSource_.clear();lyric_.clear();
             }
 #if defined(LEVI_STANDALONE)
             std::string server;
             {std::lock_guard lock(mu_);server=chruBase_;}
-            update(tr.title,tr.artist,"Resolving stream via ChruPipe...");
-            const auto mediaUrl=streamChruPipe(env,server,tr.id);
+            update(tr.title,tr.artist,"Checking Aurelis audio stream...");
+            const auto mediaUrl=aurelisStream(env,server,tr.id);
             if(mediaUrl.empty()) {
-                update(tr.title,tr.artist,"ChruPipe returned no compatible audio stream");
+                update(tr.title,tr.artist,"Aurelis stream unavailable for this song");
                 return;
             }
-            bool ok=player.startUrl(env,mediaUrl,vol);
+            bool ok=player.startUrl(env,mediaUrl,vol,true);
             if(!ok){
-                update(tr.title,tr.artist,"Could not play extracted stream in Android MediaPlayer");
+                update(tr.title,tr.artist,"Android could not play this Aurelis stream");
                 return;
             }
 #else
@@ -2219,11 +2300,22 @@ private:
                 playing_=true;total_=player.duration(env);
             }
 #if defined(LEVI_STANDALONE)
-            update(tr.title,tr.artist,"ChruPipe / NewPipeExtractor streaming");
+            update(tr.title,tr.artist,"Aurelis Symphony streaming");
+            if(!tr.art.empty()&&coverCount_<80){
+                auto imageId="levimusic.cover."+std::to_string(++coverCount_);
+                bool loaded=registerCover(env,tr.art,imageId);
+                std::lock_guard lock(mu_);
+                coverImageId_=loaded?imageId:"";coverUrl_=tr.art;
+            }
 #else
             update(tr.title,tr.artist,"Streaming online (Audius)");
 #endif
-            std::vector<Lyric> found=searchLyrics(env,tr,player.duration(env));
+            std::vector<Lyric> found;
+#if defined(LEVI_STANDALONE)
+            {std::string server;{std::lock_guard lock(mu_);server=chruBase_;}
+             found=aurelisLyrics(env,server,tr,player.duration(env));}
+#endif
+            if(found.empty())found=searchLyrics(env,tr,player.duration(env));
             auto shown=found;
             if(romanizeLyrics_)romanizeLyrics(env,shown);
             {
@@ -2232,8 +2324,24 @@ private:
                 lyrics_=std::move(shown);
                 lyric_=lyrics_.empty()?"No synchronized lyrics":"...";
             }
+#if defined(LEVI_STANDALONE)
+            bool needSuggestions;
+            {std::lock_guard lock(mu_);needSuggestions=queueTracks_.size()<4;}
+            if(needSuggestions){
+                std::string server;{std::lock_guard lock(mu_);server=chruBase_;}
+                auto suggestions=searchAurelis(env,server,tr.title,tr.artist);
+                std::lock_guard lock(mu_);
+                for(auto& item:suggestions){
+                    if(queueTracks_.size()>=4)break;
+                    if(std::none_of(queueTracks_.begin(),queueTracks_.end(),
+                       [&](const Track& saved){return saved.id==item.id;}))
+                        queueTracks_.push_back(std::move(item));
+                }
+            }
+#endif
         };
         auto lastPaint=std::chrono::steady_clock::now();
+        bool standaloneWasPlaying=false;
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
         auto lastAutoBridge=std::chrono::steady_clock::now()-std::chrono::seconds(10);
         auto lastQueue=std::chrono::steady_clock::now()-std::chrono::seconds(3);
@@ -2607,10 +2715,10 @@ private:
                     case Action::Search:{
                         if(job.query.empty()){update("Search","Empty query","Tap search and enter a title");break;}
 #if defined(LEVI_STANDALONE)
-                        update("Searching",job.query,"Contacting your ChruPipe server...");
+                        update("Searching",job.query,"Contacting Aurelis Symphony...");
                         std::string server;
                         {std::lock_guard lock(mu_);server=chruBase_;}
-                        auto found=searchChruPipe(env,server,job.query);
+                        auto found=searchAurelis(env,server,job.query);
 #else
                         update("Searching",job.query,"Contacting Audius...");
                         std::string key;
@@ -2622,13 +2730,15 @@ private:
                         {
                             std::lock_guard lock(mu_);
                             results_=std::move(found);
-                            selected_=results_.empty()?-1:0;
+                            searchCache_=results_;
+                            selected_=-1;
                             page_=0;
                         }
-                        if(selected_>=0)playSelected();
+                        if(!searchCache_.empty())update("Search results",job.query,
+                            std::to_string(searchCache_.size())+" songs found");
 #if defined(LEVI_STANDALONE)
-                        else update("ChruPipe unavailable / no results",job.query,
-                                    "Run the ChruPipe backend or set its server URL");
+                        else update("Aurelis search unavailable / no results",job.query,
+                                    "Check internet or try a different song");
 #else
                         else update("No results",job.query,"Please check internet/API key");
 #endif
@@ -2646,6 +2756,13 @@ private:
                     case Action::Next:{
                         {
                             std::lock_guard lock(mu_);
+#if defined(LEVI_STANDALONE)
+                            if(job.action==Action::Next&&queueTracks_.size()>1){
+                                Track next=queueTracks_[1];queueTracks_.erase(queueTracks_.begin());
+                                results_.push_back(next);selected_=static_cast<int>(results_.size())-1;
+                                standaloneQueueSelection_=true;page_=selected_/5;
+                            }else
+#endif
                             if(!results_.empty()){
                                 int n=static_cast<int>(results_.size());
                                 selected_=(selected_+(job.action==Action::Next?1:n-1))%n;
@@ -2671,15 +2788,58 @@ private:
                         if(browserEnabled_) openEmbeddedBrowser(env,self_.getModDir());
 #endif
                         break;
+#if defined(LEVI_STANDALONE)
+                    case Action::QueueAdd:{
+                        std::lock_guard lock(mu_);
+                        auto it=std::find_if(searchCache_.begin(),searchCache_.end(),
+                            [&](const Track& item){return item.id==job.query;});
+                        if(it!=searchCache_.end()&&queueTracks_.size()<40&&
+                           std::none_of(queueTracks_.begin(),queueTracks_.end(),
+                           [&](const Track& item){return item.id==job.query;}))
+                            queueTracks_.push_back(*it);
+                        break;
+                    }
+                    case Action::QueueRemove:{
+                        std::lock_guard lock(mu_);
+                        if(queueTracks_.size()>1)
+                            queueTracks_.erase(std::remove_if(queueTracks_.begin()+1,queueTracks_.end(),
+                                [&](const Track& item){return item.id==job.query;}),queueTracks_.end());
+                        break;
+                    }
+                    case Action::QueuePlay:{
+                        bool found=false;
+                        {std::lock_guard lock(mu_);
+                         auto it=std::find_if(queueTracks_.begin(),queueTracks_.end(),
+                            [&](const Track& item){return item.id==job.query;});
+                         if(it!=queueTracks_.end()){
+                             Track next=*it;
+                             queueTracks_.erase(queueTracks_.begin(),it);
+                             results_.push_back(next);selected_=static_cast<int>(results_.size())-1;
+                             standaloneQueueSelection_=true;page_=selected_/5;found=true;
+                         }}
+                        if(found)playSelected();
+                        break;
+                    }
+#endif
                     case Action::Pair:case Action::PlaylistList:case Action::PlaylistOpen:
                     case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistAdd:
-                    case Action::QueueRefresh:case Action::QueuePlay:
-                    case Action::QueueRemove:case Action::QueueAdd:
+                    case Action::QueueRefresh:
+#if !defined(LEVI_STANDALONE)
+                    case Action::QueuePlay:case Action::QueueRemove:case Action::QueueAdd:
+#endif
                         break;
                 }
             }
             bool playing=player.isPlaying(env);
             int pos=player.position(env),dur=player.duration(env);
+#if defined(LEVI_STANDALONE)
+            if(!playing&&standaloneWasPlaying&&dur>0&&pos>=dur-1500){
+                bool hasNext;
+                {std::lock_guard lock(mu_);hasNext=queueTracks_.size()>1;}
+                if(hasNext)addJob(Action::Next);
+            }
+            standaloneWasPlaying=playing;
+#endif
             {
                 std::lock_guard lock(mu_);
                 playing_=playing;elapsed_=pos;
@@ -2694,7 +2854,7 @@ private:
                     }
                 }
             }
-            } // Non-bridge mode: ChruPipe (standalone), legacy Audius (full)
+            } // Native Standalone or legacy Audius mode.
             const auto now=std::chrono::steady_clock::now();
             if(now-lastPaint>std::chrono::milliseconds(animation_?110:400)){
                 paint();lastPaint=now;

@@ -1,8 +1,8 @@
 {
   "type": "preload-native",
-  "name": "LeviMusic Standalone - ChruPipe (self-hosted)",
+  "name": "LeviMusic Standalone - Aurelis Symphony",
   "author": "ReaAurelis",
-  "version": "1.3.6",
+  "version": "1.4.0",
   "entry": "liblevimusic_standalone.so",
   "minecraft_versions": []
 }
