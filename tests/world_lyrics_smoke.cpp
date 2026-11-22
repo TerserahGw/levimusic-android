@@ -199,25 +199,48 @@ int main(){
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(!scene.previous.empty()&&scene.previous.front().transitionAlpha==0.f);
     scene=Scene{};
-    pose.position={100.f,65.f,200.f};pose.time=nowMs();
+    pose.position={100.f,65.f,200.f};pose.yaw=0.f;pose.time=nowMs();
+    cam={100.f,66.6f,200.f};ptr(rp,profile->camera,cam);
     const std::vector<lm_timing::WordCue> timed{{1000,1300,"I"},
         {1300,1800,"wanna"},{1800,2500,"care"}};
     publish("I wanna care",1000,2500,1000,false,timed);
     renderHook(renderer.data(),screen.data(),nullptr);
     const int firstWordVertices=declared;
     const auto firstWordAnchor=scene.panels.front().anchor;
+    const auto prematureSecondAnchor=scene.panels[1].anchor;
     assert(firstWordVertices>0&&scene.words.size()==3);
+    pose.yaw=90.f;pose.time=nowMs();
     publish("I wanna care",1000,2500,1400,false,timed);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(declared>firstWordVertices);
     assert(scene.panels.front().anchor.x==firstWordAnchor.x);
+    assert(scene.panels[1].anchor.x<pose.position.x-.7f);
+    assert(magnitude2(scene.panels[1].anchor-prematureSecondAnchor)>.1f);
+    const auto secondFacing=scene.panels[1].facing;
+    pose.yaw=180.f;pose.time=nowMs();
     publish("I wanna care",1000,2500,2000,false,timed);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(declared>firstWordVertices);
+    assert(scene.panels[2].anchor.z<pose.position.z-.5f);
+    assert(scene.panels[1].facing.x==secondFacing.x);
     const auto oldCue=scene.serial;
     publish("I wanna care",3000,4500,3000,false,timed);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(scene.serial!=oldCue); // repeated line with a new timestamp
+    scene=Scene{};
+    cam={100.f,68.f,196.f};ptr(rp,profile->camera,cam);
+    pose.time=nowMs();
+    publish("I wanna care",1000,2500,1000,false,timed);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    const auto thirdFirst=scene.panels.front().anchor;
+    cam={104.f,68.f,200.f};ptr(rp,profile->camera,cam);
+    pose.time=nowMs();
+    publish("I wanna care",1000,2500,1400,false,timed);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    const auto newRay=normalized(scene.panels[1].anchor-cam);
+    const auto gaze=normalized(pose.position+Vec3{0,1.6f,0}-cam);
+    assert(newRay.x*gaze.x+newRay.y*gaze.y+newRay.z*gaze.z>.4f);
+    assert(scene.panels.front().anchor.x==thirdFirst.x);
     return 0;
 }
 

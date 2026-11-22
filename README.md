@@ -5,7 +5,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Latest beta:** v1.4.2 beta (22 November 2026) · **Stable:** v1.3.6  
+**Latest beta:** v1.4.3 beta (22 November 2026) · **Stable:** v1.3.6  
 **Author:** ReaAurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional experimental 3D floating lyrics rendered locally in your Minecraft world.
@@ -55,19 +55,20 @@ Current v1.3.6 downloads:
 
 **Note for External Mods catalog users:** the catalog can distribute the LeviPack, but the **Bridge APK must also be installed separately** from GitHub Releases for full mode.
 
-### Option B — Standalone mode (v1.4.2 beta)
+### Option B — Standalone mode (v1.4.3 beta)
 
-Download [LeviMusic-Standalone-1.4.2-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.2-beta/LeviMusic-Standalone-1.4.2-arm64-v8a.levipack) instead of the full LeviPack.
+Download [LeviMusic-Standalone-1.4.3-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.3-beta/LeviMusic-Standalone-1.4.3-arm64-v8a.levipack) instead of the full LeviPack.
 
 This beta uses the **hosted Aurelis Symphony API** by default. No Bridge APK, local backend, account, or user-run server is required. It offers search, direct audio resolution, synchronized lyrics, and an editable radio queue. Internet access and the hosted service are required. YouTube audio can return HTTP 424 or stop if the upstream blocks streaming; the bundled original demo tracks are more reliable. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
 
 For newer releases, use the matching files from the [latest release page](https://github.com/TerserahGw/levimusic-android/releases/latest) rather than mixing versions.
 
-## What's new in v1.4.2 beta
+## What's new in v1.4.3 beta
 
-- Standalone reads per-word `start` and `end` times from Aurelis where the lyric provider supplies them. The small lyric above the HUD reveals words at their timestamps.
-- 3D Floating Lyrics reveal words in place instead of respawning the entire lyric panel for each word. The line stays synchronized to its own `time` and `endTime`.
-- Pausing and seeking updates the visible word immediately. Songs with line-only LRC keep the previous line-level display.
+- In Standalone, each timed 3D lyric word chooses a world position and fixed camera-facing orientation when its timestamp arrives, using the camera's latest view rather than the first word's placement. Visible words remain where they appeared.
+- New 3D words avoid earlier words and other fading lyric panels in the current camera view.
+- The in-game HUD now redraws independently of network requests at up to 30 FPS, interpolates audio position between reads, and fades each new timed word into the lyric bubble.
+- Line-only lyrics keep their previous behavior. 3D world rendering still requires a matching Minecraft ARM64 profile.
 
 ## Stable v1.3.6
 

@@ -1545,7 +1545,9 @@ class LeviMusic {
     JavaVM* vm_=nullptr;
     std::thread worker_;
     std::thread lyricWorker_;
+    std::thread drawWorker_;
     std::mutex mu_;
+    std::mutex paintMu_;
     std::condition_variable cv_;
     std::deque<Job> jobs_;
     struct LyricRequest {
@@ -1591,6 +1593,7 @@ class LeviMusic {
 #endif
     std::chrono::steady_clock::time_point lyricChanged_{std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point bridgePositionStamp_{std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point playerPositionStamp_{std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point panelToggled_{std::chrono::steady_clock::now()};
     std::string playbackError_;
 
@@ -1615,7 +1618,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.2 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.3 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1687,12 +1690,14 @@ public:
         lyricWorker_=std::thread([this](){processLyrics();});
         worker_=std::thread([this](){process();});
         paint();
+        drawWorker_=std::thread([this](){processDraw();});
         return true;
     }
     bool disable(){
         enabled_=false;
         {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();++lyricSerial_;}
         cv_.notify_all();lyricCv_.notify_all();
+        if(drawWorker_.joinable())drawWorker_.join();
         if(worker_.joinable())worker_.join();
         if(lyricWorker_.joinable())lyricWorker_.join();
         lm_world3d::shutdown();
@@ -1702,6 +1707,15 @@ public:
     }
     bool unload(){lm_world3d::unload();return true;}
 private:
+    void processDraw(){
+        auto next=std::chrono::steady_clock::now();
+        while(enabled_){
+            paint();
+            next+=std::chrono::milliseconds(animation_?33:250);
+            if(next<std::chrono::steady_clock::now())next=std::chrono::steady_clock::now();
+            std::this_thread::sleep_until(next);
+        }
+    }
     std::string remembered(const char* key,const char* fallback)const{
         auto it=savedSettings_.find(key);
         return it==savedSettings_.end()?fallback:it->second;
@@ -2041,6 +2055,7 @@ private:
         return editing;
     }
     void paint(){
+        std::lock_guard paintLock(paintMu_);
         if(!enabled_)return;
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
         if(!l.ok())return;
@@ -2069,6 +2084,11 @@ private:
                     std::chrono::steady_clock::now()-bridgePositionStamp_).count();
                 elapsed=static_cast<int>(std::min<int64_t>(total>0?total:INT32_MAX,
                     static_cast<int64_t>(elapsed)+std::clamp<int64_t>(age,0,1300)));
+            }else if(!useBridge_&&playing_){
+                const auto age=std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now()-playerPositionStamp_).count();
+                elapsed=static_cast<int>(std::min<int64_t>(total>0?total:INT32_MAX,
+                    static_cast<int64_t>(elapsed)+std::clamp<int64_t>(age,0,30000)));
             }
         }
         std::vector<pl::modmenu::DrawCommand> out;
@@ -2218,11 +2238,25 @@ private:
                         if(subtitleY>23*u&&subtitleY<l.h-10*u){
                             const std::string visible=lm_timing::revealedText(item.line,item.words,elapsed);
                             if(visible.empty())return;
-                            outlineText(subtitleX,subtitleY,visible,((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u,alpha);
-                            if(romanizeLyrics_&&!item.romanized.empty()&&subtitleY+15*u<l.h-10*u)
+                            const size_t shown=lm_timing::revealedCount(item.words,elapsed);
+                            const bool entering=!item.words.empty()&&shown>0;
+                            const float blend=entering?lm_world3d::smoothstep(
+                                float(elapsed-item.words[shown-1].startMs)/180.f):1.f;
+                            const std::string prior=entering?lm_timing::revealedText(
+                                item.line,item.words,item.words[shown-1].startMs-1):std::string{};
+                            const float lyricSize=((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u;
+                            if(!prior.empty()&&blend<1.f)
+                                outlineText(subtitleX,subtitleY,prior,lyricSize,alpha*(1.f-blend));
+                            outlineText(subtitleX,subtitleY,visible,lyricSize,alpha*blend);
+                            if(romanizeLyrics_&&!item.romanized.empty()&&subtitleY+15*u<l.h-10*u){
+                                if(!prior.empty()&&blend<1.f)
+                                    outlineText(subtitleX,subtitleY+15*u,
+                                        lm_timing::revealedText(item.romanized,item.words,
+                                            item.words[shown-1].startMs-1),10.1f*u,alpha*.78f*(1.f-blend));
                                 outlineText(subtitleX,subtitleY+15*u,
                                     lm_timing::revealedText(item.romanized,item.words,elapsed),
-                                    10.1f*u,alpha*.78f);
+                                    10.1f*u,alpha*.78f*blend);
+                            }
                         }
                     };
                     const Lyric& item=timedLyrics[static_cast<size_t>(active)];
@@ -2252,7 +2286,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.2 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.3 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -2539,6 +2573,7 @@ private:
             {
                 std::lock_guard lock(mu_);
                 playing_=true;total_=player.duration(env);
+                playerPositionStamp_=std::chrono::steady_clock::now();
             }
 #if defined(LEVI_STANDALONE)
             update(tr.title,tr.artist,"Aurelis Symphony streaming");
@@ -2574,7 +2609,6 @@ private:
             }
 #endif
         };
-        auto lastPaint=std::chrono::steady_clock::now();
         bool standaloneWasPlaying=false;
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
         auto lastAutoBridge=std::chrono::steady_clock::now()-std::chrono::seconds(10);
@@ -3097,6 +3131,7 @@ private:
             {
                 std::lock_guard lock(mu_);
                 playing_=playing;elapsed_=pos;
+                playerPositionStamp_=std::chrono::steady_clock::now();
                 if(dur>0)total_=dur;
                 if(playing&&!lyrics_.empty()){
                     for(const auto& line:lyrics_){
@@ -3109,10 +3144,6 @@ private:
                 }
             }
             } // Native Standalone or legacy Audius mode.
-            const auto now=std::chrono::steady_clock::now();
-            if(now-lastPaint>std::chrono::milliseconds(animation_?110:400)){
-                paint();lastPaint=now;
-            }
         }
         player.release(env);
     }

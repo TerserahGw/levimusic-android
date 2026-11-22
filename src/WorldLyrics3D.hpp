@@ -261,6 +261,7 @@ struct Panel{
     int fontPercent=115;
     int wordCount=1;
     int wordBase=0;
+    int sourceWord=-1;
     float visibleAlpha=0.f,transitionAlpha=0.f;
     size_t letters=0;
     float width=0;
@@ -300,6 +301,21 @@ inline std::vector<std::string> splitLyric(std::string_view text){
     }
     if(!part.empty())result.push_back(std::move(part));
     return result;
+}
+inline std::vector<std::string> splitTimedLyric(std::string_view text){
+    std::vector<std::string> parts;
+    for(size_t at=0;at<text.size()&&parts.size()<32;){
+        while(at<text.size()&&text[at]==' ')++at;
+        if(at==text.size())break;
+        size_t end=text.find(' ',at);
+        if(end==text.npos)end=text.size();
+        while(at<end&&parts.size()<32){
+            const size_t length=std::min<size_t>(10,end-at);
+            parts.emplace_back(text.substr(at,length));
+            at+=length;
+        }
+    }
+    return parts;
 }
 inline float smoothstep(float t){t=std::clamp(t,0.f,1.f);return t*t*(3.f-2.f*t);}
 inline float cueProgress(float position,int start,int end){
@@ -463,8 +479,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         scene.panels.clear();
         const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
         const std::string display=latinDisplay(text);
-        const auto parts=splitLyric(display);
         scene.words=std::move(words);
+        const auto parts=scene.words.empty()?splitLyric(display):splitTimedLyric(display);
         std::vector<int> wordAt(display.size());
         int wordIndex=-1;bool inside=false;
         for(size_t k=0;k<display.size();++k){
@@ -528,6 +544,9 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
                 panel.wordBase=wordAt[partAt];
                 partCursor=partAt+parts[i].size();
             }
+            if(!scene.words.empty())
+                panel.sourceWord=lm_timing::sourceWordIndex(panel.wordBase,
+                    scene.displayWords,int(scene.words.size()));
             panel.width=float(panel.letters)*6.f*.011f*float(fontPercent)*.01f;
             panel.anchor=place(base,right,i);
             panel.visualAnchor=panel.anchor;
@@ -587,7 +606,45 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }};
     follow(scene.panels);follow(scene.previous);
     for(auto& panel:scene.panels)if(!panel.appeared&&
+        (panel.sourceWord<0||position>=float(scene.words[static_cast<size_t>(panel.sourceWord)].startMs))&&
         shouldReveal(now,panel.born,beats&&scene.words.empty(),freshPulse)){
+        if(panel.sourceWord>=0){
+            // A timed word chooses its own world anchor at its actual timestamp.
+            // Already revealed words retain their anchor and orientation.
+            const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
+            const Vec3 playerRay=view.position+Vec3{0,1.6f,0}-cam;
+            const Vec3 gaze=normalized(playerRay);
+            Vec3 best=panel.anchor;float bestScore=-100.f;
+            for(size_t attempt=0;attempt<48;++attempt){
+                const uint64_t seed=serial*733+uint64_t(panel.partIndex+1)*977+
+                    uint64_t(attempt)*137;
+                const Vec3 candidate=lyricAnchor(view,cam,seed,thirdPerson);
+                const Vec3 ray=candidate-cam;
+                float score=100.f;
+                if(thirdPerson){
+                    const float facing=ray.x*gaze.x+ray.y*gaze.y+ray.z*gaze.z;
+                    const float distance=std::sqrt(magnitude2(ray));
+                    const float alignment=facing/std::max(distance,.01f);
+                    if(alignment<.4f)score=-5.f;
+                    if(alignment>.94f&&distance>std::sqrt(magnitude2(playerRay))+.35f)
+                        score=-4.f; // player would hide the lyric
+                }
+                for(const auto& old:scene.panels)if(old.appeared)
+                    score=std::min(score,panelClearance(candidate,panel.width,cam,
+                        old.visualAnchor+Vec3{0,old.visualLift,0},old.width));
+                for(const auto& old:scene.previous)if(old.appeared&&old.visibleAlpha>.05f)
+                    score=std::min(score,panelClearance(candidate,panel.width,cam,
+                        old.visualAnchor+Vec3{0,old.visualLift,0},old.width));
+                if(score>bestScore){bestScore=score;best=candidate;}
+                if(score>=1.3f)break;
+            }
+            panel.anchor=best;
+            panel.visualAnchor=best;
+            panel.spawnPlayer=view.position;
+            panel.visualLift=0.f;
+            panel.facing=normalized(cam-best);
+            panel.right=normalized({panel.facing.z,0,-panel.facing.x});
+        }
         panel.appeared=now;
         panel.entryStrength=freshPulse?std::clamp(beat,.48f,1.f):0.f;
         if(freshPulse){scene.lastBeatPulse=pulse;freshPulse=false;}
@@ -668,7 +725,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }
     for(auto& panel:scene.panels)if(panel.appeared){
         const float appear=std::max(.03f,smoothstep(float(now-panel.appeared)/350.f));
-        float focus=panel.partIndex==currentPart?1.f:.68f;
+        float focus=scene.words.empty()?(panel.partIndex==currentPart?1.f:.68f):1.f;
         panel.visibleAlpha=appear*focus*activeFade;
         draw(panel,panel.visibleAlpha,(1.f-appear)*(-.09f));
     }
