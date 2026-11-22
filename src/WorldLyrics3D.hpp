@@ -2,6 +2,7 @@
 // World renderer adapted from World Analysis (Copyright 2026 Ekowat),
 // itself derived from BedrockTools by RadiantByte. GPL-3.0-only.
 #include "WorldLyricsBindings.hpp"
+#include "WordTiming.hpp"
 #include <pl/memory/Hook.hpp>
 #include <pl/memory/Signature.hpp>
 #include <android/log.h>
@@ -15,6 +16,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -59,6 +61,7 @@ inline const Profile* profile=nullptr;
 struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;Vec3 position{};};
 inline Pose pose;
 inline std::string currentLine;
+inline std::vector<lm_timing::WordCue> currentWords;
 inline uint64_t lyricSerial=0;
 using TickFn=void(*)(void*);
 using RenderFn=void(*)(void*,void*,void*);
@@ -211,14 +214,19 @@ inline std::vector<Pixel> glyphs(std::string_view text){
     }
     return result;
 }
-inline void publish(std::string_view value,int start=0,int end=0,int position=0,bool playing=false){
+inline void publish(std::string_view value,int start=0,int end=0,int position=0,
+                    bool playing=false,std::span<const lm_timing::WordCue> words={}){
+    const int previousStart=cueStartMs.load();
     cueStartMs=std::max(0,start);cueEndMs=std::max(start+1,end);
     cuePositionMs=std::max(0,position);cuePlaying=playing;
     cueSampleAt=nowMs();
     std::lock_guard lock(lyricsMutex);
     auto bounded=value.substr(0,512);
-    if(currentLine==bounded)return;
-    currentLine=bounded;++lyricSerial;lastDraw=0;
+    if(currentLine==bounded&&previousStart==std::max(0,start)&&
+       currentWords.size()==words.size())return;
+    currentLine=bounded;
+    currentWords.assign(words.begin(),words.end());
+    ++lyricSerial;lastDraw=0;
 }
 inline void tickHook(void* player){
     if(originalTick)originalTick(player);
@@ -252,6 +260,7 @@ struct Panel{
     float visualLift=0.f;
     int fontPercent=115;
     int wordCount=1;
+    int wordBase=0;
     float visibleAlpha=0.f,transitionAlpha=0.f;
     size_t letters=0;
     float width=0;
@@ -267,6 +276,8 @@ struct Scene{
     int64_t lastFrame=0,previousFadeStart=0,previousUntil=0;
     int previousStagger=0;
     std::vector<Panel> panels,previous;
+    std::vector<lm_timing::WordCue> words;
+    int displayWords=0;
 };
 inline Scene scene; // render thread only
 inline std::vector<std::string> splitLyric(std::string_view text){
@@ -306,6 +317,7 @@ inline float riseForProgress(float progress){
     return .08f*progress+.54f*progress*progress;
 }
 inline float advanceCueClock(float current,float observed,float dt,bool playing){
+    if(!playing)return observed;
     if(std::abs(observed-current)>1200.f)return observed; // intentional seek
     const float next=current+(playing?dt:0.f);
     return next+std::clamp(observed-next,-dt*.18f,dt*.18f);
@@ -422,8 +434,9 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     Pose view;
     {std::unique_lock lock(poseMutex,std::try_to_lock);if(!lock)return;view=pose;}
     if(!view.world||!view.time||now-view.time>1500)return;
-    std::string text;uint64_t serial;
-    {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;text=currentLine;serial=lyricSerial;}
+    std::string text;std::vector<lm_timing::WordCue> words;uint64_t serial;
+    {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;
+     text=currentLine;words=currentWords;serial=lyricSerial;}
     if(text.empty())renderStage=2;
     auto* rp=read<void*>(renderer,profile->rendererPlayer);
     auto* tess=read<void*>(ctx,profile->tessellator);
@@ -449,7 +462,17 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         else if(scene.serial!=serial)scene.previous=std::move(scene.panels);
         scene.panels.clear();
         const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
-        const auto parts=splitLyric(latinDisplay(text));
+        const std::string display=latinDisplay(text);
+        const auto parts=splitLyric(display);
+        scene.words=std::move(words);
+        std::vector<int> wordAt(display.size());
+        int wordIndex=-1;bool inside=false;
+        for(size_t k=0;k<display.size();++k){
+            if(display[k]==' '){inside=false;continue;}
+            if(!inside){++wordIndex;inside=true;}
+            wordAt[k]=wordIndex;
+        }
+        scene.displayWords=wordIndex+1;
         const int fontPercent=std::clamp(thirdPerson?otherFontPercent.load():
             lyricFontPercent.load(),60,200);
         const float step=.2f+float(fontPercent)*.01f*.66f;
@@ -492,6 +515,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         Vec3 right=normalized({facing.z,0,-facing.x});
         int duration=std::clamp(end-start,600,12000);
         int spacing=std::clamp(duration/int(std::max<size_t>(1,parts.size()+1)),55,230);
+        size_t partCursor=0;
         for(size_t i=0;i<parts.size();++i){
             Panel panel;
             panel.partIndex=int(i);panel.partCount=int(parts.size());
@@ -499,6 +523,11 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.fontPercent=fontPercent;
             panel.letters=parts[i].size();
             panel.wordCount=int(std::count(parts[i].begin(),parts[i].end(),' '))+1;
+            const size_t partAt=display.find(parts[i],partCursor);
+            if(partAt!=display.npos){
+                panel.wordBase=wordAt[partAt];
+                partCursor=partAt+parts[i].size();
+            }
             panel.width=float(panel.letters)*6.f*.011f*float(fontPercent)*.01f;
             panel.anchor=place(base,right,i);
             panel.visualAnchor=panel.anchor;
@@ -506,7 +535,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.facing=normalized(cam-panel.anchor);
             panel.right=normalized({panel.facing.z,0,-panel.facing.x});
             panel.pixels=glyphs(parts[i]);
-            panel.born=now+int64_t(i)*spacing;
+            panel.born=scene.words.empty()?now+int64_t(i)*spacing:now;
             scene.panels.push_back(std::move(panel));
         }
         scene.origin=view.position;
@@ -558,7 +587,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     }};
     follow(scene.panels);follow(scene.previous);
     for(auto& panel:scene.panels)if(!panel.appeared&&
-        shouldReveal(now,panel.born,beats,freshPulse)){
+        shouldReveal(now,panel.born,beats&&scene.words.empty(),freshPulse)){
         panel.appeared=now;
         panel.entryStrength=freshPulse?std::clamp(beat,.48f,1.f):0.f;
         if(freshPulse){scene.lastBeatPulse=pulse;freshPulse=false;}
@@ -567,12 +596,25 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     if(scene.panels.empty()&&!fading)return;
     const float activeFade=cueFade(position,start,end);
     if(activeFade<=0.f)for(auto& panel:scene.panels)panel.visibleAlpha=0.f;
+    auto timedAlpha=[&](const Panel& panel,uint8_t localWord){
+        if(scene.words.empty())return 1.f;
+        const int index=lm_timing::sourceWordIndex(panel.wordBase+int(localWord),
+            scene.displayWords,int(scene.words.size()));
+        if(index<0)return 1.f;
+        const auto& word=scene.words[static_cast<size_t>(index)];
+        if(position<float(word.startMs))return 0.f;
+        const float entry=std::max(.03f,smoothstep((position-float(word.startMs))/160.f));
+        return entry*(position<float(word.endMs)?1.f:.84f);
+    };
     ColorGuard guard(colors);
     size_t count=0;
     int currentPart=-1;
     if(activeFade>0.f)
         for(const auto& panel:scene.panels)if(panel.appeared){
-            count+=panel.pixels.size();currentPart=panel.partIndex;
+            size_t visible=0;
+            for(const auto& pixel:panel.pixels)if(timedAlpha(panel,pixel.word)>0.f)++visible;
+            count+=visible;
+            if(visible)currentPart=panel.partIndex;
         }
     if(fading)for(const auto& panel:scene.previous)if(panel.appeared&&
         panel.transitionAlpha*transitionFade(now,scene.previousFadeStart,
@@ -609,11 +651,13 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             const float dy=pass==2?-.12f:pass==3?.12f:0.f;
             auto origin=anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
             for(const auto& p:panel.pixels){
+                const float reveal=leaving?1.f:timedAlpha(panel,p.word);
+                if(reveal<=0.f)continue;
                 const auto tint=lyricTint(panel.partIndex,p.word);
                 const float wordAlpha=leaving?transitionFade(now,scene.previousFadeStart,
                     panel.partIndex*scene.previousStagger+int(p.word)*65,1):1.f;
                 tessColor(tess,outline?0.f:tint[0],outline?0.f:tint[1],outline?0.f:tint[2],
-                          alpha*wordAlpha*(outline?.45f:1.f));
+                          alpha*wordAlpha*reveal*(outline?.45f:1.f));
                 quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
             }
         }

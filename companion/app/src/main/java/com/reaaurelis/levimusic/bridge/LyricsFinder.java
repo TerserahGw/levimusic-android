@@ -37,7 +37,7 @@ public final class LyricsFinder {
         try{
             URLConnection connection=new URL(address).openConnection();
             connection.setConnectTimeout(4500);connection.setReadTimeout(6500);
-            connection.setRequestProperty("User-Agent","LeviMusic/1.4.1 (Android; lyrics client)");
+            connection.setRequestProperty("User-Agent","LeviMusic/1.4.2 (Android; lyrics client)");
             try(InputStream stream=connection.getInputStream()){
                 byte[] data=stream.readNBytes(500000);
                 return new String(data,StandardCharsets.UTF_8);

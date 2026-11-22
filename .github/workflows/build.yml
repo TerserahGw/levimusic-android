@@ -212,14 +212,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.4.1-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.4.2-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.4.1-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.4.2-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -276,10 +276,10 @@ jobs:
               "## Versi Minecraft yang didukung untuk lirik 3D",
               "- 1.26.52, 1.26.60, dan 1.26.62.1 pada profil ARM64 dengan Build ID yang cocok. Minecraft 1.26.66.1 dapat menjalankan mod musik jika loader memuatnya, tetapi renderer 3D menunggu pemeriksaan binary ARM64 versi tersebut.",
               "",
-              "## Perubahan dari v1.4.0 beta",
-              "- Lirik Standalone sekarang membaca teks baris asli dari Aurelis sehingga spasi antar kata tidak hilang pada lirik bertimestamp per kata.",
-              "- Romanisasi Standalone menggunakan API romanisasi Aurelis untuk aksara Jepang, Korea, dan Mandarin; teks asli tetap tampil bersama bacaan Latin. Pengaturan bahasa auto / ja / ko / zh tersedia bila deteksi otomatis salah.",
-              "- Bacaan Latin dipakai untuk lirik 3D. Jika bacaan tidak tersedia, renderer menampilkan pesan yang jelas dan bukan tanda tanya. Pengambilan lirik berjalan di thread terpisah agar player tetap responsif.",
+              "## Perubahan dari v1.4.1 beta",
+              "- Lirik kecil di atas HUD Standalone kini muncul kata demi kata mengikuti waktu words.start/end dari API Aurelis. Baris tanpa waktu per kata tetap memakai waktu per baris.",
+              "- 3D Floating Lyrics Standalone kini menampilkan kata secara bertahap di posisi 3D yang stabil; kata aktif mengikuti timestamp aslinya, dengan transisi antarbaris tetap berjalan.",
+              "- Jeda dan seek menyelaraskan kata yang tampak dengan posisi lagu. Batas akhir baris dari endTime digunakan bila tersedia.",
               "",
               "Gunakan paket Standalone tanpa Bridge APK; koneksi internet ke Aurelis Symphony tetap diperlukan. Jangan aktifkan kedua varian LeviPack sekaligus.",
               "",

@@ -12,6 +12,18 @@ void mesh(void*,void*,void* material,char*){assert(material);assert(batchVertice
 }
 int main(){
     using namespace lm_world3d;
+    const std::vector<lm_timing::WordCue> sample{{21070,21307,"I"},
+        {21307,21753,"wanna"},{21753,22304,"take"},{22304,22487,"you"}};
+    assert(lm_timing::revealedText("I wanna take you",sample,21069).empty());
+    assert(lm_timing::revealedText("I wanna take you",sample,21070)=="I");
+    assert(lm_timing::revealedText("I wanna take you",sample,21500)=="I wanna");
+    assert(lm_timing::revealedText("I wanna take you",sample,22487)=="I wanna take you");
+    assert(lm_timing::revealedText("ordinary line",{},10)=="ordinary line");
+    const std::vector<lm_timing::WordCue> japanese{{100,250,"夜"},{250,400,"に"},
+        {400,600,"駆"},{600,800,"ける"}};
+    assert(lm_timing::revealedText("夜に駆ける",japanese,100)=="夜");
+    assert(lm_timing::sourceWordIndex(2,4,4)==2);
+    assert(lm_timing::sourceWordIndex(2,4,8)==4);
     auto pixels=glyphs("HELLO 123");
     assert(!pixels.empty() && pixels.size()*20 < 50000);
     assert(latinDisplay("lirik") == "lirik");
@@ -112,6 +124,7 @@ int main(){
     const float corrected=advanceCueClock(700.f,620.f,16.f,true);
     assert(corrected>700.f&&corrected<716.f); // correction cannot jerk backward
     assert(advanceCueClock(700.f,2500.f,16.f,true)==2500.f); // deliberate seek
+    assert(advanceCueClock(700.f,1000.f,16.f,false)==1000.f); // paused seek
     assert(!shouldReveal(100,100,true,false));
     assert(shouldReveal(100,100,true,true));
     assert(shouldReveal(341,100,true,false));
@@ -185,6 +198,26 @@ int main(){
     publish("NEW CUE",3000,5000,3000,true);
     renderHook(renderer.data(),screen.data(),nullptr);
     assert(!scene.previous.empty()&&scene.previous.front().transitionAlpha==0.f);
+    scene=Scene{};
+    pose.position={100.f,65.f,200.f};pose.time=nowMs();
+    const std::vector<lm_timing::WordCue> timed{{1000,1300,"I"},
+        {1300,1800,"wanna"},{1800,2500,"care"}};
+    publish("I wanna care",1000,2500,1000,false,timed);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    const int firstWordVertices=declared;
+    const auto firstWordAnchor=scene.panels.front().anchor;
+    assert(firstWordVertices>0&&scene.words.size()==3);
+    publish("I wanna care",1000,2500,1400,false,timed);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(declared>firstWordVertices);
+    assert(scene.panels.front().anchor.x==firstWordAnchor.x);
+    publish("I wanna care",1000,2500,2000,false,timed);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(declared>firstWordVertices);
+    const auto oldCue=scene.serial;
+    publish("I wanna care",3000,4500,3000,false,timed);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.serial!=oldCue); // repeated line with a new timestamp
     return 0;
 }
 

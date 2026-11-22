@@ -4,6 +4,7 @@
 #include <pl/Input.hpp>
 #include "LucideIcons.hpp"
 #include "WorldLyrics3D.hpp"
+#include "WordTiming.hpp"
 #include <cmath>
 #include <jni.h>
 #include <android/log.h>
@@ -49,6 +50,8 @@ struct Lyric {
     std::string line;
     std::string romanized;
     std::string romanizedWorld;
+    int endMs = 0;
+    std::vector<lm_timing::WordCue> words;
 };
 
 enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
@@ -566,54 +569,82 @@ std::vector<Lyric> aurelisLyrics(JNIEnv* env,const std::string& server,
         for(int i=0;i<std::min(n,350);++i){
             jobject row=item?env->CallObjectMethod(lines,item,i):nullptr;
             if(!row||clearException(env,"Aurelis lyric row"))continue;
-            std::string words=optString(env,row,"text");
+            std::string line=optString(env,row,"text");
             std::string seconds=optString(env,row,"time");
+            std::vector<lm_timing::WordCue> timedWords;
+            auto timed=optArray(env,row,"words");
+            if(timed){
+                jclass wordClass=env->FindClass("org/json/JSONArray");
+                auto wordCount=wordClass?env->GetMethodID(wordClass,"length","()I"):nullptr;
+                auto wordAt=wordClass?env->GetMethodID(wordClass,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+                int count=wordCount?env->CallIntMethod(timed,wordCount):0;
+                if(clearException(env,"Aurelis timed word count"))count=0;
+                bool valid=count>0&&count<=100;
+                int previous=-1;
+                for(int w=0;valid&&w<count;++w){
+                    jobject token=wordAt?env->CallObjectMethod(timed,wordAt,w):nullptr;
+                    if(!token||clearException(env,"Aurelis timed word")){valid=false;break;}
+                    const std::string text=optString(env,token,"text");
+                    const std::string start=optString(env,token,"start");
+                    const std::string end=optString(env,token,"end");
+                    env->DeleteLocalRef(token);
+                    try{
+                        const double from=std::stod(start),to=std::stod(end);
+                        if(!std::isfinite(from)||!std::isfinite(to)||from<0||
+                           to>14400||to<=from){valid=false;break;}
+                        const int fromMs=static_cast<int>(std::round(from*1000));
+                        const int toMs=static_cast<int>(std::round(to*1000));
+                        if(text.empty()||toMs<=fromMs||fromMs<previous){valid=false;break;}
+                        timedWords.push_back({fromMs,toMs,text});
+                        previous=fromMs;
+                    }catch(...){valid=false;break;}
+                }
+                if(!valid)timedWords.clear();
+                if(wordClass)env->DeleteLocalRef(wordClass);
+                env->DeleteLocalRef(timed);
+            }
             // Some enhanced LRC providers strip spaces around word timestamps.
             // Rebuild Latin word boundaries from the timed words when the line
             // itself has lost them; preserve CJK lines and already spaced text.
-            if(words.find(' ')==std::string::npos){
-                auto timed=optArray(env,row,"words");
-                if(timed){
-                    jclass wordClass=env->FindClass("org/json/JSONArray");
-                    auto wordCount=wordClass?env->GetMethodID(wordClass,"length","()I"):nullptr;
-                    auto wordAt=wordClass?env->GetMethodID(wordClass,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
-                    int count=wordCount?env->CallIntMethod(timed,wordCount):0;
-                    if(clearException(env,"Aurelis timed word count"))count=0;
-                    if(count>=3&&count<=100&&
-                       std::all_of(words.begin(),words.end(),[](unsigned char c){return c<128;})){
-                        std::string spaced;
-                        int fragments=0,singleLetters=0;
-                        for(int w=0;w<count;++w){
-                            jobject token=wordAt?env->CallObjectMethod(timed,wordAt,w):nullptr;
-                            if(!token||clearException(env,"Aurelis timed word"))continue;
-                            std::string part=optString(env,token,"text");
-                            env->DeleteLocalRef(token);
-                            auto first=part.find_first_not_of(" \t\r\n");
-                            if(first==part.npos)continue;
-                            auto last=part.find_last_not_of(" \t\r\n");
-                            part=part.substr(first,last-first+1);
-                            ++fragments;
-                            if(part.size()==1&&std::isalpha(static_cast<unsigned char>(part[0])))++singleLetters;
-                            if(!spaced.empty()&&std::string(",.!?;:)]}").find(part.front())==std::string::npos&&
-                               spaced.back()!='\''&&spaced.back()!='-')spaced+=' ';
-                            spaced+=part;
-                        }
-                        std::string compact;
-                        for(unsigned char ch:spaced)if(!std::isspace(ch))compact+=static_cast<char>(ch);
-                        if(fragments>=3&&singleLetters*2<fragments&&spaced.size()<1000&&
-                           compact==words)
-                            words=std::move(spaced);
-                    }
-                    if(wordClass)env->DeleteLocalRef(wordClass);
-                    env->DeleteLocalRef(timed);
+            if(line.find(' ')==std::string::npos&&timedWords.size()>=3&&
+               std::all_of(line.begin(),line.end(),[](unsigned char c){return c<128;})){
+                std::string spaced;
+                int singleLetters=0;
+                for(const auto& word:timedWords){
+                    std::string part=word.text;
+                    auto first=part.find_first_not_of(" \t\r\n");
+                    if(first==part.npos)continue;
+                    auto last=part.find_last_not_of(" \t\r\n");
+                    part=part.substr(first,last-first+1);
+                    if(part.size()==1&&std::isalpha(static_cast<unsigned char>(part[0])))++singleLetters;
+                    if(!spaced.empty()&&std::string(",.!?;:)]}").find(part.front())==std::string::npos&&
+                       spaced.back()!='\''&&spaced.back()!='-')spaced+=' ';
+                    spaced+=part;
                 }
+                std::string compact;
+                for(unsigned char ch:spaced)if(!std::isspace(ch))compact+=static_cast<char>(ch);
+                if(singleLetters*2<static_cast<int>(timedWords.size())&&spaced.size()<1000&&
+                   compact==line)line=std::move(spaced);
             }
             try{
-                if(!words.empty()&&!seconds.empty()&&seconds!="null"){
+                if(!line.empty()&&!seconds.empty()&&seconds!="null"){
                     double at=std::stod(seconds);
                     if(std::isfinite(at)&&at>=0&&at<14400&&
-                       (output.empty()||at*1000>=output.back().ms))
-                        output.push_back({static_cast<int>(std::round(at*1000)),words});
+                       (output.empty()||at*1000>=output.back().ms)){
+                        Lyric lyric;
+                        lyric.ms=static_cast<int>(std::round(at*1000));
+                        lyric.line=std::move(line);
+                        const std::string end=optString(env,row,"endTime");
+                        if(!end.empty()&&end!="null"){
+                            double until=std::stod(end);
+                            if(std::isfinite(until)&&until>at&&until<14400)
+                                lyric.endMs=static_cast<int>(std::round(until*1000));
+                        }
+                        if(!timedWords.empty()&&timedWords.front().startMs>=lyric.ms-500&&
+                           (lyric.endMs<=0||timedWords.back().endMs<=lyric.endMs+500))
+                            lyric.words=std::move(timedWords);
+                        output.push_back(std::move(lyric));
+                    }
                 }
             }catch(...){}
             env->DeleteLocalRef(row);
@@ -1584,7 +1615,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.1 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.2 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2052,26 +2083,34 @@ private:
         const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
         // Client-only native 3D scene: independent from Behavior Packs or servers.
         if(worldLyrics3D_){
-            std::string worldLine=lyric;
+            std::string worldLine;
             bool worldHasReading=false;
+            const std::vector<lm_timing::WordCue>* wordCues=nullptr;
             int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
             for(size_t i=0;i<timedLyrics.size();++i){
                 const auto& item=timedLyrics[i];
-                if(item.ms<=elapsed&&item.line==lyric){
+                if(item.ms<=elapsed){
+                    worldLine=item.line;
+                    wordCues=&item.words;
+                    worldHasReading=false;
                     cueStart=item.ms;
                     cueEnd=i+1<timedLyrics.size()?timedLyrics[i+1].ms:
                         (total>item.ms?total:item.ms+3500);
+                    if(item.endMs>item.ms)cueEnd=std::min(cueEnd,item.endMs);
                     if(romanizeLyrics_&&!item.romanized.empty()){
                         worldLine=item.romanizedWorld.empty()?item.romanized:item.romanizedWorld;
                         worldHasReading=true;
                     }
                 }
             }
-            if(!worldHasReading&&std::any_of(worldLine.begin(),worldLine.end(),
-                [](unsigned char ch){return ch>=128;}))
+            bool missingReading=!worldHasReading&&std::any_of(worldLine.begin(),worldLine.end(),
+                [](unsigned char ch){return ch>=128;});
+            if(missingReading)
                 worldLine=romanizeLyrics_?"Romanization unavailable":"Enable romanization for 3D lyrics";
-            lm_world3d::publish((lyricsOn_ && !timedLyrics.empty())?worldLine:std::string{},
-                                 cueStart,cueEnd,elapsed,playing);
+            lm_world3d::publish((lyricsOn_ && wordCues)?worldLine:std::string{},
+                                 cueStart,cueEnd,elapsed,playing,
+                                 wordCues&&!missingReading?std::span<const lm_timing::WordCue>(*wordCues):
+                                          std::span<const lm_timing::WordCue>{});
         }
         else if(lm_world3d::installed)
             lm_world3d::publish("");
@@ -2177,15 +2216,20 @@ private:
                         if(!(floatingLyrics_ || worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
                             subtitleY=lyricsBelow_?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
                         if(subtitleY>23*u&&subtitleY<l.h-10*u){
-                            outlineText(subtitleX,subtitleY,item.line,((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u,alpha);
+                            const std::string visible=lm_timing::revealedText(item.line,item.words,elapsed);
+                            if(visible.empty())return;
+                            outlineText(subtitleX,subtitleY,visible,((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u,alpha);
                             if(romanizeLyrics_&&!item.romanized.empty()&&subtitleY+15*u<l.h-10*u)
-                                outlineText(subtitleX,subtitleY+15*u,item.romanized,10.1f*u,alpha*.78f);
+                                outlineText(subtitleX,subtitleY+15*u,
+                                    lm_timing::revealedText(item.romanized,item.words,elapsed),
+                                    10.1f*u,alpha*.78f);
                         }
                     };
                     const Lyric& item=timedLyrics[static_cast<size_t>(active)];
                     int end=active+1<static_cast<int>(timedLyrics.size())
                            ?timedLyrics[static_cast<size_t>(active+1)].ms
                            :(total>item.ms?total:INT32_MAX);
+                    if(item.endMs>item.ms)end=std::min(end,item.endMs);
                     if(active>0 && elapsed-item.ms<620 && elapsed>=item.ms)
                         drawLyric(active-1,1.f-lm_world3d::smoothstep((elapsed-item.ms)/620.f));
                     if(end==INT32_MAX || elapsed<end+620) {
@@ -2208,7 +2252,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.1 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.2 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
