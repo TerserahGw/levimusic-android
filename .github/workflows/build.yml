@@ -289,21 +289,21 @@ jobs:
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
           if version == "1.5.1":
-              notes = """# LeviMusic - Aurelis Online v1.5.1 stable
-
-Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64.
-
-## Minecraft compatibility
-
-3D world lyrics have exact ARM64 profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1. The 1.26.66.1 profile was checked against the supplied binary, but its behavior has not yet been verified on a device and may be less stable.
-
-## Changes since v1.5.0
-
-- Added a Build ID locked 3D renderer profile for Minecraft 1.26.66.1 with seven unique native instruction signatures.
-- Renderer binding still refuses unknown binaries or mismatched signatures without blocking the music player.
-
-Choose one LeviPack variant: Full mode requires the matching Bridge APK; Standalone requires internet access to the hosted Aurelis Symphony service.
-"""
+              notes = "\n".join([
+                  "# LeviMusic - Aurelis Online v1.5.1 stable",
+                  "",
+                  "Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64.",
+                  "",
+                  "## Minecraft compatibility",
+                  "3D world lyrics have exact ARM64 profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1. The 1.26.66.1 profile was checked against the supplied binary, but its behavior has not yet been verified on a device and may be less stable.",
+                  "",
+                  "## Changes since v1.5.0",
+                  "- Added a Build ID locked 3D renderer profile for Minecraft 1.26.66.1 with seven unique native instruction signatures.",
+                  "- Renderer binding still refuses unknown binaries or mismatched signatures without blocking the music player.",
+                  "",
+                  "Choose one LeviPack variant: Full mode requires the matching Bridge APK; Standalone requires internet access to the hosted Aurelis Symphony service.",
+                  "",
+              ])
           else:
               notes = "\n".join([
                   f"# LeviMusic - Aurelis Online v{version} {label}",
