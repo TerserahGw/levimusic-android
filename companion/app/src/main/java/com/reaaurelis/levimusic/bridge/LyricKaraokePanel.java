@@ -99,9 +99,9 @@ final class LyricKaraokePanel extends LinearLayout {
                 for(Word w:cue.words){
                     if(w.from>=w.to||w.to>cue.text.length()){valid=false;break;}
                     String token=cue.text.substring(w.from,w.to);
-                    int at=spaced.indexOf(token,offset);
-                    if(at<0){valid=false;break;}
-                    w.from=at;w.to=at+token.length();offset=w.to;
+                    int tokenStart=spaced.indexOf(token,offset);
+                    if(tokenStart<0){valid=false;break;}
+                    w.from=tokenStart;w.to=tokenStart+token.length();offset=w.to;
                 }
                 if(!valid)cue.words.clear();
                 cue.text=spaced;
