@@ -47,6 +47,7 @@ inline std::atomic<int> otherVerticalRangeTenths{8},otherFontPercent{115};
 inline std::atomic<int> otherArcSpread{220};
 inline std::atomic<int> firstPlacement{0},otherPlacement{2};
 inline std::atomic<bool> lyricTrailFollow{false},experimentalBeats{false};
+inline std::atomic<int> lyricPalette{0}; // 0 pearl, 1 pastel, 2 rainbow, 3 neon
 inline std::atomic<float> beatStrength{0.f};
 inline std::atomic<int64_t> beatUpdated{0};
 inline std::atomic<uint64_t> beatPulseSerial{0};
@@ -61,6 +62,10 @@ inline const Profile* profile=nullptr;
 struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;Vec3 position{};};
 inline Pose pose;
 inline std::string currentLine;
+struct Pixel{float x,y;uint8_t word=0,coverage=255;};
+struct GlyphMesh{std::vector<Pixel> pixels;float width=0,scale=.011f;};
+inline std::shared_ptr<const std::vector<GlyphMesh>> currentMeshes;
+inline uint32_t currentStyle=0;
 inline std::vector<lm_timing::WordCue> currentWords;
 inline uint64_t lyricSerial=0;
 using TickFn=void(*)(void*);
@@ -193,7 +198,6 @@ inline std::string latinDisplay(std::string_view s){
     }
     return out;
 }
-struct Pixel{float x,y;uint8_t word=0;};
 inline std::vector<Pixel> glyphs(std::string_view text){
     std::vector<Pixel> result;result.reserve(2200);
     // Two bounded rows, up to 32 Latin glyphs in each.
@@ -215,7 +219,8 @@ inline std::vector<Pixel> glyphs(std::string_view text){
     return result;
 }
 inline void publish(std::string_view value,int start=0,int end=0,int position=0,
-                    bool playing=false,std::span<const lm_timing::WordCue> words={}){
+                    bool playing=false,std::span<const lm_timing::WordCue> words={},
+                    std::span<const GlyphMesh> meshes={},uint32_t style=0){
     const int previousStart=cueStartMs.load();
     cueStartMs=std::max(0,start);cueEndMs=std::max(start+1,end);
     cuePositionMs=std::max(0,position);cuePlaying=playing;
@@ -223,9 +228,12 @@ inline void publish(std::string_view value,int start=0,int end=0,int position=0,
     std::lock_guard lock(lyricsMutex);
     auto bounded=value.substr(0,512);
     if(currentLine==bounded&&previousStart==std::max(0,start)&&
-       currentWords.size()==words.size())return;
+       currentWords.size()==words.size()&&currentStyle==style)return;
     currentLine=bounded;
     currentWords.assign(words.begin(),words.end());
+    currentMeshes=meshes.empty()?nullptr:
+        std::make_shared<const std::vector<GlyphMesh>>(meshes.begin(),meshes.end());
+    currentStyle=style;
     ++lyricSerial;lastDraw=0;
 }
 inline void tickHook(void* player){
@@ -259,6 +267,7 @@ struct Panel{
     int cueStart=0,cueEnd=1;
     float visualLift=0.f;
     int fontPercent=115;
+    float pixelScale=.011f;
     int wordCount=1;
     int wordBase=0;
     int sourceWord=-1;
@@ -317,6 +326,38 @@ inline std::vector<std::string> splitTimedLyric(std::string_view text){
     }
     return parts;
 }
+inline std::vector<std::string> splitUnicodeLyric(std::string_view text){
+    std::vector<std::string> parts;
+    for(size_t at=0;at<text.size()&&parts.size()<32;){
+        while(at<text.size()&&text[at]==' ')++at;
+        if(at==text.size())break;
+        const size_t end=text.find(' ',at);
+        const size_t limit=end==text.npos?text.size():end;
+        while(at<limit&&parts.size()<32){
+            const size_t begin=at;
+            for(size_t count=0;count<10&&at<limit;++count){
+                ++at;
+                while(at<limit&&(static_cast<unsigned char>(text[at])&0xC0)==0x80)++at;
+            }
+            parts.emplace_back(text.substr(begin,at-begin));
+        }
+    }
+    return parts;
+}
+inline std::vector<std::string> unicodeParts(std::string_view text,
+                                             std::span<const lm_timing::WordCue> words){
+    if(text.find(' ')==text.npos&&words.size()>1&&words.size()<=32){
+        std::string joined;
+        std::vector<std::string> parts;
+        for(const auto& word:words){
+            joined+=word.text;
+            if(lm_timing::utf8Length(word.text)>10)return splitUnicodeLyric(text);
+            parts.push_back(word.text);
+        }
+        if(joined==text)return parts;
+    }
+    return splitUnicodeLyric(text);
+}
 inline float smoothstep(float t){t=std::clamp(t,0.f,1.f);return t*t*(3.f-2.f*t);}
 inline float cueProgress(float position,int start,int end){
     return std::clamp(float(position-start)/float(std::max(end-start,1)),0.f,1.f);
@@ -342,9 +383,22 @@ inline bool shouldReveal(int64_t now,int64_t due,bool beats,bool freshPulse){
     return now>=due&&(!beats||freshPulse||now-due>=240);
 }
 inline std::array<float,3> lyricTint(int part,int word){
+    const int palette=lyricPalette.load();
+    static constexpr std::array<std::array<float,3>,6> pastel{{
+        {1.f,.83f,.89f},{.78f,.91f,1.f},{.85f,1.f,.86f},
+        {1.f,.92f,.72f},{.90f,.83f,1.f},{.80f,1.f,.96f}}};
+    static constexpr std::array<std::array<float,3>,6> rainbow{{
+        {1.f,.39f,.48f},{1.f,.69f,.35f},{1.f,.94f,.39f},
+        {.44f,1.f,.65f},{.44f,.78f,1.f},{.83f,.57f,1.f}}};
+    static constexpr std::array<std::array<float,3>,6> neon{{
+        {.45f,1.f,.96f},{1.f,.56f,.87f},{.68f,.64f,1.f},
+        {1.f,.91f,.42f},{.55f,1.f,.54f},{1.f,.55f,.57f}}};
+    const auto at=static_cast<size_t>((part*3+word)%6);
+    if(palette==1)return pastel[at];
+    if(palette==2)return rainbow[at];
+    if(palette==3)return neon[at];
     if((part*3+word)%5!=2)return {1.f,1.f,1.f};
-    return part%2==0?std::array<float,3>{.82f,.92f,1.f}:
-                     std::array<float,3>{1.f,.88f,.92f};
+    return pastel[at];
 }
 inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
     constexpr float deg=.01745329251994f;
@@ -450,9 +504,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     Pose view;
     {std::unique_lock lock(poseMutex,std::try_to_lock);if(!lock)return;view=pose;}
     if(!view.world||!view.time||now-view.time>1500)return;
-    std::string text;std::vector<lm_timing::WordCue> words;uint64_t serial;
+    std::string text;std::vector<lm_timing::WordCue> words;
+    std::shared_ptr<const std::vector<GlyphMesh>> meshes;uint64_t serial;
     {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;
-     text=currentLine;words=currentWords;serial=lyricSerial;}
+     text=currentLine;words=currentWords;meshes=currentMeshes;serial=lyricSerial;}
     if(text.empty())renderStage=2;
     auto* rp=read<void*>(renderer,profile->rendererPlayer);
     auto* tess=read<void*>(ctx,profile->tessellator);
@@ -478,9 +533,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         else if(scene.serial!=serial)scene.previous=std::move(scene.panels);
         scene.panels.clear();
         const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
-        const std::string display=latinDisplay(text);
+        const std::string display=meshes?text:latinDisplay(text);
         scene.words=std::move(words);
-        const auto parts=scene.words.empty()?splitLyric(display):splitTimedLyric(display);
+        const auto parts=meshes?unicodeParts(display,scene.words):
+            scene.words.empty()?splitLyric(display):splitTimedLyric(display);
         std::vector<int> wordAt(display.size());
         int wordIndex=-1;bool inside=false;
         for(size_t k=0;k<display.size();++k){
@@ -515,7 +571,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             float score=100.f;
             if(!scene.previous.empty())for(size_t i=0;i<parts.size();++i){
                 Vec3 point=place(candidate,right,i);
-                float width=float(parts[i].size())*6.f*.011f*float(fontPercent)*.01f;
+                float width=(meshes&&i<meshes->size()?(*meshes)[i].width*(*meshes)[i].scale:
+                    float(parts[i].size())*6.f*.011f)*float(fontPercent)*.01f;
                 for(const auto& old:scene.previous){
                     Vec3 occupied=old.visualAnchor;
                     if(lyricTrailFollow.load()){
@@ -537,7 +594,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.partIndex=int(i);panel.partCount=int(parts.size());
             panel.cueStart=start;panel.cueEnd=end;
             panel.fontPercent=fontPercent;
-            panel.letters=parts[i].size();
+            panel.letters=lm_timing::utf8Length(parts[i]);
             panel.wordCount=int(std::count(parts[i].begin(),parts[i].end(),' '))+1;
             const size_t partAt=display.find(parts[i],partCursor);
             if(partAt!=display.npos){
@@ -547,13 +604,19 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             if(!scene.words.empty())
                 panel.sourceWord=lm_timing::sourceWordIndex(panel.wordBase,
                     scene.displayWords,int(scene.words.size()));
-            panel.width=float(panel.letters)*6.f*.011f*float(fontPercent)*.01f;
+            if(scene.displayWords==1&&scene.words.size()>1&&parts.size()>1)
+                panel.sourceWord=std::min(int(scene.words.size())-1,
+                    int(i*scene.words.size()/parts.size()));
+            const bool raster=meshes&&i<meshes->size()&&!(*meshes)[i].pixels.empty();
+            panel.pixelScale=raster?(*meshes)[i].scale:.011f;
+            panel.width=(raster?(*meshes)[i].width:
+                float(panel.letters)*6.f)*panel.pixelScale*float(fontPercent)*.01f;
             panel.anchor=place(base,right,i);
             panel.visualAnchor=panel.anchor;
             panel.spawnPlayer=view.position;
             panel.facing=normalized(cam-panel.anchor);
             panel.right=normalized({panel.facing.z,0,-panel.facing.x});
-            panel.pixels=glyphs(parts[i]);
+            panel.pixels=raster?(*meshes)[i].pixels:glyphs(parts[i]);
             panel.born=scene.words.empty()?now+int64_t(i)*spacing:now;
             scene.panels.push_back(std::move(panel));
         }
@@ -681,11 +744,13 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     tessBegin(tess,nullptr,1,int(count*20),0);
     auto draw=[&](const Panel& panel,float alpha,float lift,bool leaving=false){
         if(alpha<=0.f)return;
-        const float baseScale=.011f*float(panel.fontPercent)*.01f;
+        const float baseScale=panel.pixelScale*float(panel.fontPercent)*.01f;
         const float entryAge=std::max(0.f,float(now-panel.appeared));
         const float pulseFade=1.f-smoothstep(entryAge/340.f);
+        const float enter=smoothstep(entryAge/270.f);
+        const float settle=smoothstep((entryAge-250.f)/180.f);
         const float scale=baseScale*std::clamp(1.06f-float(panel.letters)*.006f,.94f,1.04f)
-            *(1.f+panel.entryStrength*.20f*pulseFade);
+            *(.78f+.28f*enter-.06f*settle+panel.entryStrength*.13f*pulseFade);
         // One slow, tiny floating motion for the entire lyric segment.
         // Beats never change its tilt or animate individual glyph geometry.
         const float t=entryAge*.001f;
@@ -714,7 +779,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
                 const float wordAlpha=leaving?transitionFade(now,scene.previousFadeStart,
                     panel.partIndex*scene.previousStagger+int(p.word)*65,1):1.f;
                 tessColor(tess,outline?0.f:tint[0],outline?0.f:tint[1],outline?0.f:tint[2],
-                          alpha*wordAlpha*reveal*(outline?.45f:1.f));
+                          alpha*wordAlpha*reveal*(outline?.45f:1.f)*float(p.coverage)/255.f);
                 quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
             }
         }

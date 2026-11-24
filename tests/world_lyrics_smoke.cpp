@@ -105,6 +105,15 @@ int main(){
     assert(std::abs(variedAnchor.y-levelAnchor.y)>.001f);
     lyricVerticalRangeTenths=8;
     assert(splitLyric("One long lyric line that should appear across different parts").size()>=4);
+    const auto scriptParts=splitUnicodeLyric("夜に駆ける 한국어 مرحبا Привет");
+    assert(scriptParts.size()==4);
+    for(const auto& part:scriptParts)assert(lm_timing::utf8Length(part)<=10);
+    auto wrapped=splitUnicodeLyric("あいうえおかきくけこさしすせそ");
+    assert(wrapped.size()==2&&wrapped[0]+wrapped[1]=="あいうえおかきくけこさしすせそ");
+    assert(unicodeParts("夜に駆ける",japanese).size()==4);
+    lyricPalette=2;
+    assert(lyricTint(0,0)!=lyricTint(1,0));
+    lyricPalette=0;
     for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=10);
     auto longWord=splitLyric("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
     assert(longWord.size()==4&&longWord[0]+longWord[1]+longWord[2]+longWord[3]=="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
@@ -241,6 +250,19 @@ int main(){
     const auto gaze=normalized(pose.position+Vec3{0,1.6f,0}-cam);
     assert(newRay.x*gaze.x+newRay.y*gaze.y+newRay.z*gaze.z>.4f);
     assert(scene.panels.front().anchor.x==thirdFirst.x);
+    scene=Scene{};
+    std::vector<GlyphMesh> unicodeMesh;
+    for(size_t i=0;i<splitUnicodeLyric("夜に駆ける 한국어").size();++i){
+        GlyphMesh m;m.width=20;m.scale=.016f;
+        m.pixels.push_back({0,0,0,180});
+        unicodeMesh.push_back(m);
+    }
+    cam={100.f,66.6f,200.f};ptr(rp,profile->camera,cam);
+    publish("夜に駆ける 한국어",5000,8000,5000,false,{},unicodeMesh,0);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.panels.size()==unicodeMesh.size());
+    assert(scene.panels.front().pixels.front().coverage==180);
+    assert(scene.panels.front().pixelScale==.016f);
     return 0;
 }
 

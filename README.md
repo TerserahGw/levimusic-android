@@ -5,10 +5,10 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Latest beta:** v1.4.3 beta (22 November 2026) · **Stable:** v1.3.6  
+**Latest beta:** v1.4.4 beta (24 November 2026) · **Stable:** v1.3.6  
 **Author:** ReaAurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
-LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional experimental 3D floating lyrics rendered locally in your Minecraft world.
+LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional 3D floating lyrics rendered locally in your Minecraft world.
 
 **[Download the latest release](https://github.com/TerserahGw/levimusic-android/releases/latest)** · [All releases](https://github.com/TerserahGw/levimusic-android/releases) · [Feature details](FEATURES.md)
 
@@ -19,8 +19,8 @@ LeviMusic combines an in-game music interface with a separate Android companion 
 - **Editable Up Next:** starting a song creates a temporary related-track radio with up to three future suggestions when available. Remove, play, or add songs to the queue. Saved playlists retain their own order.
 - **Synchronized lyrics:** active-line highlights and word-by-word timing when a source provides authentic word timestamps. Smaller romanized readings appear beneath the original text.
 - **Multiple lyric sources:** QQ Music/QRC, LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, local lyrics, and supported caption fallbacks. Results vary by song and provider availability.
-- **Experimental 3D floating lyrics:** client-only world-space lyric panels with segmented transitions, multiple layouts, and configurable camera-related positioning. No per-world addon is required; other multiplayer users do not see your lyrics.
-- **Legacy 2D lyrics:** available separately when 3D rendering is unsupported or disabled.
+- **3D floating lyrics:** client-only world-space lyric panels with Unicode font fallback, four font styles, four color palettes, segmented transitions, and configurable placement. No per-world addon is required; other players do not see your lyrics.
+- **2D HUD lyrics:** synchronized words stay above the compact HUD while 3D lyrics are on; the separate legacy scatter remains optional.
 
 This project is an unofficial community mod. It is not affiliated with Mojang, Microsoft, or the LeviLauncher maintainers.
 
@@ -38,7 +38,7 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Choose **one** of the following modes. **Do not install or enable both LeviPack variants at the same time.**
+For the **v1.4.4 beta full mode**, download [LeviPack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.4-beta/LeviMusic-1.4.4-arm64-v8a.levipack) and the matching [Bridge APK](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.4-beta/LeviMusic-Bridge-1.4.4.apk). The v1.3.6 files below remain the stable alternative.\n\nChoose **one** of the following modes. **Do not install or enable both LeviPack variants at the same time.**
 
 ### Option A — Full mode (recommended)
 
@@ -55,20 +55,20 @@ Current v1.3.6 downloads:
 
 **Note for External Mods catalog users:** the catalog can distribute the LeviPack, but the **Bridge APK must also be installed separately** from GitHub Releases for full mode.
 
-### Option B — Standalone mode (v1.4.3 beta)
+### Option B — Standalone mode (v1.4.4 beta)
 
-Download [LeviMusic-Standalone-1.4.3-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.3-beta/LeviMusic-Standalone-1.4.3-arm64-v8a.levipack) instead of the full LeviPack.
+Download [LeviMusic-Standalone-1.4.4-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.4-beta/LeviMusic-Standalone-1.4.4-arm64-v8a.levipack) instead of the full LeviPack.
 
 This beta uses the **hosted Aurelis Symphony API** by default. No Bridge APK, local backend, account, or user-run server is required. It offers search, direct audio resolution, synchronized lyrics, and an editable radio queue. Internet access and the hosted service are required. YouTube audio can return HTTP 424 or stop if the upstream blocks streaming; the bundled original demo tracks are more reliable. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
 
 For newer releases, use the matching files from the [latest release page](https://github.com/TerserahGw/levimusic-android/releases/latest) rather than mixing versions.
 
-## What's new in v1.4.3 beta
+## What's new in v1.4.4 beta
 
-- In Standalone, each timed 3D lyric word chooses a world position and fixed camera-facing orientation when its timestamp arrives, using the camera's latest view rather than the first word's placement. Visible words remain where they appeared.
-- New 3D words avoid earlier words and other fading lyric panels in the current camera view.
-- The in-game HUD now redraws independently of network requests at up to 30 FPS, interpolates audio position between reads, and fades each new timed word into the lyric bubble.
-- Line-only lyrics keep their previous behavior. 3D world rendering still requires a matching Minecraft ARM64 profile.
+- 3D lyrics now use Android font rasterization and system fallback for Japanese, Korean, Chinese, Arabic, Cyrillic, and other scripts available on the device. If a glyph is absent, romanized text is used when available.
+- Choose the 3D script (original by default, or romanized), four fonts (Sans, Serif, Mono, Condensed), and four colors (Pearl, Pastel, Rainbow, Neon). Settings are saved.
+- 3D segments appear with a gentle scale and lift animation. The synced 2D lyric stays above the compact HUD when 3D lyrics are enabled.
+- The 3D renderer still needs an exact matching Minecraft ARM64 build profile. Font fallback depends on fonts installed on your Android device.
 
 ## Stable v1.3.6
 

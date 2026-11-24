@@ -119,6 +119,115 @@ std::string fromJava(JNIEnv* env, jstring value) {
     return out;
 }
 
+// Rasterize text off the game render thread. Android Paint supplies the system
+// font fallback (including complex shaping) before we turn coverage into quads.
+bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
+                        std::span<const lm_timing::WordCue> words,
+                        std::vector<lm_world3d::GlyphMesh>& result){
+    result.clear();
+    const auto parts=lm_world3d::unicodeParts(line,words);
+    if(parts.empty())return false;
+    jclass paintClass=env->FindClass("android/graphics/Paint");
+    jclass faceClass=env->FindClass("android/graphics/Typeface");
+    jclass canvasClass=env->FindClass("android/graphics/Canvas");
+    jclass bitmapClass=env->FindClass("android/graphics/Bitmap");
+    jclass configClass=env->FindClass("android/graphics/Bitmap$Config");
+    if(clearException(env,"world font classes")||!paintClass||!faceClass||!canvasClass||
+       !bitmapClass||!configClass)return false;
+    auto paintCtor=env->GetMethodID(paintClass,"<init>","(I)V");
+    auto setSize=env->GetMethodID(paintClass,"setTextSize","(F)V");
+    auto setFace=env->GetMethodID(paintClass,"setTypeface",
+        "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
+    auto setColor=env->GetMethodID(paintClass,"setColor","(I)V");
+    auto measure=env->GetMethodID(paintClass,"measureText","(Ljava/lang/String;)F");
+    auto hasGlyph=env->GetMethodID(paintClass,"hasGlyph","(Ljava/lang/String;)Z");
+    auto faceCreate=env->GetStaticMethodID(faceClass,"create",
+        "(Ljava/lang/String;I)Landroid/graphics/Typeface;");
+    auto bitmapCreate=env->GetStaticMethodID(bitmapClass,"createBitmap",
+        "(IILandroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;");
+    auto getPixels=env->GetMethodID(bitmapClass,"getPixels","([IIIIIII)V");
+    auto recycle=env->GetMethodID(bitmapClass,"recycle","()V");
+    auto canvasCtor=env->GetMethodID(canvasClass,"<init>","(Landroid/graphics/Bitmap;)V");
+    auto draw=env->GetMethodID(canvasClass,"drawText",
+        "(Ljava/lang/String;FFLandroid/graphics/Paint;)V");
+    auto configField=env->GetStaticFieldID(configClass,"ARGB_8888",
+        "Landroid/graphics/Bitmap$Config;");
+    if(clearException(env,"world font methods")||!paintCtor||!setSize||!setFace||!setColor||
+       !measure||!hasGlyph||!faceCreate||!bitmapCreate||!getPixels||!recycle||
+       !canvasCtor||!draw||!configField)return false;
+    jobject config=env->GetStaticObjectField(configClass,configField);
+    jobject paint=env->NewObject(paintClass,paintCtor,3);
+    static constexpr const char* families[]={"sans-serif","serif","monospace","sans-serif-condensed"};
+    jstring family=toJava(env,families[std::clamp(font,0,3)]);
+    jobject face=family?env->CallStaticObjectMethod(faceClass,faceCreate,family,0):nullptr;
+    if(paint&&face){
+        env->CallVoidMethod(paint,setSize,18.f);
+        env->CallVoidMethod(paint,setColor,jint(0xFFFFFFFFU));
+        jobject old=env->CallObjectMethod(paint,setFace,face);
+        if(old)env->DeleteLocalRef(old);
+    }
+    bool ok=config&&paint&&face&&!clearException(env,"world font setup");
+    for(const auto& part:parts){
+        if(!ok)break;
+        jstring text=toJava(env,part);
+        if(!text){ok=false;break;}
+        // Missing font glyphs should be handled by romanized fallback, not boxes.
+        if(!env->CallBooleanMethod(paint,hasGlyph,text))ok=false;
+        const float measured=ok?env->CallFloatMethod(paint,measure,text):0.f;
+        const int width=std::clamp(int(std::ceil(measured))+5,6,240);
+        constexpr int height=26;
+        jobject bitmap=ok?env->CallStaticObjectMethod(bitmapClass,bitmapCreate,
+            width,height,config):nullptr;
+        jobject canvas=bitmap?env->NewObject(canvasClass,canvasCtor,bitmap):nullptr;
+        jintArray pixels=canvas?env->NewIntArray(width*height):nullptr;
+        if(!bitmap||!canvas||!pixels||clearException(env,"world font bitmap"))ok=false;
+        lm_world3d::GlyphMesh mesh;
+        if(ok){
+            env->CallVoidMethod(canvas,draw,text,2.f,20.f,paint);
+            env->CallVoidMethod(bitmap,getPixels,pixels,0,width,0,0,width,height);
+            if(clearException(env,"world font draw"))ok=false;
+            else {
+                std::vector<jint> rgba(static_cast<size_t>(width*height));
+                env->GetIntArrayRegion(pixels,0,width*height,rgba.data());
+                if(clearException(env,"world font coverage"))ok=false;
+                else {
+                    // 2x2 coverage cells bound tessellation cost on long lines.
+                    constexpr int step=2;
+                    mesh.width=float(width/step);
+                    mesh.scale=.008f*step;
+                    mesh.pixels.reserve(300);
+                    for(int y=0;y<height;y+=step)for(int x=0;x<width;x+=step){
+                        int coverage=0;
+                        for(int dy=0;dy<step&&y+dy<height;++dy)
+                            for(int dx=0;dx<step&&x+dx<width;++dx)
+                                coverage=std::max(coverage,int((uint32_t(rgba[(y+dy)*width+x+dx])>>24)&255U));
+                        if(coverage>=28)
+                            mesh.pixels.push_back({float(x-width/2)/step,
+                                float(19-y)/step,0,uint8_t(coverage)});
+                    }
+                    if(mesh.pixels.empty())ok=false;
+                }
+            }
+        }
+        if(bitmap)env->CallVoidMethod(bitmap,recycle);
+        if(pixels)env->DeleteLocalRef(pixels);
+        if(canvas)env->DeleteLocalRef(canvas);
+        if(bitmap)env->DeleteLocalRef(bitmap);
+        env->DeleteLocalRef(text);
+        if(ok)result.push_back(std::move(mesh));
+    }
+    if(face)env->DeleteLocalRef(face);
+    if(family)env->DeleteLocalRef(family);
+    if(paint)env->DeleteLocalRef(paint);
+    if(config)env->DeleteLocalRef(config);
+    env->DeleteLocalRef(configClass);env->DeleteLocalRef(bitmapClass);
+    env->DeleteLocalRef(canvasClass);env->DeleteLocalRef(faceClass);
+    env->DeleteLocalRef(paintClass);
+    if(clearException(env,"world font cleanup"))ok=false;
+    if(!ok||result.size()!=parts.size())result.clear();
+    return !result.empty();
+}
+
 std::string encode(JNIEnv* env, const std::string& value) {
     jclass cl = env->FindClass("java/net/URLEncoder");
     if (!cl || clearException(env, "URLEncoder class")) return {};
@@ -1548,6 +1657,11 @@ class LeviMusic {
     std::thread drawWorker_;
     std::mutex mu_;
     std::mutex paintMu_;
+    std::string rasterLine_;
+    int rasterFont_=-1;
+    size_t rasterWordCount_=0;
+    bool rasterValid_=false;
+    std::vector<lm_world3d::GlyphMesh> rasterMeshes_;
     std::condition_variable cv_;
     std::deque<Job> jobs_;
     struct LyricRequest {
@@ -1583,6 +1697,7 @@ class LeviMusic {
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<bool> animation_{true};
     std::atomic<bool> browserEnabled_{false},worldLyrics3D_{true},romanizeLyrics_{true};
+    std::atomic<int> worldFont_{0},worldTextScript_{0};
     std::atomic<bool> lyricsRebuild_{false};
     std::map<std::string,std::string> savedSettings_;
     bool restoringSettings_=false;
@@ -1618,7 +1733,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.3 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.4 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1640,6 +1755,9 @@ public:
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
+            .config("worldTextScript","3D Script (0 Original / 1 Romanized)",pl::modmenu::ConfigType::SliderInt,remembered("worldTextScript","0"),"0","1")
+            .config("worldFont","3D Font (0 Sans / 1 Serif / 2 Mono / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","0"),"0","3")
+            .config("lyricPalette","3D Colors (0 Pearl / 1 Pastel / 2 Rainbow / 3 Neon)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","0"),"0","3")
             .config("lyricDistance","First Person Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
             .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
             .config("lyricVerticalRange","First Person Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","8"),"0","15")
@@ -1793,6 +1911,12 @@ private:
         } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
             lm_world3d::request(worldLyrics3D_);
+        } else if(k=="worldTextScript") {
+            try{worldTextScript_=std::clamp(std::stoi(std::string(v)),0,1);}catch(...){}
+        } else if(k=="worldFont") {
+            try{worldFont_=std::clamp(std::stoi(std::string(v)),0,3);}catch(...){}
+        } else if(k=="lyricPalette") {
+            try{lm_world3d::lyricPalette=std::clamp(std::stoi(std::string(v)),0,3);}catch(...){}
         } else if(k=="lyricDistance") {
             try{lm_world3d::lyricDistanceTenths=std::clamp(std::stoi(std::string(v)),12,60);}catch(...){}
         } else if(k=="lyricHeight") {
@@ -2105,32 +2229,53 @@ private:
         if(worldLyrics3D_){
             std::string worldLine;
             bool worldHasReading=false;
+            const Lyric* worldItem=nullptr;
             const std::vector<lm_timing::WordCue>* wordCues=nullptr;
             int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
             for(size_t i=0;i<timedLyrics.size();++i){
                 const auto& item=timedLyrics[i];
                 if(item.ms<=elapsed){
                     worldLine=item.line;
+                    worldItem=&item;
                     wordCues=&item.words;
                     worldHasReading=false;
                     cueStart=item.ms;
                     cueEnd=i+1<timedLyrics.size()?timedLyrics[i+1].ms:
                         (total>item.ms?total:item.ms+3500);
                     if(item.endMs>item.ms)cueEnd=std::min(cueEnd,item.endMs);
-                    if(romanizeLyrics_&&!item.romanized.empty()){
+                    if(worldTextScript_==1&&romanizeLyrics_&&!item.romanized.empty()){
                         worldLine=item.romanizedWorld.empty()?item.romanized:item.romanizedWorld;
                         worldHasReading=true;
                     }
                 }
             }
-            bool missingReading=!worldHasReading&&std::any_of(worldLine.begin(),worldLine.end(),
-                [](unsigned char ch){return ch>=128;});
-            if(missingReading)
-                worldLine=romanizeLyrics_?"Romanization unavailable":"Enable romanization for 3D lyrics";
+            const int font=worldFont_.load();
+            if(worldLine!=rasterLine_||font!=rasterFont_||
+               rasterWordCount_!=(wordCues?wordCues->size():0)){
+                rasterLine_=worldLine;rasterFont_=font;
+                rasterWordCount_=wordCues?wordCues->size():0;
+                rasterMeshes_.clear();rasterValid_=false;
+                if(!worldLine.empty()){
+                    EnvScope scope(vm_);
+                    if(scope)rasterValid_=rasterizeWorldText(scope.env,worldLine,font,
+                        wordCues?std::span<const lm_timing::WordCue>(*wordCues):
+                                 std::span<const lm_timing::WordCue>{},rasterMeshes_);
+                }
+            }
+            if(!rasterValid_){
+                if(!worldHasReading&&worldItem&&romanizeLyrics_&&
+                   !worldItem->romanizedWorld.empty())
+                    worldLine=worldItem->romanizedWorld;
+                else if(std::any_of(worldLine.begin(),worldLine.end(),
+                    [](unsigned char ch){return ch>=128;}))worldLine="Font unavailable";
+            }
             lm_world3d::publish((lyricsOn_ && wordCues)?worldLine:std::string{},
                                  cueStart,cueEnd,elapsed,playing,
-                                 wordCues&&!missingReading?std::span<const lm_timing::WordCue>(*wordCues):
-                                          std::span<const lm_timing::WordCue>{});
+                                 wordCues?std::span<const lm_timing::WordCue>(*wordCues):
+                                          std::span<const lm_timing::WordCue>{},
+                                 rasterValid_?std::span<const lm_world3d::GlyphMesh>(rasterMeshes_):
+                                              std::span<const lm_world3d::GlyphMesh>{},
+                                 uint32_t(font)*2U+uint32_t(worldTextScript_.load()));
         }
         else if(lm_world3d::installed)
             lm_world3d::publish("");
@@ -2210,9 +2355,8 @@ private:
             }
             // No background: white text + black multi-pass outline.
             // LRC lines remain until the NEXT timestamp, never a fixed 5-second cutoff.
-            // The 3D switch never silently draws a 2D lyric. The separate
-            // Legacy 2D setting remains available if the game is unsupported.
-            if(lyricsOn_ && (!worldLyrics3D_ || floatingLyrics_) && !timedLyrics.empty() && elapsed>=0) {
+            // Keep synchronized lyrics above the compact HUD even when world text is active.
+            if(lyricsOn_ && !timedLyrics.empty() && elapsed>=0) {
                 int active=-1;
                 for(size_t i=0;i<timedLyrics.size();i++) {
                     if(timedLyrics[i].ms>elapsed)break;
@@ -2224,7 +2368,7 @@ private:
                         if(item.line.empty()||alpha<=0.f)return;
                         float subtitleY=lyricsBelow_?l.mini.y+l.mini.h+26*u:l.mini.y-16*u;
                         float subtitleX=l.mini.x+3*u;
-                        if(floatingLyrics_ || worldLyrics3D_){
+                        if(floatingLyrics_ && !worldLyrics3D_){
                             // Client-only 2D fallback, per-line location (not 3D world text).
                             // True world-space rendering needs version-specific camera hooks.
                             const uint32_t seed=static_cast<uint32_t>(item.ms)*2654435761U+0x9E3779B9U;
@@ -2233,7 +2377,7 @@ private:
                             subtitleX=std::clamp(l.w*(.18f+px*.47f),18*u,l.w*.67f);
                             subtitleY=std::clamp(l.h*(.32f+py*.40f),44*u,l.h-36*u);
                         }
-                        if(!(floatingLyrics_ || worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
+                        if(!(floatingLyrics_ && !worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
                             subtitleY=lyricsBelow_?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
                         if(subtitleY>23*u&&subtitleY<l.h-10*u){
                             const std::string visible=lm_timing::revealedText(item.line,item.words,elapsed);
@@ -2244,7 +2388,7 @@ private:
                                 float(elapsed-item.words[shown-1].startMs)/180.f):1.f;
                             const std::string prior=entering?lm_timing::revealedText(
                                 item.line,item.words,item.words[shown-1].startMs-1):std::string{};
-                            const float lyricSize=((floatingLyrics_ || worldLyrics3D_)?15.8f:14.4f)*u;
+                            const float lyricSize=((floatingLyrics_ && !worldLyrics3D_)?15.8f:14.4f)*u;
                             if(!prior.empty()&&blend<1.f)
                                 outlineText(subtitleX,subtitleY,prior,lyricSize,alpha*(1.f-blend));
                             outlineText(subtitleX,subtitleY,visible,lyricSize,alpha*blend);
@@ -2286,7 +2430,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.3 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.4 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
