@@ -43,7 +43,11 @@ jobs:
           [[ "$channel" == stable || "$channel" == beta ]] || { echo "Invalid release channel"; exit 1; }
           existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$' | sort -V | tail -n 1 || true)"
           previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
-          if [[ -n "$existing" ]]; then
+          if [[ "$channel" == stable && "$(cat VERSION)" == 1.6.0 ]]; then
+            # Rebuild the requested v1.6.0 tag after its first published assets.
+            version=1.6.0
+            already_released=true
+          elif [[ -n "$existing" ]]; then
             version="${existing#v}"
             version="${version%-beta}"
             already_released=true
@@ -82,6 +86,8 @@ jobs:
         run: |
           IFS='.' read -r major minor patch <<< "$VERSION"
           code=$((major*10000 + minor*100 + patch))
+          # Match the briefly published 1.6.1 APK so an in-place reinstall is allowed.
+          if [[ "$VERSION" == 1.6.0 ]]; then code=10601; fi
           [[ "$code" -gt 112 ]] || { echo 'Android versionCode must increase'; exit 1; }
           echo "LEVIMUSIC_ANDROID_VERSION_CODE=$code" >> "$GITHUB_ENV"
           echo "LEVIMUSIC_ANDROID_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
@@ -359,6 +365,13 @@ jobs:
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
               -f sha="$GITHUB_SHA" -F force=true >/dev/null
             echo "Replaced release $TAG assets and updated its source tag."
+            if [[ "$TAG" == v1.6.0 ]]; then
+              accidental="$(gh release view v1.6.1 --json targetCommitish --jq .targetCommitish 2>/dev/null || true)"
+              if [[ "$accidental" == ffb404879bb5196e4900d23fc2758efcd34941cc ]]; then
+                gh release delete v1.6.1 --yes --cleanup-tag
+                echo "Removed the accidental v1.6.1 release from this revision."
+              fi
+            fi
           else
             gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
               --target "$GITHUB_SHA" \
