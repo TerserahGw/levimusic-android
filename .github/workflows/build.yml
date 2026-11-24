@@ -27,7 +27,9 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --force --tags origin
-          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+-beta$' | sort -V | tail -n 1 || true)"
+          channel="$(tr -d '\r\n ' < RELEASE_CHANNEL)"
+          [[ "$channel" == stable || "$channel" == beta ]] || { echo "Invalid release channel"; exit 1; }
+          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$' | sort -V | tail -n 1 || true)"
           previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
           if [[ -n "$existing" ]]; then
             version="${existing#v}"
@@ -47,7 +49,9 @@ jobs:
           fi
           {
             echo "version=$version"
-            echo "tag=v$version-beta"
+            if [[ "$channel" == stable ]]; then echo "tag=v$version"
+            else echo "tag=v$version-beta"; fi
+            echo "channel=$channel"
             echo "previous_tag=$previous"
             echo "already_released=$already_released"
           } >> "$GITHUB_OUTPUT"
@@ -212,14 +216,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.4.6-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.5.0-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.4.6-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.5.0-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -269,17 +273,17 @@ jobs:
 
           version = os.environ["VERSION"]
           notes = "\n".join([
-              f"# LeviMusic Online v{version} beta",
+              f"# LeviMusic - Aurelis Online v{version} stable",
               "",
               "Mod musik client-only untuk Minecraft Bedrock melalui LeviLauncher Android ARM64. Lirik 3D tampil di world hanya untuk pemain lokal; Bridge APK menyediakan pemutar, antrean, dan lirik tersinkron.",
               "",
               "## Versi Minecraft yang didukung untuk lirik 3D",
               "- 1.26.52, 1.26.60, dan 1.26.62.1 pada profil ARM64 dengan Build ID yang cocok. Minecraft 1.26.66.1 dapat menjalankan mod musik jika loader memuatnya, tetapi renderer 3D menunggu pemeriksaan binary ARM64 versi tersebut.",
               "",
-              "## Perubahan dari v1.4.5 beta",
-              "- Baris lama tidak muncul lagi secara utuh saat lirik baru mulai; animasi keluar menyimpan visibilitas terakhir setiap kata.",
-              "- Outline siluet huruf Latin dibuat lebih terlihat dengan kontur dua sel, bukan outline di tiap piksel.",
-              "- Resolusi raster Unicode dinaikkan lagi; aksara non-Latin pendek memakai sampling penuh tanpa memperbesar teks di world.",
+              "## Perubahan dari v1.4.6 beta",
+              "- Default pengaturan lirik 3D mengikuti preset pengguna; pengaturan lama tetap dipertahankan. Menu setting in-game kini dibagi empat halaman yang mudah disentuh.",
+              "- Playlist dapat dibuat, ditambah dari hasil pencarian, dan lagu dapat dihapus dari playlist langsung di menu game. Standalone menyimpan playlist lokal; Bridge memigrasikan playlist lama ke file atomik dengan cadangan.",
+              "- Penyimpanan settings.conf dan playlist Standalone memakai file sementara dan cadangan agar lebih tahan terhadap kegagalan tulis.",
               "",
               "Gunakan paket Standalone tanpa Bridge APK; koneksi internet ke Aurelis Symphony tetap diperlukan. Jangan aktifkan kedua varian LeviPack sekaligus.",
               "",
@@ -296,14 +300,17 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
           PACKAGE: ${{ steps.package.outputs.file }}
           STANDALONE: ${{ steps.package.outputs.standalone }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
           APK: build/LeviMusic-Bridge-${{ steps.version.outputs.version }}.apk
         shell: bash
         run: |
           set -euo pipefail
+          release_flags=()
+          if [[ "$CHANNEL" == beta ]]; then release_flags+=(--prerelease); fi
           gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
             --target "$GITHUB_SHA" \
-            --prerelease \
-            --title "LeviMusic Online v$VERSION beta" \
+            "${release_flags[@]}" \
+            --title "LeviMusic - Aurelis Online v$VERSION" \
             --notes-file release-notes.md
           echo "Published release $TAG with $PACKAGE."
 

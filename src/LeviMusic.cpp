@@ -32,6 +32,7 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <iomanip>
 
 namespace {
 constexpr const char* TAG = "LeviMusic";
@@ -54,7 +55,7 @@ struct Lyric {
     std::vector<lm_timing::WordCue> words;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, PlaylistRemove, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
@@ -1584,6 +1585,46 @@ struct UI {
     std::vector<Rect> rows;
     bool ok()const{return w>0&&h>0;}
 };
+struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
+constexpr std::array<SettingRow,24> quickSettings{{
+    {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
+    {"lyricTrailFollow","Follow player and rise",0,0,1,true},
+    {"lyricBeats","Experimental beats",0,0,1,true},
+    {"romanizeLyrics","Romanized subtitles",0,0,1,true},
+    {"lyrics","Show lyrics",0,0,1,true},
+    {"animation","Smooth animation",0,0,1,true},
+    {"lyricDistance","Distance (0.1 block)",1,12,60,false},
+    {"lyricHeight","Spawn height (0.1 block)",1,0,30,false},
+    {"lyricVerticalRange","Vertical range (0.1 block)",1,0,15,false},
+    {"lyricFontSize","Text size (%)",1,60,200,false},
+    {"lyricScatterFov","Scatter FOV (degrees)",1,0,140,false},
+    {"firstPlacement","Layout: grid / fan / stagger",1,0,2,false},
+    {"otherDistance","Distance (0.1 block)",2,18,80,false},
+    {"otherHeight","Spawn height (0.1 block)",2,0,40,false},
+    {"otherVerticalRange","Vertical range (0.1 block)",2,0,15,false},
+    {"otherFontSize","Text size (%)",2,60,200,false},
+    {"otherArcSpread","Line arc (degrees)",2,60,330,false},
+    {"otherPlacement","Layout: arc / ring / scatter",2,0,2,false},
+    {"worldFont","Font: Sans / Serif / Mono / Condensed",3,0,3,false},
+    {"lyricPalette","Colors: Pearl / Pastel / Rainbow / Neon",3,0,3,false},
+    {"worldTextScript","Text: Original / Romanized",3,0,1,false},
+    {"hudSize","Compact HUD size (%)",3,55,125,false},
+    {"hudX","Compact HUD horizontal (%)",3,0,100,false},
+    {"hudY","Compact HUD vertical (%)",3,0,100,false},
+}};
+inline Rect settingsTab(const UI& l,int page){
+    const float u=l.s,gap=6*u,w=(l.outer.w-48*u-3*gap)/4.f;
+    return {l.outer.x+24*u+float(page)*(w+gap),l.outer.y+58*u,w,34*u};
+}
+inline Rect settingsRow(const UI& l,int index){
+    const float u=l.s,step=std::min(48*u,(l.outer.h-157*u)/6.f);
+    return {l.outer.x+24*u,l.outer.y+107*u+float(index)*step,
+            l.outer.w-48*u,step-5*u};
+}
+inline Rect settingsAdvanced(const UI& l){
+    const float u=l.s;return {l.outer.x+l.outer.w-180*u,
+        l.outer.y+l.outer.h-43*u,155*u,30*u};
+}
 UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15) {
     UI p;
     const auto surface=pl::modmenu::getHudSurfaceSize();
@@ -1693,13 +1734,15 @@ class LeviMusic {
     int coverCount_=0;
     int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
+    bool settingsOpen_=false;int settingsPage_=0;
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<bool> animation_{true};
     std::atomic<bool> browserEnabled_{false},worldLyrics3D_{true},romanizeLyrics_{true};
-    std::atomic<int> worldFont_{0},worldTextScript_{0};
+    std::atomic<int> worldFont_{3},worldTextScript_{0};
     std::atomic<bool> lyricsRebuild_{false};
     std::map<std::string,std::string> savedSettings_;
+    std::map<std::string,std::vector<Track>> localPlaylists_;
     bool restoringSettings_=false;
 #if defined(LEVI_STANDALONE)
     std::atomic<bool> useBridge_{false},lyricsBelow_{false},floatingLyrics_{false};
@@ -1718,31 +1761,44 @@ public:
     bool load(){
         vm_=self_.getJavaVM();
         try{
-            std::ifstream settings(self_.getConfigDir()/"settings.conf");
+            auto settingsFile=self_.getConfigDir()/"settings.conf";
+            std::ifstream settings(settingsFile);
+            if(!settings){settings.clear();settings.open(self_.getConfigDir()/"settings.conf.bak");}
             std::string row;
             while(std::getline(settings,row)){
                 auto eq=row.find('=');
                 if(eq!=std::string::npos&&eq<40&&row.size()<512)
                     savedSettings_[row.substr(0,eq)]=row.substr(eq+1);
             }
+            if(savedSettings_.empty()){
+                std::ifstream backup(self_.getConfigDir()/"settings.conf.bak");
+                while(std::getline(backup,row)){
+                    auto eq=row.find('=');
+                    if(eq!=std::string::npos&&eq<40&&row.size()<512)
+                        savedSettings_[row.substr(0,eq)]=row.substr(eq+1);
+                }
+            }
 #if defined(LEVI_STANDALONE)
-            if(savedSettings_["chruServer"]=="http://127.0.0.1:8080")
+            if(savedSettings_["chruServer"].empty()||
+               savedSettings_["chruServer"]=="http://127.0.0.1:8080")
                 savedSettings_["chruServer"]="https://aurelis-symphony.go.altare.global";
 #endif
             std::ifstream keyFile(self_.getConfigDir()/"bridge.token");
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
+            if(!readLocalPlaylists(self_.getConfigDir()/"playlists.dat"))
+                readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.6 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.5.0 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
         {
             std::lock_guard lock(mu_);
-            shutdown_=false;open_=false;typing_=false;
+            shutdown_=false;open_=false;settingsOpen_=false;typing_=false;
         }
         restoringSettings_=true;
-        bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic Online")
+        bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic - Aurelis Online")
             .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(true)
             .description("Native music HUD. Bridge mode controls Spotify or YouTube Music via companion Android app.")
             .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,remembered("volume","75"),"0","100")
@@ -1756,21 +1812,21 @@ public:
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
             .config("worldTextScript","3D Script (0 Original / 1 Romanized)",pl::modmenu::ConfigType::SliderInt,remembered("worldTextScript","0"),"0","1")
-            .config("worldFont","3D Font (0 Sans / 1 Serif Italic / 2 Mono Bold / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","0"),"0","3")
-            .config("lyricPalette","3D Colors (0 Pearl / 1 Pastel / 2 Rainbow / 3 Neon)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","0"),"0","3")
+            .config("worldFont","3D Font (0 Sans / 1 Serif Italic / 2 Mono Bold / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","3"),"0","3")
+            .config("lyricPalette","3D Colors (0 Pearl / 1 Pastel / 2 Rainbow / 3 Neon)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","2"),"0","3")
             .config("lyricDistance","First Person Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
-            .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
-            .config("lyricVerticalRange","First Person Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","8"),"0","15")
+            .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","0"),"0","30")
+            .config("lyricVerticalRange","First Person Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","2"),"0","15")
             .config("lyricFontSize","First Person Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("lyricFontSize","115"),"60","200")
-            .config("lyricScatterFov","First Person Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","100"),"0","140")
+            .config("lyricScatterFov","First Person Scatter FOV (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("lyricScatterFov","60"),"0","140")
             .config("firstPlacement","First Person Layout (0 grid / 1 fan / 2 staggered)",pl::modmenu::ConfigType::SliderInt,remembered("firstPlacement","0"),"0","2")
-            .config("otherDistance","Other Cameras Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherDistance","38"),"18","80")
-            .config("otherHeight","Other Cameras Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherHeight","13"),"0","40")
-            .config("otherVerticalRange","Other Cameras Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherVerticalRange","8"),"0","15")
-            .config("otherFontSize","Other Cameras Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("otherFontSize","115"),"60","200")
+            .config("otherDistance","Other Cameras Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherDistance","18"),"18","80")
+            .config("otherHeight","Other Cameras Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherHeight","0"),"0","40")
+            .config("otherVerticalRange","Other Cameras Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("otherVerticalRange","4"),"0","15")
+            .config("otherFontSize","Other Cameras Font Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("otherFontSize","140"),"60","200")
             .config("otherArcSpread","Other Cameras Line Arc (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("otherArcSpread","220"),"60","330")
             .config("otherPlacement","Other Cameras Layout (0 arc / 1 ring / 2 scattered ring)",pl::modmenu::ConfigType::SliderInt,remembered("otherPlacement","2"),"0","2")
-            .config("lyricTrailFollow","3D Lyrics Follow Player and Rise",pl::modmenu::ConfigType::Toggle,remembered("lyricTrailFollow","false"))
+            .config("lyricTrailFollow","3D Lyrics Follow Player and Rise",pl::modmenu::ConfigType::Toggle,remembered("lyricTrailFollow","true"))
             .config("lyricBeats","Experimental 3D Lyrics Beats (Bridge audio)",pl::modmenu::ConfigType::Toggle,remembered("lyricBeats","false"))
             .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,remembered("romanizeLyrics","true"))
 #if defined(LEVI_STANDALONE)
@@ -1836,19 +1892,76 @@ private:
     }
     std::string remembered(const char* key,const char* fallback)const{
         auto it=savedSettings_.find(key);
-        return it==savedSettings_.end()?fallback:it->second;
+        return it==savedSettings_.end()||it->second.empty()?fallback:it->second;
     }
     void persistSetting(std::string_view k,std::string_view v){
         if(restoringSettings_||k=="bridgeKey"||k.size()>40||v.size()>350||v.find('\n')!=v.npos)return;
         savedSettings_[std::string(k)]=std::string(v);
         try{
             std::filesystem::create_directories(self_.getConfigDir());
+            auto path=self_.getConfigDir()/"settings.conf";
+            auto backup=self_.getConfigDir()/"settings.conf.bak";
             auto tmp=self_.getConfigDir()/"settings.conf.tmp";
             std::ofstream file(tmp,std::ios::trunc);
             for(const auto& [key,value]:savedSettings_)file<<key<<'='<<value<<'\n';
-            file.close();
-            if(file)std::filesystem::rename(tmp,self_.getConfigDir()/"settings.conf");
+            file.flush();if(!file)return;
+            file.close();if(!file)return;
+            if(std::filesystem::exists(path)){
+                std::filesystem::remove(backup);
+                std::filesystem::rename(path,backup);
+            }
+            try{std::filesystem::rename(tmp,path);}
+            catch(...){if(std::filesystem::exists(backup))std::filesystem::rename(backup,path);throw;}
         }catch(...){}
+    }
+    bool readLocalPlaylists(const std::filesystem::path& path){
+        try{
+            if(!std::filesystem::is_regular_file(path)||
+               std::filesystem::file_size(path)>4'000'000)return false;
+            std::ifstream file(path,std::ios::binary);
+            std::string header;size_t count=0;
+            if(!(file>>header>>count)||header!="LMPL1"||count>40)return false;
+            std::map<std::string,std::vector<Track>> loaded;
+            for(size_t i=0;i<count;++i){
+                std::string name;size_t size=0;
+                if(!(file>>std::quoted(name)>>size)||name.empty()||name.size()>120||size>300)
+                    return false;
+                auto& songs=loaded[name];
+                for(size_t j=0;j<size;++j){
+                    Track track;
+                    if(!(file>>std::quoted(track.id)>>std::quoted(track.title)>>
+                         std::quoted(track.artist)>>std::quoted(track.art))||
+                       track.id.empty()||track.id.size()>350||track.title.size()>400||
+                       track.artist.size()>350||track.art.size()>1000)return false;
+                    songs.push_back(std::move(track));
+                }
+            }
+            if(loaded.size()!=count)return false;
+            localPlaylists_=std::move(loaded);return true;
+        }catch(...){return false;}
+    }
+    bool saveLocalPlaylists(){
+        try{
+            auto dir=self_.getConfigDir();std::filesystem::create_directories(dir);
+            auto path=dir/"playlists.dat",tmp=dir/"playlists.dat.tmp";
+            auto backup=dir/"playlists.dat.bak";
+            std::ofstream file(tmp,std::ios::binary|std::ios::trunc);
+            file<<"LMPL1 "<<localPlaylists_.size()<<'\n';
+            for(const auto& [name,songs]:localPlaylists_){
+                file<<std::quoted(name)<<' '<<songs.size()<<'\n';
+                for(const auto& song:songs)
+                    file<<std::quoted(song.id)<<' '<<std::quoted(song.title)<<' '
+                        <<std::quoted(song.artist)<<' '<<std::quoted(song.art)<<'\n';
+            }
+            file.flush();if(!file)return false;
+            file.close();if(!file||std::filesystem::file_size(tmp)>4'000'000)return false;
+            if(std::filesystem::exists(path)){
+                std::filesystem::remove(backup);std::filesystem::rename(path,backup);
+            }
+            try{std::filesystem::rename(tmp,path);}
+            catch(...){if(std::filesystem::exists(backup))std::filesystem::rename(backup,path);throw;}
+            return true;
+        }catch(...){return false;}
     }
     void processLyrics(){
         EnvScope scope(vm_);
@@ -2007,12 +2120,41 @@ private:
         }
         paint();
     }
+    int quickValue(const SettingRow& row){
+        const std::string_view k=row.key;
+        if(k=="worldLyrics3D")return worldLyrics3D_;
+        if(k=="lyricTrailFollow")return lm_world3d::lyricTrailFollow;
+        if(k=="lyricBeats")return lm_world3d::experimentalBeats;
+        if(k=="romanizeLyrics")return romanizeLyrics_;
+        if(k=="animation")return animation_;
+        if(k=="lyrics"){std::lock_guard lock(mu_);return lyricsOn_;}
+        if(k=="lyricDistance")return lm_world3d::lyricDistanceTenths;
+        if(k=="lyricHeight")return lm_world3d::lyricHeightTenths;
+        if(k=="lyricVerticalRange")return lm_world3d::lyricVerticalRangeTenths;
+        if(k=="lyricFontSize")return lm_world3d::lyricFontPercent;
+        if(k=="lyricScatterFov")return lm_world3d::lyricScatterFov;
+        if(k=="firstPlacement")return lm_world3d::firstPlacement;
+        if(k=="otherDistance")return lm_world3d::otherDistanceTenths;
+        if(k=="otherHeight")return lm_world3d::otherHeightTenths;
+        if(k=="otherVerticalRange")return lm_world3d::otherVerticalRangeTenths;
+        if(k=="otherFontSize")return lm_world3d::otherFontPercent;
+        if(k=="otherArcSpread")return lm_world3d::otherArcSpread;
+        if(k=="otherPlacement")return lm_world3d::otherPlacement;
+        if(k=="worldFont")return worldFont_;
+        if(k=="lyricPalette")return lm_world3d::lyricPalette;
+        if(k=="worldTextScript")return worldTextScript_;
+        if(k=="hudSize")return hudSize_;
+        if(k=="hudX")return hudX_;
+        if(k=="hudY")return hudY_;
+        return row.low;
+    }
     bool touch(const pl::input::TouchEvent& e){
         if(!enabled_ || (e.action!=0 && e.action!=1))return false;
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
         if(!l.ok())return false;
-        bool opened,hud;
-        {std::lock_guard lock(mu_);opened=open_;hud=hud_;}
+        bool opened,hud,settingsOpen;int settingsPage;
+        {std::lock_guard lock(mu_);opened=open_;hud=hud_;
+            settingsOpen=settingsOpen_;settingsPage=settingsPage_;}
         if(e.action==0)return opened || (hud&&l.mini.contains(e.x,e.y));
         if(!opened){
             if(hud&&l.mini.contains(e.x,e.y)){
@@ -2021,13 +2163,47 @@ private:
             }
             return false;
         }
+        if(settingsOpen){
+            if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
+                std::lock_guard lock(mu_);settingsOpen_=false;
+            }else if(settingsAdvanced(l).contains(e.x,e.y)){
+                {std::lock_guard lock(mu_);settingsOpen_=false;open_=false;
+                    panelToggled_=std::chrono::steady_clock::now();}
+                pl::modmenu::requestOpenMenu();
+            }else{
+                bool tab=false;
+                for(int page=0;page<4;++page)if(settingsTab(l,page).contains(e.x,e.y)){
+                    std::lock_guard lock(mu_);settingsPage_=page;tab=true;break;
+                }
+                if(!tab){
+                    int index=0;
+                    for(const auto& row:quickSettings){
+                        if(row.page!=settingsPage)continue;
+                        const Rect area=settingsRow(l,index++);
+                        if(!area.contains(e.x,e.y))continue;
+                        const int old=quickValue(row);
+                        int value=old;
+                        if(row.toggle)value=1-old;
+                        else if(e.x>area.x+area.w-36*l.s)value=old+1;
+                        else if(e.x>area.x+area.w-76*l.s)value=old-1;
+                        else if(e.x>area.x+area.w*.52f)
+                            value=row.low+int(std::round((row.high-row.low)*
+                                std::clamp((e.x-(area.x+area.w*.52f)) /
+                                           (area.w*.48f-80*l.s),0.f,1.f)));
+                        value=std::clamp(value,row.low,row.high);
+                        if(value!=old)setConfig(row.key,std::to_string(value));
+                        break;
+                    }
+                }
+            }
+            paint();return true;
+        }
         if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
             {std::lock_guard lock(mu_);open_=false;typing_=false;panelToggled_=std::chrono::steady_clock::now();}
             pl::input::hideKeyboard();
         }else if(l.settings.contains(e.x,e.y)){
-            {std::lock_guard lock(mu_);open_=false;typing_=false;panelToggled_=std::chrono::steady_clock::now();}
+            {std::lock_guard lock(mu_);settingsOpen_=true;settingsPage_=0;typing_=false;}
             pl::input::hideKeyboard();
-            pl::modmenu::requestOpenMenu();
 #if defined(LEVI_STANDALONE)
         }else if(l.pair.contains(e.x,e.y)&&!useBridge_){
             if(browserEnabled_)addJob(Action::OpenBrowser);
@@ -2076,14 +2252,9 @@ private:
                 pl::input::hideKeyboard();
                 if(useBridge_)addJob(Action::QueueRefresh);
             }else if(tab==1 && l.queueSaved.contains(e.x,e.y)){
-                if(!useBridge_){
-                    update("Standalone radio","Up Next",
-                           "Use + in Search to add songs to your queue");
-                    return true;
-                }
                 {std::lock_guard lock(mu_);libraryMode_=1;page_=0;selected_=-1;typing_=false;}
                 pl::input::hideKeyboard();
-                if(useBridge_)addJob(Action::PlaylistList);
+                addJob(Action::PlaylistList);
             }else if(tab==1 && mode==1 && l.savedInput.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);query_.clear();typing_=true;}
                 pl::input::showKeyboard();
@@ -2104,7 +2275,7 @@ private:
             }else if(tab!=2){
                 int selected=-1;
                 std::string id,name;
-                bool plus=false,minus=false;
+                bool plus=false,minus=false,playlistAdd=false,playlistRemove=false;
                 {
                     std::lock_guard lock(mu_);
                     for(size_t i=0;i<l.rows.size();i++){
@@ -2116,19 +2287,27 @@ private:
                         if(!inRange || !l.rows[i].contains(e.x,e.y))continue;
                         selected_=index;selected=index;
                         plus=tab==0 && e.x>l.rows[i].x+l.rows[i].w-42*l.s;
+                        playlistAdd=tab==0 && !plus &&
+                            e.x>l.rows[i].x+l.rows[i].w-83*l.s;
                         minus=tab==1 && mode==3 && index>0
                             && e.x>l.rows[i].x+l.rows[i].w-42*l.s;
+                        playlistRemove=tab==1 && mode==2 &&
+                            e.x>l.rows[i].x+l.rows[i].w-42*l.s;
                         if(tab==0)id=results_[static_cast<size_t>(index)].id;
                         else if(mode==3)id=queueTracks_[static_cast<size_t>(index)].id;
                         else if(mode==1)name=playlistNames_[static_cast<size_t>(index)];
+                        else if(mode==2)id=results_[static_cast<size_t>(index)].id;
                         break;
                     }
                 }
                 if(selected>=0){
-                    if(tab==0)addJob(plus?Action::QueueAdd:Action::Select,id);
+                    if(tab==0)addJob(plus?Action::QueueAdd:
+                                      playlistAdd?Action::PlaylistAdd:Action::Select,id);
                     else if(mode==3)addJob(minus?Action::QueueRemove:Action::QueuePlay,id);
                     else if(mode==1)addJob(Action::PlaylistOpen,name);
-                    else if(mode==2)addJob(Action::PlaylistPlay,std::to_string(selected));
+                    else if(mode==2)addJob(playlistRemove?Action::PlaylistRemove:
+                                           Action::PlaylistPlay,playlistRemove?id:
+                                           std::to_string(selected));
                 }
             }
         }
@@ -2189,14 +2368,15 @@ private:
         std::string activePlaylist;
         std::vector<Lyric> timedLyrics;
         float lyricAge=100.f;
-        int current,page,elapsed,total,volume,libraryMode,rightTab;
-        bool open,showHud,playing,typing;
+        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage;
+        bool open,showHud,playing,typing,settingsOpen;
         float panelAge=1.f;
         {
             std::lock_guard lock(mu_);
             title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";coverImage=coverImageId_;
             tracks=results_;queueTracks=queueTracks_;playlistNames=playlistNames_;
             activePlaylist=activePlaylist_;libraryMode=libraryMode_;rightTab=rightTab_;
+            settingsPage=settingsPage_;settingsOpen=settingsOpen_;
             timedLyrics=lyrics_;
             panelAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-panelToggled_).count();
             lyricAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-lyricChanged_).count();
@@ -2323,6 +2503,51 @@ private:
             }
         };
         const float miniScale=std::clamp(hudSize_.load(),55,125)/100.f;
+        if(open&&settingsOpen){
+            box({0,0,l.w,l.h},0xAA080B11U,0.f);
+            box({l.outer.x,l.outer.y+4*u,l.outer.w,l.outer.h},0x99000000U,18.f);
+            box(l.outer,0xF51A1D23U,18.f);
+            box({l.outer.x+21*u,l.outer.y+17*u,3*u,25*u},0xFF9EDCE7U,2.f);
+            text(l.outer.x+34*u,l.outer.y+35*u,"AURELIS / SETTINGS",18*u,C_TEXT,32);
+            text(l.outer.x+34*u,l.outer.y+52*u,"Changes are saved automatically",9.2f*u,C_DIM,48);
+            box(l.close,0xFF41444CU,8.f);
+            icon("x",l.close.x+6*u,l.close.y+6*u,18*u);
+            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD"};
+            for(int n=0;n<4;++n){
+                Rect tab=settingsTab(l,n);const bool active=n==settingsPage;
+                box(tab,active?0xFF415661U:0xFF292D34U,8.f);
+                text(tab.x+11*u,tab.y+22*u,tabs[n],10.3f*u,
+                     active?C_TEXT:C_DIM,24);
+            }
+            int index=0;
+            for(const auto& item:quickSettings){
+                if(item.page!=settingsPage)continue;
+                const Rect row=settingsRow(l,index++);
+                box(row,index%2?0xFF292D35U:0xFF252930U,9.f);
+                text(row.x+14*u,row.y+row.h*.60f,item.label,11.5f*u,C_TEXT,45);
+                int value=quickValue(item);
+                if(item.toggle){
+                    const Rect pill{row.x+row.w-70*u,row.y+6*u,57*u,row.h-12*u};
+                    box(pill,value?0xFF47747DU:0xFF41454EU,11.f);
+                    text(pill.x+13*u,pill.y+pill.h*.70f,value?"ON":"OFF",10.5f*u,C_TEXT,4);
+                }else{
+                    const float left=row.x+row.w*.52f;
+                    const float barWidth=row.w*.48f-80*u;
+                    box({left,row.y+row.h*.57f,barWidth,3*u},0xFF48515AU,2.f);
+                    box({left,row.y+row.h*.57f,
+                        barWidth*float(value-item.low)/float(std::max(1,item.high-item.low)),3*u},
+                        0xFF9EDCE7U,2.f);
+                    text(row.x+row.w-71*u,row.y+row.h*.63f,"-",14*u,C_TEXT,2);
+                    text(row.x+row.w-31*u,row.y+row.h*.63f,"+",14*u,C_TEXT,2);
+                    text(left,row.y+row.h*.36f,std::to_string(value),9.8f*u,C_DIM,8);
+                }
+            }
+            const Rect advanced=settingsAdvanced(l);
+            box(advanced,0xFF3A414AU,8.f);
+            text(advanced.x+13*u,advanced.y+20*u,"ADVANCED SETTINGS",10*u,C_TEXT,22);
+            pl::modmenu::submitDrawCommands(MODULE,out);
+            return;
+        }
         if(!panelVisible) {
             if(showHud){
                 box({l.mini.x+2*u,l.mini.y+4*u,l.mini.w,l.mini.h},0x70000000U,15*miniScale);
@@ -2429,8 +2654,8 @@ private:
         box({l.outer.x+3*u,l.outer.y+3*u,l.outer.w-6*u,1.0f*u},0x33FFFFFFU,1.f);
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
-        text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.6 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.5.0 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -2540,14 +2765,18 @@ private:
                 box(row,chosen?0xFF414750U:0xFF292C32U,8.f);
                 const std::string prefix=isRadio?(n==0?"NOW  ":"NEXT "+std::to_string(n)+"  "):
                     (std::to_string(n+1)+".  ");
-                const float suffixWidth=(isRadio && n>0) || addControl?45*u:12*u;
+                const float suffixWidth=addControl?85*u:(isRadio&&n>0)||isSaved?45*u:12*u;
                 const size_t maxChars=static_cast<size_t>(
                     std::max(13.f,(row.w-16*u-suffixWidth)/(7.1f*u)));
                 text(row.x+10*u,row.y+std::min(row.h-3*u,19*u),
                      prefix+songs[n].title,11.7f*u,C_TEXT,maxChars);
                 if(isRadio && n>0){
                     icon("x",row.x+row.w-28*u,row.y+5*u,18*u);
+                }else if(isSaved){
+                    icon("x",row.x+row.w-28*u,row.y+5*u,18*u);
                 }else if(addControl){
+                    text(row.x+row.w-73*u,row.y+std::min(row.h-3*u,19*u),
+                         "P+",11*u,C_TEXT,3);
                     icon("plus",row.x+row.w-27*u,row.y+5*u,18*u);
                 }else if(chosen){
                     icon(playing?"audio-lines":"play",row.x+row.w-27*u,row.y+5*u,17*u);
@@ -2605,7 +2834,7 @@ private:
             box(l.searchGo,0xFF50555EU,8.f);
             icon("search",l.searchGo.x+13*u,l.searchGo.y+7*u,20*u);
             text(l.right.x+15*u,l.right.y+106*u,
-                 "SEARCH RESULTS  •  Tap song to play, + to add to Up Next",
+                 "SEARCH RESULTS  •  Tap play | P+ playlist | + queue",
                  10*u,C_DIM,75);
             if(tracks.empty()){
                 text(l.right.x+18*u,l.right.y+169*u,
@@ -2617,8 +2846,8 @@ private:
                  "UP NEXT",10.5f*u,libraryMode==3?C_TEXT:C_DIM,15);
             box(l.queueSaved,(libraryMode==1||libraryMode==2)?0xFF50555EU:0xFF2C3037U,7.f);
             text(l.queueSaved.x+10*u,l.queueSaved.y+20*u,
-                 streamingBridge?"SAVED":"AURELIS",10.5f*u,
-                 streamingBridge&&libraryMode!=3?C_TEXT:C_DIM,14);
+                 "PLAYLISTS",10.5f*u,
+                 libraryMode!=3?C_TEXT:C_DIM,14);
             if(libraryMode==3){
                 text(l.right.x+15*u,l.right.y+106*u,
                      "RADIO • CURRENT TRACK + 3 RECOMMENDATIONS",10.6f*u,C_DIM,61);
@@ -2653,6 +2882,9 @@ private:
                      activePlaylist.empty()?"SAVED PLAYLIST":activePlaylist,
                      12.6f*u,C_TEXT,56);
                 drawSongs(tracks,false,false,true);
+                text(l.right.x+16*u,l.right.y+l.right.h-15*u,
+                     "Tap song to play • X removes it • Search P+ adds songs",
+                     9.4f*u,C_DIM,70);
             }
         }
         if(animation_ && panelFade<1.f){
@@ -2929,15 +3161,13 @@ private:
                             auto names=parsePlaylistNames(env,bridgeGet("/v1/playlists",key));
                             {std::lock_guard lock(mu_);playlistNames_=std::move(names);
                                 libraryMode_=1;page_=0;query_.clear();selected_=-1;
+                                if(accepted)activePlaylist_=job.query;
                             }
                             break;
                         }
                         case Action::PlaylistAdd: {
-                            std::string name,id;
-                            {std::lock_guard lock(mu_);name=activePlaylist_;
-                                if(selected_>=0&&selected_<static_cast<int>(results_.size()))
-                                    id=results_[static_cast<size_t>(selected_)].id;
-                            }
+                            std::string name,id=job.query;
+                            {std::lock_guard lock(mu_);name=activePlaylist_;}
                             if(name.empty()||id.empty()){
                                 update("Choose a playlist and song","Playlists",
                                        "Open a playlist once, then select a search song and tap +");
@@ -2950,6 +3180,25 @@ private:
                             if(root)env->DeleteLocalRef(root);
                             update(accepted?"Added to playlist":"Add failed",name,
                                    accepted?"Song saved":"Check the playlist and Bridge");
+                            break;
+                        }
+                        case Action::PlaylistRemove: {
+                            std::string name;
+                            {std::lock_guard lock(mu_);name=activePlaylist_;}
+                            if(name.empty()||job.query.empty())break;
+                            auto reply=bridgeGet("/v1/playlist/remove?name="+encode(env,name)
+                                +"&id="+encode(env,job.query),key);
+                            auto root=makeJson(env,reply);
+                            bool accepted=root&&optString(env,root,"accepted")=="true";
+                            if(root)env->DeleteLocalRef(root);
+                            if(accepted){
+                                auto songs=parseBridgeSearch(env,bridgeGet(
+                                    "/v1/playlist/tracks?name="+encode(env,name),key));
+                                std::lock_guard lock(mu_);
+                                results_=std::move(songs);
+                                page_=std::min(page_,std::max(0,int((results_.size()+4)/5)-1));
+                                selected_=-1;
+                            }else update("Remove failed",name,"Retry from the playlist");
                             break;
                         }
                         case Action::QueueRefresh:{
@@ -3221,6 +3470,93 @@ private:
 #endif
                         break;
 #if defined(LEVI_STANDALONE)
+                    case Action::PlaylistList:{
+                        std::vector<std::string> names;
+                        for(const auto& item:localPlaylists_)names.push_back(item.first);
+                        {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                            libraryMode_=1;page_=0;selected_=-1;results_.clear();}
+                        break;
+                    }
+                    case Action::PlaylistCreate:{
+                        std::string name=job.query;
+                        name.erase(0,name.find_first_not_of(" \t\r\n"));
+                        auto end=name.find_last_not_of(" \t\r\n");
+                        if(end!=std::string::npos)name.erase(end+1);
+                        if(name.empty()||name.size()>96||name.find_first_of("\r\n")!=std::string::npos){
+                            update("Playlist name invalid","Library","Enter a shorter name");break;
+                        }
+                        if(localPlaylists_.size()>=40&&!localPlaylists_.contains(name)){
+                            update("Playlist limit reached",name,"Maximum 40 playlists");break;
+                        }
+                        if(localPlaylists_.contains(name)){
+                            update("Playlist exists",name,"Open it from the list");break;
+                        }
+                        localPlaylists_[name]={};
+                        if(!saveLocalPlaylists()){
+                            localPlaylists_.erase(name);
+                            update("Playlist save failed",name,"Check free storage");break;
+                        }
+                        std::vector<std::string> names;
+                        for(const auto& item:localPlaylists_)names.push_back(item.first);
+                        {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                            activePlaylist_=name;libraryMode_=1;page_=0;query_.clear();selected_=-1;}
+                        update("Playlist created",name,"Open it or tap P+ in Search to add songs");
+                        break;
+                    }
+                    case Action::PlaylistOpen:{
+                        auto it=localPlaylists_.find(job.query);
+                        if(it==localPlaylists_.end())break;
+                        {std::lock_guard lock(mu_);results_=it->second;activePlaylist_=job.query;
+                            libraryMode_=2;page_=0;selected_=-1;}
+                        break;
+                    }
+                    case Action::PlaylistAdd:{
+                        std::string name;Track track;
+                        {std::lock_guard lock(mu_);name=activePlaylist_;
+                            auto it=std::find_if(searchCache_.begin(),searchCache_.end(),
+                                [&](const Track& song){return song.id==job.query;});
+                            if(it!=searchCache_.end())track=*it;
+                        }
+                        auto it=localPlaylists_.find(name);
+                        if(it==localPlaylists_.end()||track.id.empty()){
+                            update("Choose a playlist","Library","Create or open a playlist, then tap P+");break;
+                        }
+                        auto& songs=it->second;
+                        if(songs.size()>=300){update("Playlist full",name,"Maximum 300 songs");break;}
+                        if(std::none_of(songs.begin(),songs.end(),
+                            [&](const Track& song){return song.id==track.id;})){
+                            songs.push_back(track);
+                            if(!saveLocalPlaylists()){
+                                songs.pop_back();update("Playlist save failed",name,"Check free storage");break;
+                            }
+                        }
+                        update("Added to playlist",name,track.title);break;
+                    }
+                    case Action::PlaylistRemove:{
+                        std::string name;
+                        {std::lock_guard lock(mu_);name=activePlaylist_;}
+                        auto it=localPlaylists_.find(name);
+                        if(it==localPlaylists_.end())break;
+                        auto before=it->second;
+                        std::erase_if(it->second,[&](const Track& song){return song.id==job.query;});
+                        if(!saveLocalPlaylists()){
+                            it->second=std::move(before);
+                            update("Remove failed",name,"Check free storage");break;
+                        }
+                        {std::lock_guard lock(mu_);results_=it->second;
+                            page_=std::min(page_,std::max(0,int((results_.size()+4)/5)-1));selected_=-1;}
+                        break;
+                    }
+                    case Action::PlaylistPlay:{
+                        int index=-1;try{index=std::stoi(job.query);}catch(...){}
+                        std::string name;{std::lock_guard lock(mu_);name=activePlaylist_;}
+                        auto it=localPlaylists_.find(name);
+                        if(it==localPlaylists_.end()||index<0||
+                           index>=int(it->second.size()))break;
+                        {std::lock_guard lock(mu_);results_=it->second;selected_=index;
+                            standaloneQueueSelection_=false;}
+                        playSelected();break;
+                    }
                     case Action::QueueAdd:{
                         std::lock_guard lock(mu_);
                         auto it=std::find_if(searchCache_.begin(),searchCache_.end(),
@@ -3253,8 +3589,12 @@ private:
                         break;
                     }
 #endif
-                    case Action::Pair:case Action::PlaylistList:case Action::PlaylistOpen:
+                    case Action::Pair:
+#if !defined(LEVI_STANDALONE)
+                    case Action::PlaylistList:case Action::PlaylistOpen:
                     case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistAdd:
+                    case Action::PlaylistRemove:
+#endif
                     case Action::QueueRefresh:
 #if !defined(LEVI_STANDALONE)
                     case Action::QueuePlay:case Action::QueueRemove:case Action::QueueAdd:

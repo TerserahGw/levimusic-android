@@ -1,12 +1,12 @@
-# LeviMusic Online
+# LeviMusic - Aurelis Online
 
 **A client-side music player with synchronized lyrics for Minecraft Bedrock on LeviLauncher Android (ARM64).**
 
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Latest beta:** v1.4.6 beta (24 November 2026) · **Stable:** v1.3.6  
-**Author:** ReaAurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
+**Stable:** v1.5.0 (24 November 2026)  
+**Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional 3D floating lyrics rendered locally in your Minecraft world.
 
@@ -15,12 +15,13 @@ LeviMusic combines an in-game music interface with a separate Android companion 
 ## Features
 
 - **Music player and discovery:** play music using the Android Bridge, browse/search tracks, see artwork, and control playback.
-- **Search / Playlist / Lyrics tabs:** a touch-friendly in-game interface for landscape Android.
+- **Search / Playlist / Lyrics tabs:** a touch-friendly in-game interface for landscape Android. Create playlists and add or remove their tracks directly in game.
 - **Editable Up Next:** starting a song creates a temporary related-track radio with up to three future suggestions when available. Remove, play, or add songs to the queue. Saved playlists retain their own order.
 - **Synchronized lyrics:** active-line highlights and word-by-word timing when a source provides authentic word timestamps. Smaller romanized readings appear beneath the original text.
 - **Multiple lyric sources:** QQ Music/QRC, LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, local lyrics, and supported caption fallbacks. Results vary by song and provider availability.
 - **3D floating lyrics:** client-only world-space lyric panels with Unicode font fallback, four font styles, four color palettes, segmented transitions, and configurable placement. No per-world addon is required; other players do not see your lyrics.
 - **2D HUD lyrics:** synchronized words stay above the compact HUD while 3D lyrics are on; the separate legacy scatter remains optional.
+- **Settings:** a four-page in-game panel for common controls, with Advanced Settings for the complete list. The default 3D layout uses the verified user preset.
 
 This project is an unofficial community mod. It is not affiliated with Mojang, Microsoft, or the LeviLauncher maintainers.
 
@@ -38,46 +39,28 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-For the **v1.4.6 beta full mode**, download [LeviPack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.6-beta/LeviMusic-1.4.6-arm64-v8a.levipack) and the matching [Bridge APK](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.6-beta/LeviMusic-Bridge-1.4.6.apk). The v1.3.6 files below remain the stable alternative.\n\nChoose **one** of the following modes. **Do not install or enable both LeviPack variants at the same time.**
+Choose **one** LeviPack variant from the [v1.5.0 stable release](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.5.0). Do not enable both variants at once.
 
-### Option A — Full mode (recommended)
+### Full mode (with Android Bridge)
 
-Download both files from the **same release**:
+- [LeviMusic-1.5.0-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.5.0/LeviMusic-1.5.0-arm64-v8a.levipack)
+- [LeviMusic-Bridge-1.5.0.apk](https://github.com/TerserahGw/levimusic-android/releases/download/v1.5.0/LeviMusic-Bridge-1.5.0.apk)
 
-1. **LeviMusic-1.3.6-arm64-v8a.levipack** — import/install this in LeviLauncher.
-2. **LeviMusic-Bridge-1.3.6.apk** — install the Android companion app.
+Install both files. The Bridge app handles playback, searches, and playlists. Existing playlists are migrated from Android preferences to an atomic file on the first edit; export and import remain available in the app.
 
-Open the Bridge, complete the available pairing/connection steps, then launch Minecraft through LeviLauncher. Full mode provides the Android music player, playlists, editable queue, and synchronized lyric integration.
+### Standalone mode (without Bridge)
 
-Current v1.3.6 downloads:
-- [Full LeviPack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.3.6/LeviMusic-1.3.6-arm64-v8a.levipack)
-- [Bridge APK](https://github.com/TerserahGw/levimusic-android/releases/download/v1.3.6/LeviMusic-Bridge-1.3.6.apk)
+- [LeviMusic-Standalone-1.5.0-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.5.0/LeviMusic-Standalone-1.5.0-arm64-v8a.levipack)
 
-**Note for External Mods catalog users:** the catalog can distribute the LeviPack, but the **Bridge APK must also be installed separately** from GitHub Releases for full mode.
+Standalone uses the hosted Aurelis Symphony API. It needs internet access but no user-run server or Bridge APK. Playlists are stored in the mod's configuration folder with a backup. Upstream YouTube streams can still fail if the provider blocks access.
 
-### Option B — Standalone mode (v1.4.6 beta)
+## Changes in v1.5.0 stable
 
-Download [LeviMusic-Standalone-1.4.6-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.6-beta/LeviMusic-Standalone-1.4.6-arm64-v8a.levipack) instead of the full LeviPack.
-
-This beta uses the **hosted Aurelis Symphony API** by default. No Bridge APK, local backend, account, or user-run server is required. It offers search, direct audio resolution, synchronized lyrics, and an editable radio queue. Internet access and the hosted service are required. YouTube audio can return HTTP 424 or stop if the upstream blocks streaming; the bundled original demo tracks are more reliable. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
-
-For newer releases, use the matching files from the [latest release page](https://github.com/TerserahGw/levimusic-android/releases/latest) rather than mixing versions.
-
-## What's new in v1.4.6 beta
-
-- Fixed completed 3D lyric lines popping back in full when the next line begins. The exit transition now retains the final visibility of each old word.
-- A stronger two-cell contour follows the silhouette of Latin letters, so the dark outline is visible without outlining every pixel square.
-- Unicode rasterization uses higher source resolution. Short non-Latin lyric fragments use full-resolution sampling for sharper Kanji and other characters while keeping the same world-space font size.
-- The 2D lyric above the compact HUD remains synchronized when 3D lyrics are enabled.
-
-## Stable v1.3.6
-
-- More fluid 3D lyric-segment entrances, with overlapping, ordered fades for old and new words.
-- Added QQ Music QRC word-timing support alongside existing lyric-source fallbacks.
-- Redesigned Bridge UI with larger artwork, an expanded player, touch-friendly queue, and timestamp-following lyrics with word highlights when timing data is available.
-- **Minecraft 1.26.66.1 3D world lyrics remain unverified.**
-
-Read the [v1.3.6 release notes](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.3.6) and [detailed feature history](FEATURES.md).
+- Adopted the provided 3D lyric layout as the default for new installs, while retaining existing user settings. An empty `chruServer` uses the hosted Aurelis endpoint.
+- Renamed the mod to **LeviMusic - Aurelis Online** and added a four-page settings panel inside the game.
+- Create playlists, add search results using **P+**, open playlists, and remove songs with **X** in both modes.
+- Improved settings and playlist persistence with temporary files and backups; Bridge playlists migrate without deleting the previous copy.
+- Previous 3D lyric transitions, Unicode rendering, font choices, and color palettes are included.
 
 ## Troubleshooting
 

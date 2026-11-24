@@ -39,15 +39,15 @@ inline std::atomic<int64_t> lastDraw{0};
 inline std::atomic<int> renderStage{0}; // 0 no callback, 1 no player, 2 no LRC, 3 no material, 4 drawing
 inline std::atomic<int> matchingBindings{0}; // largest complete prefix of audited signatures
 inline std::atomic<uint64_t> generation{0};
-inline std::atomic<int> lyricDistanceTenths{22},lyricScatterFov{100};
-inline std::atomic<int> lyricHeightTenths{13};
-inline std::atomic<int> lyricVerticalRangeTenths{8},lyricFontPercent{115};
-inline std::atomic<int> otherDistanceTenths{38},otherHeightTenths{13};
-inline std::atomic<int> otherVerticalRangeTenths{8},otherFontPercent{115};
+inline std::atomic<int> lyricDistanceTenths{22},lyricScatterFov{60};
+inline std::atomic<int> lyricHeightTenths{0};
+inline std::atomic<int> lyricVerticalRangeTenths{2},lyricFontPercent{115};
+inline std::atomic<int> otherDistanceTenths{18},otherHeightTenths{0};
+inline std::atomic<int> otherVerticalRangeTenths{4},otherFontPercent{140};
 inline std::atomic<int> otherArcSpread{220};
 inline std::atomic<int> firstPlacement{0},otherPlacement{2};
-inline std::atomic<bool> lyricTrailFollow{false},experimentalBeats{false};
-inline std::atomic<int> lyricPalette{0}; // 0 pearl, 1 pastel, 2 rainbow, 3 neon
+inline std::atomic<bool> lyricTrailFollow{true},experimentalBeats{false};
+inline std::atomic<int> lyricPalette{2}; // 0 pearl, 1 pastel, 2 rainbow, 3 neon
 inline std::atomic<float> beatStrength{0.f};
 inline std::atomic<int64_t> beatUpdated{0};
 inline std::atomic<uint64_t> beatPulseSerial{0};

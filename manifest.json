@@ -1,8 +1,8 @@
 {
   "type": "preload-native",
-  "name": "LeviMusic - Full Music Player",
-  "author": "ReaAurelis",
-  "version": "1.4.6",
+  "name": "LeviMusic - Aurelis Online",
+  "author": "Liliyana Rea de Aurelis",
+  "version": "1.5.0",
   "entry": "liblevimusic.so",
   "minecraft_versions": []
 }

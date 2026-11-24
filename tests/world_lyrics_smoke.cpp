@@ -12,6 +12,12 @@ void mesh(void*,void*,void* material,char*){assert(material);assert(batchVertice
 }
 int main(){
     using namespace lm_world3d;
+    assert(otherDistanceTenths==18&&otherHeightTenths==0&&
+           otherVerticalRangeTenths==4&&otherFontPercent==140);
+    assert(lyricHeightTenths==0&&lyricVerticalRangeTenths==2);
+    assert(lyricScatterFov==60&&firstPlacement==0&&
+           lyricTrailFollow&&lyricPalette==2);
+    otherDistanceTenths=38;otherHeightTenths=13;lyricTrailFollow=false;
     const std::vector<lm_timing::WordCue> sample{{21070,21307,"I"},
         {21307,21753,"wanna"},{21753,22304,"take"},{22304,22487,"you"}};
     assert(lm_timing::revealedText("I wanna take you",sample,21069).empty());

@@ -2,11 +2,17 @@ package com.reaaurelis.levimusic.bridge;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.util.AtomicFile;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
 
 /** Local-only persistent playlists, independent of the current search result page. */
 public final class PlaylistStore {
@@ -16,13 +22,42 @@ public final class PlaylistStore {
     private static final int MAX_TRACKS=300;
     private PlaylistStore(){}
 
-    private static JSONArray read(Context context) {
-        String data=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString(DATA,"[]");
-        try{return new JSONArray(data);}catch(Exception e){return new JSONArray();}
+    private static AtomicFile file(Context context){
+        return new AtomicFile(new File(context.getFilesDir(),"levimusic-playlists-v2.json"));
     }
-    private static void write(Context context,JSONArray playlists) {
-        context.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
-            .edit().putString(DATA,playlists.toString()).apply();
+    private static JSONArray read(Context context) {
+        AtomicFile data=file(context);
+        if(data.getBaseFile().exists()||new File(data.getBaseFile().getPath()+".bak").exists()){
+            try(InputStream input=data.openRead()){
+                ByteArrayOutputStream buffer=new ByteArrayOutputStream();
+                byte[] chunk=new byte[8192];int n;
+                while((n=input.read(chunk))!=-1){
+                    if(buffer.size()+n>4_000_000)throw new IllegalStateException("Playlist data too large");
+                    buffer.write(chunk,0,n);
+                }
+                return new JSONArray(new String(buffer.toByteArray(),StandardCharsets.UTF_8));
+            }catch(Exception error){
+                android.util.Log.e("LeviMusic","Playlist file unreadable; trying legacy backup",error);
+            }
+        }
+        // Migrate existing SharedPreferences data without deleting the old copy.
+        String legacy=context.getSharedPreferences(PREFS,Context.MODE_PRIVATE).getString(DATA,"[]");
+        try{return new JSONArray(legacy);}catch(Exception error){return new JSONArray();}
+    }
+    private static boolean write(Context context,JSONArray playlists) {
+        AtomicFile data=file(context);
+        FileOutputStream output=null;
+        try{
+            byte[] bytes=playlists.toString().getBytes(StandardCharsets.UTF_8);
+            if(bytes.length>4_000_000)return false;
+            output=data.startWrite();output.write(bytes);
+            data.finishWrite(output);
+            return true;
+        }catch(Exception error){
+            if(output!=null)data.failWrite(output);
+            android.util.Log.e("LeviMusic","Could not save playlists",error);
+            return false;
+        }
     }
     private static String cleanName(String name) {
         if(name==null)return "";
@@ -45,8 +80,9 @@ public final class PlaylistStore {
         if(data.length()>=MAX_PLAYLISTS)return result(false,"Maximum 40 playlists");
         JSONObject item=new JSONObject();
         try{item.put("name",name).put("tracks",new JSONArray());}catch(Exception ignored){}
-        data.put(item);write(context,data);
-        return result(true,"Playlist created");
+        data.put(item);
+        boolean saved=write(context,data);
+        return result(saved,saved?"Playlist created":"Could not save playlist");
     }
     public static synchronized JSONObject add(Context context,String name,MusicCatalog.Song song) {
         if(song==null)return result(false,"Select a song first");
@@ -64,8 +100,8 @@ public final class PlaylistStore {
         }
         tracks.put(song.json());
         try{entry.put("tracks",tracks);}catch(Exception ignored){}
-        write(context,data);
-        return result(true,"Added to playlist");
+        boolean saved=write(context,data);
+        return result(saved,saved?"Added to playlist":"Could not save playlist");
     }
     public static synchronized JSONObject remove(Context context,String name,String id) {
         JSONArray data=read(context);
@@ -78,8 +114,8 @@ public final class PlaylistStore {
             if(song!=null&&!id.equals(song.optString("id")))updated.put(song);
         }
         try{entry.put("tracks",updated);}catch(Exception ignored){}
-        write(context,data);
-        return result(true,"Song removed");
+        boolean saved=write(context,data);
+        return result(saved,saved?"Song removed":"Could not save playlist");
     }
     public static synchronized JSONObject delete(Context context,String name) {
         JSONArray data=read(context), updated=new JSONArray();
@@ -88,8 +124,8 @@ public final class PlaylistStore {
             JSONObject p=data.optJSONObject(i);
             if(p!=null&&!name.equalsIgnoreCase(p.optString("name")))updated.put(p);
         }
-        write(context,updated);
-        return result(true,"Playlist deleted");
+        boolean saved=write(context,updated);
+        return result(saved,saved?"Playlist deleted":"Could not save playlist");
     }
     public static synchronized JSONObject list(Context context,String filter) {
         JSONArray data=read(context), items=new JSONArray();
@@ -192,7 +228,7 @@ public final class PlaylistStore {
                 p.put("name",name).put("tracks",valid);
                 clean.put(p);
             }
-            write(context,clean);
+            if(!write(context,clean))return result(false,"Could not save playlist backup");
             return result(true,"Imported "+clean.length()+" playlists / "+totalSongs+" tracks");
         } catch(Exception error) {
             return result(false,"Invalid JSON backup");
