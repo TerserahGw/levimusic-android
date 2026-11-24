@@ -33,6 +33,7 @@
 #include <filesystem>
 #include <map>
 #include <iomanip>
+#include <set>
 
 namespace {
 constexpr const char* TAG = "LeviMusic";
@@ -46,6 +47,30 @@ struct Track {
     std::string artist;
     std::string art;
 };
+bool localTrack(const Track& track){return track.id.rfind("offline:",0)==0;}
+bool allowedAudio(const std::filesystem::path& path){
+    auto ext=path.extension().string();
+    std::transform(ext.begin(),ext.end(),ext.begin(),[](unsigned char c){return std::tolower(c);});
+    return ext==".mp3"||ext==".m4a"||ext==".aac"||ext==".ogg"||
+        ext==".opus"||ext==".flac"||ext==".wav"||ext==".mp4"||ext==".webm";
+}
+std::vector<Track> offlineTracks(const std::filesystem::path& folder,const std::string& query={}){
+    std::vector<Track> found;
+    try{
+        std::filesystem::create_directories(folder);
+        for(const auto& entry:std::filesystem::directory_iterator(folder)){
+            if(!entry.is_regular_file()||!allowedAudio(entry.path())||
+                entry.file_size()==0||entry.file_size()>200'000'000)continue;
+            auto name=entry.path().filename().string();
+            if(name.size()>200||name.find('/')!=std::string::npos)continue;
+            if(!query.empty()&&query!="offline"&&name.find(query)==std::string::npos)continue;
+            found.push_back({"offline:"+name,entry.path().stem().string(),"Local music",""});
+            if(found.size()>=300)break;
+        }
+    }catch(...){}
+    std::sort(found.begin(),found.end(),[](const Track& a,const Track& b){return a.title<b.title;});
+    return found;
+}
 struct Lyric {
     int ms = 0;
     std::string line;
@@ -55,7 +80,7 @@ struct Lyric {
     std::vector<lm_timing::WordCue> words;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistAdd, PlaylistRemove, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistRename, PlaylistDelete, PlaylistAdd, PlaylistRemove, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
@@ -330,10 +355,12 @@ std::string getHttp(JNIEnv* env, const std::string& url,
         bytes = env->NewByteArray(8192);
         if (read && bytes) {
             content.reserve(24000);
-            while (content.size() < 750000) {
+            const size_t limit=url.find("youtube.com/playlist?")!=std::string::npos?
+                4'000'000:750'000;
+            while (content.size() < limit) {
                 jint n = env->CallIntMethod(stream, read, bytes);
                 if (clearException(env, "read HTTPS") || n <= 0) break;
-                if (content.size() + static_cast<size_t>(n) > 750000) break;
+                if (content.size() + static_cast<size_t>(n) > limit) break;
                 char buf[8192];
                 env->GetByteArrayRegion(bytes, 0, n, reinterpret_cast<jbyte*>(buf));
                 if (clearException(env, "byte copy")) break;
@@ -601,6 +628,49 @@ std::string chruRequest(JNIEnv* env,const std::string& server,const std::string&
     }
     env->DeleteLocalRef(root);
     return selected;
+}
+std::vector<Track> importYoutubePlaylist(JNIEnv* env,const std::string& url){
+    std::vector<Track> tracks;
+    if(url.size()>512||!(url.rfind("https://music.youtube.com/playlist?",0)==0||
+       url.rfind("https://www.youtube.com/playlist?",0)==0))return tracks;
+    const auto pos=url.find("list=");
+    if(pos==std::string::npos)return tracks;
+    auto id=url.substr(pos+5);id=id.substr(0,id.find('&'));
+    if(id.size()<10||id.size()>100||!std::all_of(id.begin(),id.end(),[](unsigned char c){
+        return std::isalnum(c)||c=='_'||c=='-';}))return tracks;
+    auto page=getHttp(env,"https://www.youtube.com/playlist?list="+id);
+    if(page.empty())return tracks;
+    std::set<std::string> seen;
+    const std::string marker="\"playlistVideoRenderer\":{";
+    size_t at=0;
+    while((at=page.find(marker,at))!=std::string::npos&&tracks.size()<300){
+        auto next=page.find(marker,at+marker.size());
+        std::string_view block(page.data()+at,std::min<size_t>(
+            std::min(next==std::string::npos?page.size():next,page.size())-at,5000));
+        auto v=block.find("\"videoId\":\"");
+        if(v!=std::string_view::npos){
+            v+=11;auto end=block.find('"',v);
+            if(end!=std::string_view::npos){
+                std::string video(block.substr(v,end-v));
+                if(video.size()==11&&seen.insert(video).second){
+                    std::string title=video,artist="YouTube";
+                    auto label=block.find("\"title\":");
+                    if(label!=std::string_view::npos){
+                        auto text=block.find("\"text\":\"",label);
+                        if(text!=std::string_view::npos){
+                            text+=8;auto stop=block.find('"',text);
+                            if(stop!=std::string_view::npos&&stop-text<400)
+                                title=std::string(block.substr(text,stop-text));
+                        }
+                    }
+                    tracks.push_back({video,title,artist,
+                        "https://i.ytimg.com/vi/"+video+"/hqdefault.jpg"});
+                }
+            }
+        }
+        at+=marker.size();
+    }
+    return tracks;
 }
 std::vector<Track> searchAurelis(JNIEnv* env,const std::string& server,
                                  const std::string& query,const std::string& artist={}){
@@ -1302,7 +1372,8 @@ public:
     bool startUrl(JNIEnv* env, const std::string& url, int volume,
                   bool trustedFirstParty=false) {
         release(env);
-        const std::string playableUrl=trustedFirstParty&&url.rfind("https://",0)==0?
+        const std::string playableUrl=trustedFirstParty&&
+            (url.rfind("https://",0)==0||url.rfind("/",0)==0)?
             url:resolveStreamUrl(env,url);
         if(playableUrl.empty())return false;
         jclass cls = env->FindClass("android/media/MediaPlayer");
@@ -1722,6 +1793,7 @@ class LeviMusic {
     int rightTab_=0; // 0 Search, 1 Playlist / Up Next, 2 Lyrics
     std::vector<std::string> playlistNames_;
     std::string activePlaylist_;
+    std::string renameTarget_,pendingDelete_;
     int libraryMode_=0; // 0 Search, 1 saved playlists, 2 saved tracks, 3 Up Next radio/playlist queue
     std::vector<Lyric> lyrics_, lyricsSource_;
     std::string query_="lofi", title_="LeviMusic", artist_="Online Music";
@@ -1788,8 +1860,9 @@ public:
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
             if(!readLocalPlaylists(self_.getConfigDir()/"playlists.dat"))
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
+            std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.5.0 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.0 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2262,7 +2335,10 @@ private:
                 std::string name;
                 {std::lock_guard lock(mu_);name=query_;typing_=false;}
                 pl::input::hideKeyboard();
-                addJob(Action::PlaylistCreate,name);
+                std::string old;
+                {std::lock_guard lock(mu_);old=renameTarget_;renameTarget_.clear();}
+                addJob(old.empty()?Action::PlaylistCreate:Action::PlaylistRename,
+                    old.empty()?name:old+"\n"+name);
             }else if(tab!=2 && l.pagePrev.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);page_=std::max(0,page_-1);}
             }else if(tab!=2 && l.pageNext.contains(e.x,e.y)){
@@ -2276,6 +2352,7 @@ private:
                 int selected=-1;
                 std::string id,name;
                 bool plus=false,minus=false,playlistAdd=false,playlistRemove=false;
+                bool renamePlaylist=false,deletePlaylist=false;
                 {
                     std::lock_guard lock(mu_);
                     for(size_t i=0;i<l.rows.size();i++){
@@ -2296,6 +2373,10 @@ private:
                         if(tab==0)id=results_[static_cast<size_t>(index)].id;
                         else if(mode==3)id=queueTracks_[static_cast<size_t>(index)].id;
                         else if(mode==1)name=playlistNames_[static_cast<size_t>(index)];
+                        if(tab==1&&mode==1){
+                            deletePlaylist=e.x>l.rows[i].x+l.rows[i].w-35*l.s;
+                            renamePlaylist=!deletePlaylist&&e.x>l.rows[i].x+l.rows[i].w-70*l.s;
+                        }
                         else if(mode==2)id=results_[static_cast<size_t>(index)].id;
                         break;
                     }
@@ -2304,7 +2385,18 @@ private:
                     if(tab==0)addJob(plus?Action::QueueAdd:
                                       playlistAdd?Action::PlaylistAdd:Action::Select,id);
                     else if(mode==3)addJob(minus?Action::QueueRemove:Action::QueuePlay,id);
-                    else if(mode==1)addJob(Action::PlaylistOpen,name);
+                    else if(mode==1){
+                        if(renamePlaylist){
+                            {std::lock_guard lock(mu_);renameTarget_=name;query_=name;typing_=true;}
+                            pl::input::showKeyboard();
+                        }else if(deletePlaylist){
+                            bool confirmed=false;
+                            {std::lock_guard lock(mu_);
+                                confirmed=pendingDelete_==name;pendingDelete_=confirmed?"":name;}
+                            if(confirmed)addJob(Action::PlaylistDelete,name);
+                            else update("Tap X again to delete",name,"Playlist removal requires confirmation");
+                        }else addJob(Action::PlaylistOpen,name);
+                    }
                     else if(mode==2)addJob(playlistRemove?Action::PlaylistRemove:
                                            Action::PlaylistPlay,playlistRemove?id:
                                            std::to_string(selected));
@@ -2332,7 +2424,10 @@ private:
         if(editing){if(submit){
             pl::input::hideKeyboard();
             int mode;{std::lock_guard lock(mu_);mode=libraryMode_;}
-            addJob(mode==1?Action::PlaylistCreate:Action::Search,query);
+            std::string old;
+            {std::lock_guard lock(mu_);old=renameTarget_;renameTarget_.clear();}
+            addJob(mode==1?(old.empty()?Action::PlaylistCreate:Action::PlaylistRename):Action::Search,
+                old.empty()?query:old+"\n"+query);
         }paint();}
         return editing;
     }
@@ -2353,7 +2448,10 @@ private:
         if(editing&&e.isKeyDown){if(submit){
             pl::input::hideKeyboard();
             int mode;{std::lock_guard lock(mu_);mode=libraryMode_;}
-            addJob(mode==1?Action::PlaylistCreate:Action::Search,query);
+            std::string old;
+            {std::lock_guard lock(mu_);old=renameTarget_;renameTarget_.clear();}
+            addJob(mode==1?(old.empty()?Action::PlaylistCreate:Action::PlaylistRename):Action::Search,
+                old.empty()?query:old+"\n"+query);
         }paint();}
         return editing;
     }
@@ -2655,7 +2753,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.5.0 STABLE",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.0 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -2863,7 +2961,7 @@ private:
             }else if(libraryMode==1){
                 box(l.savedInput,0xFF282B30U,8.f);
                 text(l.savedInput.x+9*u,l.savedInput.y+21*u,
-                     typing?("_ "+query):(query.empty()?"New playlist name...":query),
+                     typing?("_ "+query):(query.empty()?"Name or YouTube playlist URL...":query),
                      11.2f*u,typing?C_TEXT:C_DIM,47);
                 box(l.savedCreate,0xFF555960U,8.f);
                 icon("plus",l.savedCreate.x+14*u,l.savedCreate.y+6*u,18*u);
@@ -2874,7 +2972,8 @@ private:
                     box(row,0xFF292C32U,8.f);
                     text(row.x+11*u,row.y+std::min(19*u,row.h-3*u),
                          playlistNames[index],11.8f*u,C_TEXT,58);
-                    icon("chevron-right",row.x+row.w-29*u,row.y+6*u,17*u);
+                    text(row.x+row.w-61*u,row.y+std::min(19*u,row.h-3*u),"R",11*u,C_DIM,2);
+                    text(row.x+row.w-27*u,row.y+std::min(19*u,row.h-3*u),"X",11*u,C_DIM,2);
                 }
                 drawPage(playlistNames.size(),"PLAYLISTS");
             }else{
@@ -2921,8 +3020,22 @@ private:
 #if defined(LEVI_STANDALONE)
             std::string server;
             {std::lock_guard lock(mu_);server=chruBase_;}
-            update(tr.title,tr.artist,"Checking Aurelis audio stream...");
-            const auto mediaUrl=aurelisStream(env,server,tr.id);
+            const bool offline=localTrack(tr);
+            std::string mediaUrl;
+            if(offline){
+                const auto name=tr.id.substr(8);
+                const auto folder=self_.getConfigDir()/"music";
+                auto path=folder/name;
+                if(name.empty()||name=="."||name==".."||name.find('/')!=std::string::npos||
+                   name.find('\\')!=std::string::npos||!allowedAudio(path)||
+                   std::filesystem::is_symlink(path)||!std::filesystem::is_regular_file(path)){
+                    update(tr.title,tr.artist,"Local music file unavailable");return;
+                }
+                mediaUrl=path.string();
+            }else{
+                update(tr.title,tr.artist,"Checking Aurelis audio stream...");
+                mediaUrl=aurelisStream(env,server,tr.id);
+            }
             if(mediaUrl.empty()) {
                 update(tr.title,tr.artist,"Aurelis stream unavailable for this song");
                 return;
@@ -2952,7 +3065,7 @@ private:
                 playerPositionStamp_=std::chrono::steady_clock::now();
             }
 #if defined(LEVI_STANDALONE)
-            update(tr.title,tr.artist,"Aurelis Symphony streaming");
+            update(tr.title,tr.artist,offline?"Playing local file":"Aurelis Symphony streaming");
             if(!tr.art.empty()&&coverCount_<80){
                 auto imageId="levimusic.cover."+std::to_string(++coverCount_);
                 bool loaded=registerCover(env,tr.art,imageId);
@@ -2962,7 +3075,18 @@ private:
 #else
             update(tr.title,tr.artist,"Streaming online (Audius)");
 #endif
-            queueLyrics(tr,player.duration(env),key,
+            if(offline){
+                auto path=self_.getConfigDir()/"music"/tr.id.substr(8);
+                path.replace_extension(".lrc");
+                std::vector<Lyric> local;
+                if(std::filesystem::is_regular_file(path)&&std::filesystem::file_size(path)<500'000){
+                    std::ifstream file(path);std::string raw((std::istreambuf_iterator<char>(file)),{});
+                    local=parseLrc(raw);
+                }
+                std::lock_guard lock(mu_);
+                lyricsSource_=local;lyrics_=std::move(local);lyric_.clear();
+                lyricChanged_=std::chrono::steady_clock::now();
+            }else queueLyrics(tr,player.duration(env),key,
 #if defined(LEVI_STANDALONE)
                         true
 #else
@@ -2972,7 +3096,7 @@ private:
 #if defined(LEVI_STANDALONE)
             bool needSuggestions;
             {std::lock_guard lock(mu_);needSuggestions=queueTracks_.size()<4;}
-            if(needSuggestions){
+            if(needSuggestions&&!offline){
                 std::string server;{std::lock_guard lock(mu_);server=chruBase_;}
                 auto suggestions=searchAurelis(env,server,tr.title,tr.artist);
                 std::lock_guard lock(mu_);
@@ -3153,17 +3277,45 @@ private:
                         case Action::PlaylistCreate: {
                             if(key.empty())break;
                             if(job.query.empty()){update("Name required","New playlist","Enter a name");break;}
-                            auto reply=bridgeGet("/v1/playlist/create?name="+encode(env,job.query),key);
+                            bool importing=job.query.rfind("https://",0)==0;
+                            auto reply=importing?bridgeGet("/v1/playlist/import?url="+
+                                encode(env,job.query),key):bridgeGet("/v1/playlist/create?name="+
+                                encode(env,job.query),key);
                             auto root=makeJson(env,reply);
                             bool accepted=root&&optString(env,root,"accepted")=="true";
+                            std::string importedName=importing&&root?optString(env,root,"name"):job.query;
                             if(root)env->DeleteLocalRef(root);
                             if(!accepted)update("Playlist creation failed",job.query,"Check name or app");
                             auto names=parsePlaylistNames(env,bridgeGet("/v1/playlists",key));
                             {std::lock_guard lock(mu_);playlistNames_=std::move(names);
                                 libraryMode_=1;page_=0;query_.clear();selected_=-1;
-                                if(accepted)activePlaylist_=job.query;
+                                if(accepted)activePlaylist_=importedName;
                             }
                             break;
+                        }
+                        case Action::PlaylistRename:
+                        case Action::PlaylistDelete:{
+                            std::string old=job.query,newName;
+                            if(job.action==Action::PlaylistRename){
+                                auto split=old.find('\n');if(split==std::string::npos)break;
+                                newName=old.substr(split+1);old.resize(split);
+                            }
+                            if(old=="Offline"){
+                                update("Offline playlist is automatic",old,"Manage saved tracks instead");break;
+                            }
+                            auto path=job.action==Action::PlaylistRename?
+                                "/v1/playlist/rename?name="+encode(env,old)+"&newName="+encode(env,newName):
+                                "/v1/playlist/delete?name="+encode(env,old);
+                            auto reply=bridgeGet(path,key);
+                            auto root=makeJson(env,reply);
+                            bool accepted=root&&optString(env,root,"accepted")=="true";
+                            if(root)env->DeleteLocalRef(root);
+                            if(!accepted){update("Playlist change failed",old,"Check the Bridge app");break;}
+                            auto names=parsePlaylistNames(env,bridgeGet("/v1/playlists",key));
+                            {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                                if(activePlaylist_==old)activePlaylist_=newName;
+                                libraryMode_=1;page_=0;query_.clear();selected_=-1;}
+                            update("Playlist updated",old,"Saved locally");break;
                         }
                         case Action::PlaylistAdd: {
                             std::string name,id=job.query;
@@ -3396,10 +3548,14 @@ private:
                     case Action::Search:{
                         if(job.query.empty()){update("Search","Empty query","Tap search and enter a title");break;}
 #if defined(LEVI_STANDALONE)
-                        update("Searching",job.query,"Contacting Aurelis Symphony...");
+                        update("Searching",job.query,"Checking local music and Aurelis Symphony...");
                         std::string server;
                         {std::lock_guard lock(mu_);server=chruBase_;}
-                        auto found=searchAurelis(env,server,job.query);
+                        auto found=offlineTracks(self_.getConfigDir()/"music",job.query);
+                        if(job.query!="offline"){
+                            auto online=searchAurelis(env,server,job.query);
+                            found.insert(found.end(),online.begin(),online.end());
+                        }
 #else
                         update("Searching",job.query,"Contacting Audius...");
                         std::string key;
@@ -3472,6 +3628,7 @@ private:
 #if defined(LEVI_STANDALONE)
                     case Action::PlaylistList:{
                         std::vector<std::string> names;
+                        names.push_back("Offline");
                         for(const auto& item:localPlaylists_)names.push_back(item.first);
                         {std::lock_guard lock(mu_);playlistNames_=std::move(names);
                             libraryMode_=1;page_=0;selected_=-1;results_.clear();}
@@ -3479,6 +3636,27 @@ private:
                     }
                     case Action::PlaylistCreate:{
                         std::string name=job.query;
+                        if(name.rfind("https://",0)==0){
+                            auto songs=importYoutubePlaylist(env,name);
+                            if(songs.empty()){
+                                update("Playlist import failed","YouTube","Public playlist unavailable or empty");break;
+                            }
+                            auto at=name.find("list=");
+                            name="YouTube "+name.substr(at+5,16);
+                            if(localPlaylists_.contains(name)){
+                                update("Playlist already imported",name,"Rename it before importing again");break;
+                            }
+                            localPlaylists_[name]=std::move(songs);
+                            if(!saveLocalPlaylists()){
+                                localPlaylists_.erase(name);update("Playlist save failed",name,"Check storage");break;
+                            }
+                            std::vector<std::string> names{"Offline"};
+                            for(const auto& item:localPlaylists_)names.push_back(item.first);
+                            {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                                activePlaylist_=name;libraryMode_=1;page_=0;query_.clear();}
+                            update("Playlist imported",name,"Saved locally with "+
+                                std::to_string(localPlaylists_[name].size())+" tracks");break;
+                        }
                         name.erase(0,name.find_first_not_of(" \t\r\n"));
                         auto end=name.find_last_not_of(" \t\r\n");
                         if(end!=std::string::npos)name.erase(end+1);
@@ -3496,14 +3674,56 @@ private:
                             localPlaylists_.erase(name);
                             update("Playlist save failed",name,"Check free storage");break;
                         }
-                        std::vector<std::string> names;
+                        std::vector<std::string> names{"Offline"};
                         for(const auto& item:localPlaylists_)names.push_back(item.first);
                         {std::lock_guard lock(mu_);playlistNames_=std::move(names);
                             activePlaylist_=name;libraryMode_=1;page_=0;query_.clear();selected_=-1;}
                         update("Playlist created",name,"Open it or tap P+ in Search to add songs");
                         break;
                     }
+                    case Action::PlaylistRename:{
+                        auto split=job.query.find('\n');
+                        if(split==std::string::npos)break;
+                        auto old=job.query.substr(0,split),name=job.query.substr(split+1);
+                        if(old=="Offline"||name.empty()||name.size()>96||
+                            localPlaylists_.contains(name)||name=="Offline"){
+                            update("Rename unavailable",old,"Choose a unique playlist name");break;
+                        }
+                        auto node=localPlaylists_.extract(old);
+                        if(node.empty())break;
+                        node.key()=name;localPlaylists_.insert(std::move(node));
+                        if(!saveLocalPlaylists()){
+                            auto revert=localPlaylists_.extract(name);
+                            revert.key()=old;localPlaylists_.insert(std::move(revert));
+                            update("Rename failed",old,"Check storage");break;
+                        }
+                        std::vector<std::string> names{"Offline"};
+                        for(const auto& p:localPlaylists_)names.push_back(p.first);
+                        {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                            if(activePlaylist_==old)activePlaylist_=name;query_.clear();}
+                        update("Playlist renamed",name,"Saved locally");break;
+                    }
+                    case Action::PlaylistDelete:{
+                        if(job.query=="Offline")break;
+                        auto node=localPlaylists_.extract(job.query);
+                        if(node.empty())break;
+                        if(!saveLocalPlaylists()){
+                            localPlaylists_.insert(std::move(node));
+                            update("Delete failed",job.query,"Check storage");break;
+                        }
+                        std::vector<std::string> names{"Offline"};
+                        for(const auto& p:localPlaylists_)names.push_back(p.first);
+                        {std::lock_guard lock(mu_);playlistNames_=std::move(names);
+                            if(activePlaylist_==job.query)activePlaylist_.clear();}
+                        update("Playlist deleted",job.query,"Songs were not deleted");break;
+                    }
                     case Action::PlaylistOpen:{
+                        if(job.query=="Offline"){
+                            auto songs=offlineTracks(self_.getConfigDir()/"music");
+                            std::lock_guard lock(mu_);results_=std::move(songs);
+                            activePlaylist_="Offline";libraryMode_=2;page_=0;selected_=-1;
+                            break;
+                        }
                         auto it=localPlaylists_.find(job.query);
                         if(it==localPlaylists_.end())break;
                         {std::lock_guard lock(mu_);results_=it->second;activePlaylist_=job.query;
@@ -3550,10 +3770,11 @@ private:
                     case Action::PlaylistPlay:{
                         int index=-1;try{index=std::stoi(job.query);}catch(...){}
                         std::string name;{std::lock_guard lock(mu_);name=activePlaylist_;}
-                        auto it=localPlaylists_.find(name);
-                        if(it==localPlaylists_.end()||index<0||
-                           index>=int(it->second.size()))break;
-                        {std::lock_guard lock(mu_);results_=it->second;selected_=index;
+                        std::vector<Track> songs;
+                        if(name=="Offline")songs=offlineTracks(self_.getConfigDir()/"music");
+                        else if(auto it=localPlaylists_.find(name);it!=localPlaylists_.end())songs=it->second;
+                        if(index<0||index>=int(songs.size()))break;
+                        {std::lock_guard lock(mu_);results_=std::move(songs);selected_=index;
                             standaloneQueueSelection_=false;}
                         playSelected();break;
                     }
@@ -3592,7 +3813,8 @@ private:
                     case Action::Pair:
 #if !defined(LEVI_STANDALONE)
                     case Action::PlaylistList:case Action::PlaylistOpen:
-                    case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistAdd:
+                    case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistRename:
+                    case Action::PlaylistDelete:case Action::PlaylistAdd:
                     case Action::PlaylistRemove:
 #endif
                     case Action::QueueRefresh:

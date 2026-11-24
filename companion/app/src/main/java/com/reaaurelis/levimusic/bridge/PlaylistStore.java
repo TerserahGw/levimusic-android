@@ -157,7 +157,9 @@ public final class PlaylistStore {
         try{entry.put("name",name).put("tracks",tracks);}catch(Exception error){return result(false,"Invalid playlist");}
         data.put(entry);
         boolean saved=write(context,data);
-        return result(saved,saved?"Imported "+tracks.length()+" tracks as "+name:"Could not save playlist");
+        JSONObject response=result(saved,saved?"Imported "+tracks.length()+" tracks as "+name:"Could not save playlist");
+        try{response.put("name",name);}catch(Exception ignored){}
+        return response;
     }
     public static synchronized JSONObject list(Context context,String filter) {
         JSONArray data=read(context), items=new JSONArray();

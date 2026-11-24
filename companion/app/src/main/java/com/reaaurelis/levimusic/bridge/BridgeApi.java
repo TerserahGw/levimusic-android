@@ -279,6 +279,15 @@ public final class BridgeApi {
                     case "delete": json=PlaylistStore.delete(context,name);break;
                     case "rename": json=PlaylistStore.rename(context,name,
                         URLDecoder.decode(getParam(path,"newName"),"UTF-8"));break;
+                    case "import": {
+                        try{
+                            MusicCatalog.ImportedPlaylist imported=MusicCatalog.importPublicPlaylist(
+                                URLDecoder.decode(getParam(path,"url"),"UTF-8"));
+                            json=PlaylistStore.importSongs(context,imported.name,imported.songs);
+                        }catch(Exception error){json=new JSONObject().put("accepted",false)
+                            .put("message","Playlist import failed: "+error.getMessage());}
+                        break;
+                    }
                     case "play": {
                         int index=0;
                         try{index=Integer.parseInt(getParam(path,"index"));}catch(Exception ignored){}

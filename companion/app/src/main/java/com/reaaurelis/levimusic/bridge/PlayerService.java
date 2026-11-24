@@ -359,7 +359,9 @@ public final class PlayerService extends MediaSessionService {
         player.stop();
         resolver.execute(()->{
             try{
-                String source=MusicCatalog.resolveAudio(selected);
+                java.io.File offline=OfflineLibrary.file(this,selected.id);
+                String source=offline!=null&&offline.isFile()&&offline.length()>0
+                    ?Uri.fromFile(offline).toString():MusicCatalog.resolveAudio(selected);
                 handler.post(()->{
                     if(player==null||song!=selected)return;
                     MediaMetadata.Builder meta=new MediaMetadata.Builder()
@@ -374,7 +376,7 @@ public final class PlayerService extends MediaSessionService {
                     player.setMediaItem(item);
                     player.prepare();
                     player.play();
-                    statusMessage="Streaming";
+                    statusMessage=source.startsWith("file:")?"Playing offline":"Streaming";
                 });
             }catch(Exception error){
                 Log.w(TAG,"Stream unavailable",error);

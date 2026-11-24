@@ -656,12 +656,21 @@ public final class MainActivity extends Activity {
     }
     private void songMenu(MusicCatalog.Song song){
         new AlertDialog.Builder(this).setTitle(song.title)
-            .setItems(new String[]{"Play now","Add to Up Next","Add to playlist"},(dialog,index)->{
+            .setItems(new String[]{"Play now","Add to Up Next","Add to playlist","Save to Offline"},(dialog,index)->{
                 if(index==0){MusicCatalog.activateSearchQueue(song);PlayerService.play(this,song);}
                 else if(index==1){
                     boolean added=MusicCatalog.enqueue(song);
                     headerStatus.setText(added?"Added to Up Next":"Already in Up Next");
-                }else addToPlaylist(song);
+                }else if(index==2)addToPlaylist(song);
+                else {
+                    headerStatus.setText("Saving audio and lyrics...");
+                    io.execute(()->{
+                        try{String message=OfflineLibrary.save(this,song);
+                            handler.post(()->headerStatus.setText(message));}
+                        catch(Exception error){handler.post(()->headerStatus.setText(
+                            "Offline save failed: "+error.getMessage()));}
+                    });
+                }
             }).show();
     }
     private void selectTab(int tab){
