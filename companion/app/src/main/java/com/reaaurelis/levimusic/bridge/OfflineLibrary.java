@@ -40,33 +40,20 @@ final class OfflineLibrary {
             PlaylistStore.create(ctx,"Offline");PlaylistStore.add(ctx,"Offline",song);
             return "Already saved offline: "+song.title;
         }
-        String source=MusicCatalog.resolveAudio(song);
-        if(!source.startsWith("https://"))throw new java.io.IOException("No secure audio source");
         File temporary=new File(dir(ctx),song.id+".part");
         if(!dir(ctx).isDirectory()&&!dir(ctx).mkdirs())throw new java.io.IOException("Storage unavailable");
-        String extension;
-        try(okhttp3.Response response=CLIENT.newCall(new Request.Builder().url(source).build()).execute()){
-            if(!response.isSuccessful()||response.body()==null)throw new java.io.IOException("Audio download failed");
-            String mime=response.header("Content-Type","").toLowerCase(java.util.Locale.ROOT);
-            if(mime.contains("webm")||source.contains("mime=audio%2Fwebm"))extension=".webm";
-            else if(mime.contains("mpeg"))extension=".mp3";
-            else if(mime.contains("ogg"))extension=".ogg";
-            else if(mime.contains("aac"))extension=".aac";
-            else if(mime.contains("mp4")||mime.contains("m4a")||
-                source.contains("mime=audio%2Fmp4"))extension=".m4a";
-            else throw new java.io.IOException("Unsupported audio format: "+mime);
-            if(response.body().contentLength()>LIMIT)throw new java.io.IOException("Audio file too large");
-            long total=0;
-            try(InputStream input=response.body().byteStream();FileOutputStream out=new FileOutputStream(temporary)){
-                byte[] bytes=new byte[16384];int count;
-                while((count=input.read(bytes))!=-1){
-                    total+=count;if(total>LIMIT)throw new java.io.IOException("Audio file too large");
-                    out.write(bytes,0,count);
-                }
-                out.getFD().sync();
-            }
-            if(total==0)throw new java.io.IOException("Empty audio file");
-        }catch(Exception error){temporary.delete();throw error;}
+        String extension=null;Exception downloadFailure=null;
+        try{
+            String source=MusicCatalog.resolveAudio(song);
+            if(!source.startsWith("https://"))throw new java.io.IOException("No secure audio source");
+            extension=downloadSource(source,temporary);
+        }catch(Exception error){temporary.delete();downloadFailure=error;}
+        if(extension==null){
+            try{extension=downloadSource(aurelisSource(song.id),temporary);}
+            catch(Exception error){temporary.delete();downloadFailure=error;}
+        }
+        if(extension==null)throw new java.io.IOException("Unable to download audio: "+
+            (downloadFailure==null?"no playable source":downloadFailure.getMessage()),downloadFailure);
         File target=new File(dir(ctx),song.id+extension);
         Files.move(temporary.toPath(),target.toPath(),StandardCopyOption.REPLACE_EXISTING);
         try{
@@ -75,10 +62,56 @@ final class OfflineLibrary {
             String lrc=found.optString("syncedLyrics");
             if(!lrc.isEmpty())LyricsStore.save(ctx,song.title,song.artist,lrc);
         }catch(Exception ignored){}
-        JSONObject created=PlaylistStore.create(ctx,"Offline");
+        PlaylistStore.create(ctx,"Offline");
         JSONObject added=PlaylistStore.add(ctx,"Offline",song);
         if(!added.optBoolean("accepted"))throw new java.io.IOException(added.optString("message"));
         return "Saved offline: "+song.title;
+    }
+
+    private static String aurelisSource(String id) throws Exception {
+        String api="https://aurelis-symphony.go.altare.global/api/v2/playback/"+id;
+        try(okhttp3.Response response=CLIENT.newCall(new Request.Builder().url(api).build()).execute()){
+            if(!response.isSuccessful()||response.body()==null)throw new java.io.IOException("Aurelis playback unavailable");
+            JSONObject playback=new JSONObject(response.body().string());
+            String path=playback.optString("streamUrl");
+            if((path.startsWith("/api/v2/audio/")||path.startsWith("/demo/"))&&
+                !path.contains("..")&&!path.contains("?")&&!path.contains("#"))
+                return "https://aurelis-symphony.go.altare.global"+path;
+        }
+        throw new java.io.IOException("Aurelis did not provide an audio URL");
+    }
+
+    private static String downloadSource(String source,File temporary) throws Exception {
+        String extension;
+        try(okhttp3.Response response=CLIENT.newCall(new Request.Builder().url(source).build()).execute()){
+            if(!response.isSuccessful()||response.body()==null)
+                throw new java.io.IOException("Audio HTTP "+response.code());
+            String mime=response.header("Content-Type","").toLowerCase(java.util.Locale.ROOT);
+            if(response.body().contentLength()>LIMIT)throw new java.io.IOException("Audio file too large");
+            long total=0;
+            try(InputStream input=response.body().byteStream()){
+                byte[] signature=new byte[32];int bytesRead=0;
+                while(bytesRead<signature.length){
+                    int count=input.read(signature,bytesRead,signature.length-bytesRead);
+                    if(count<0)break;
+                    if(count==0)break;
+                    bytesRead+=count;
+                }
+                extension=AudioFormat.extension(signature,bytesRead,mime);
+                if(extension.isEmpty())throw new java.io.IOException("Response is not a supported audio file ("+mime+")");
+                try(FileOutputStream out=new FileOutputStream(temporary)){
+                out.write(signature,0,bytesRead);total=bytesRead;
+                byte[] bytes=new byte[16384];int count;
+                while((count=input.read(bytes))!=-1){
+                    total+=count;if(total>LIMIT)throw new java.io.IOException("Audio file too large");
+                    out.write(bytes,0,count);
+                }
+                out.getFD().sync();
+                }
+            }
+            if(total==0)throw new java.io.IOException("Empty audio file");
+        }
+        return extension;
     }
 
     private static String displayName(Context context,Uri uri){

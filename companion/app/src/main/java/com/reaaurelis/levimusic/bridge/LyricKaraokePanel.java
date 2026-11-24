@@ -93,6 +93,19 @@ final class LyricKaraokePanel extends LinearLayout {
             // Leading spaces before a word are preserved in the text; shift spans after trim.
             int leading=plain.indexOf(cue.text);
             for(Word w:cue.words){w.from=Math.max(0,w.from-leading);w.to=Math.min(cue.text.length(),w.to-leading);}
+            String spaced=LyricText.normalizeLine(body);
+            if(!spaced.equals(cue.text)){
+                int offset=0;boolean valid=true;
+                for(Word w:cue.words){
+                    if(w.from>=w.to||w.to>cue.text.length()){valid=false;break;}
+                    String token=cue.text.substring(w.from,w.to);
+                    int at=spaced.indexOf(token,offset);
+                    if(at<0){valid=false;break;}
+                    w.from=at;w.to=at+token.length();offset=w.to;
+                }
+                if(!valid)cue.words.clear();
+                cue.text=spaced;
+            }
             result.add(cue);last=at;
             if(result.size()>=300)break;
         }

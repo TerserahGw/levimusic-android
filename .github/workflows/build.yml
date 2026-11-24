@@ -2,7 +2,7 @@ name: Build & Release LeviMusic Android ARM64
 
 on:
   push:
-    branches: [main, 'work/levimusic-1.6.0']
+    branches: [main, 'work/levimusic-1.6.1']
   workflow_dispatch:
 
 permissions:
@@ -88,6 +88,7 @@ jobs:
           code=$((major*10000 + minor*100 + patch))
           # Match the briefly published 1.6.1 APK so an in-place reinstall is allowed.
           if [[ "$VERSION" == 1.6.0 ]]; then code=10601; fi
+          if [[ "$major" == 1 && "$minor" == 6 && "$patch" -ge 1 ]]; then code=$((code+1)); fi
           [[ "$code" -gt 112 ]] || { echo 'Android versionCode must increase'; exit 1; }
           echo "LEVIMUSIC_ANDROID_VERSION_CODE=$code" >> "$GITHUB_ENV"
           echo "LEVIMUSIC_ANDROID_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
@@ -134,6 +135,17 @@ jobs:
             companion/app/src/main/java/com/reaaurelis/levimusic/bridge/WordTimedQrc.java \
             tests/QrcParserSmoke.java
           java -cp build/qrc-test com.reaaurelis.levimusic.bridge.QrcParserSmoke
+
+      - name: Verify offline audio and LRC spacing
+        run: |
+          g++ -std=c++20 -Wall -Wextra -Werror tests/offline_audio_smoke.cpp -o /tmp/levimusic-offline-smoke
+          /tmp/levimusic-offline-smoke
+          mkdir -p build/offline-test
+          javac -encoding UTF-8 -d build/offline-test \\
+            companion/app/src/main/java/com/reaaurelis/levimusic/bridge/AudioFormat.java \\
+            companion/app/src/main/java/com/reaaurelis/levimusic/bridge/LyricText.java \\
+            tests/LyricTextSmoke.java
+          java -cp build/offline-test com.reaaurelis.levimusic.bridge.LyricTextSmoke
 
       - name: Compile browser Java into self-contained DEX
         shell: bash
@@ -234,14 +246,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.6.0-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.6.1-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.6.0-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.6.1-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -294,7 +306,21 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version == "1.6.0":
+          if version == "1.6.1":
+              notes = "\n".join([
+                  "# LeviMusic - Aurelis Online v1.6.1 stable",
+                  "",
+                  "Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64. The 3D world renderer includes exact profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1.",
+                  "",
+                  "## Fixes since v1.6.0",
+                  "- Fixed the in-game Offline download path for Aurelis IDs of varying lengths and audio served as application/octet-stream. The mod now validates actual audio signatures, and Standalone no longer blocks downloads on a separate playback probe.",
+                  "- Bridge offline downloads retry through the Aurelis stream endpoint if the primary audio source fails.",
+                  "- Restored missing Latin word spaces in local and enhanced LRC lyrics, including lines such as You Miss Everything, while preserving CJK text.",
+                  "",
+                  "Choose one LeviPack variant. Full mode requires the matching Bridge APK; Standalone uses Aurelis for online playback and downloads. Audio availability still depends on the source service.",
+                  "",
+              ])
+          elif version == "1.6.0":
               notes = "\n".join([
                   "# LeviMusic - Aurelis Online v1.6.0 stable",
                   "",

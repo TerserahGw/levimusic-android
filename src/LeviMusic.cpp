@@ -5,6 +5,8 @@
 #include "LucideIcons.hpp"
 #include "WorldLyrics3D.hpp"
 #include "WordTiming.hpp"
+#include "OfflineAudio.hpp"
+#include "LyricText.hpp"
 #include <cmath>
 #include <jni.h>
 #include <android/log.h>
@@ -399,7 +401,7 @@ std::string getHttp(JNIEnv* env, const std::string& url,
 std::filesystem::path downloadAudio(JNIEnv* env,const std::string& url,
                                     const std::filesystem::path& folder,
                                     const std::string& id){
-    if(url.rfind("https://",0)!=0||id.size()!=11||
+    if(url.rfind("https://",0)!=0||id.size()<4||id.size()>80||
        !std::all_of(id.begin(),id.end(),[](unsigned char c){
            return std::isalnum(c)||c=='_'||c=='-';}))return {};
     try{std::filesystem::create_directories(folder);}catch(...){return {};}
@@ -423,18 +425,10 @@ std::filesystem::path downloadAudio(JNIEnv* env,const std::string& url,
         std::string mime=type?fromJava(env,type):"";
         if(type)env->DeleteLocalRef(type);
         std::transform(mime.begin(),mime.end(),mime.begin(),[](unsigned char c){return std::tolower(c);});
-        std::string ext;
-        if(mime.find("webm")!=std::string::npos)ext=".webm";
-        else if(mime.find("mpeg")!=std::string::npos)ext=".mp3";
-        else if(mime.find("ogg")!=std::string::npos)ext=".ogg";
-        else if(mime.find("aac")!=std::string::npos)ext=".aac";
-        else if(mime.find("flac")!=std::string::npos)ext=".flac";
-        else if(mime.find("wav")!=std::string::npos)ext=".wav";
-        else if(mime.find("mp4")!=std::string::npos||mime.find("m4a")!=std::string::npos)ext=".m4a";
-        jobject stream=ext.empty()?nullptr:(streamMethod?env->CallObjectMethod(connection,streamMethod):nullptr);
+        jobject stream=streamMethod?env->CallObjectMethod(connection,streamMethod):nullptr;
         if(clearException(env,"offline stream"))stream=nullptr;
         auto temporary=folder/(id+".part");
-        bool valid=false;
+        bool valid=false;std::string signature;
         if(stream){
             jclass sc=env->FindClass("java/io/InputStream");
             auto read=sc?env->GetMethodID(sc,"read","([B)I"):nullptr;
@@ -446,11 +440,12 @@ std::filesystem::path downloadAudio(JNIEnv* env,const std::string& url,
                 jint n=env->CallIntMethod(stream,read,buffer);
                 if(clearException(env,"offline read")){failed=true;break;}
                 if(n<0)break;
-                if(n==0)continue;
+                if(n==0){failed=true;break;}
                 total+=static_cast<size_t>(n);
                 if(total>150'000'000){failed=true;break;}
                 char bytes[16384];env->GetByteArrayRegion(buffer,0,n,reinterpret_cast<jbyte*>(bytes));
                 if(clearException(env,"offline copy")){failed=true;break;}
+                if(signature.empty())signature.assign(bytes,std::min<int>(n,32));
                 file.write(bytes,n);
                 if(!file){failed=true;break;}
             }
@@ -462,6 +457,10 @@ std::filesystem::path downloadAudio(JNIEnv* env,const std::string& url,
             valid=!failed&&total>0;
             env->DeleteLocalRef(stream);
         }
+        auto ext=lm_offline::extension(signature,mime);
+        valid=valid&&!ext.empty();
+        __android_log_print(ANDROID_LOG_INFO,TAG,"Offline audio type %s, format %s, valid %d",
+            mime.c_str(),ext.c_str(),int(valid));
         if(valid){
             try{auto target=folder/(id+ext);
                 std::filesystem::rename(temporary,target);saved=std::move(target);
@@ -853,7 +852,8 @@ std::vector<Track> searchAurelis(JNIEnv* env,const std::string& server,
     env->DeleteLocalRef(root);
     return tracks;
 }
-std::string aurelisStream(JNIEnv* env,const std::string& server,const std::string& id){
+std::string aurelisStream(JNIEnv* env,const std::string& server,const std::string& id,
+                          bool download=false){
     if(id.empty()||id.size()>80||id.find_first_not_of(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-")!=std::string::npos)return {};
     jobject root=makeJson(env,chruRequest(env,server,"/api/v2/playback/"+id));
@@ -864,7 +864,7 @@ std::string aurelisStream(JNIEnv* env,const std::string& server,const std::strin
     if(relative.rfind("/demo/",0)!=0&&relative.rfind("/api/v2/audio/",0)!=0)return {};
     if(relative.find('?')!=std::string::npos||relative.find('#')!=std::string::npos||
        relative.find("..")!=std::string::npos)return {};
-    if(!probe.empty()){
+    if(!download&&!probe.empty()){
         if(probe.rfind("/api/v2/audio/",0)!=0||probe.find("..")!=std::string::npos)return {};
         jobject status=makeJson(env,chruRequest(env,server,probe));
         if(!status)return {};
@@ -959,7 +959,7 @@ std::vector<Lyric> aurelisLyrics(JNIEnv* env,const std::string& server,
                        (output.empty()||at*1000>=output.back().ms)){
                         Lyric lyric;
                         lyric.ms=static_cast<int>(std::round(at*1000));
-                        lyric.line=std::move(line);
+                        lyric.line=lm_lyric::normalize(line);
                         const std::string end=optString(env,row,"endTime");
                         if(!end.empty()&&end!="null"){
                             double until=std::stod(end);
@@ -998,14 +998,7 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
             const int minutes = std::stoi(row.substr(1, colon - 1));
             const double seconds = std::stod(row.substr(colon + 1, end - colon - 1));
             if (minutes < 0 || minutes > 240 || seconds < 0 || seconds >= 60) continue;
-            std::string line = row.substr(end + 1);
-            for(size_t mark=line.find('<');mark!=std::string::npos;mark=line.find('<',mark)){
-                size_t close=line.find('>',mark+1);
-                if(close==std::string::npos||close-mark>14){++mark;continue;}
-                const auto stamp=line.substr(mark+1,close-mark-1);
-                if(stamp.find(':')==std::string::npos){++mark;continue;}
-                line.erase(mark,close-mark+1);
-            }
+            std::string line = lm_lyric::normalize(row.substr(end + 1));
             if (line.empty()) continue;
             lines.push_back({static_cast<int>(minutes * 60000 + seconds * 1000), line});
         } catch (...) { /* skip invalid timestamps */ }
@@ -3756,7 +3749,7 @@ private:
                             if(found!=results_.end())track=*found;
                             server=chruBase_;
                         }
-                        if(track.id.empty()||localTrack(track)||track.id.size()!=11){
+                        if(track.id.empty()||localTrack(track)||track.id.size()>80){
                             update("Offline save unavailable",track.title,"Choose an online search result");break;
                         }
                         auto folder=self_.getConfigDir()/"music";
@@ -3766,7 +3759,7 @@ private:
                             update("Already saved offline",track.title,"Open Playlists > Offline");break;
                         }
                         update("Saving offline",track.title,"Downloading audio...");
-                        auto source=aurelisStream(env,server,track.id);
+                        auto source=aurelisStream(env,server,track.id,true);
                         auto saved=downloadAudio(env,source,folder,track.id);
                         if(saved.empty()){
                             update("Offline save failed",track.title,"Audio unavailable or unsupported format");break;
@@ -3787,7 +3780,7 @@ private:
                                 lrc<<'['<<std::setfill('0')<<std::setw(2)<<hundredths/6000
                                    <<':'<<std::setw(2)<<(hundredths/100)%60
                                    <<'.'<<std::setw(2)<<hundredths%100<<']'
-                                   <<line.line<<'\n';
+                                   <<lm_lyric::normalize(line.line)<<'\n';
                             }
                         }
                         update("Saved to Offline",track.title,
