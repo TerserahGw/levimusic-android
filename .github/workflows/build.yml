@@ -141,10 +141,7 @@ jobs:
           g++ -std=c++20 -Wall -Wextra -Werror tests/offline_audio_smoke.cpp -o /tmp/levimusic-offline-smoke
           /tmp/levimusic-offline-smoke
           mkdir -p build/offline-test
-          javac -encoding UTF-8 -d build/offline-test \\
-            companion/app/src/main/java/com/reaaurelis/levimusic/bridge/AudioFormat.java \\
-            companion/app/src/main/java/com/reaaurelis/levimusic/bridge/LyricText.java \\
-            tests/LyricTextSmoke.java
+          javac -encoding UTF-8 -d build/offline-test companion/app/src/main/java/com/reaaurelis/levimusic/bridge/AudioFormat.java companion/app/src/main/java/com/reaaurelis/levimusic/bridge/LyricText.java tests/LyricTextSmoke.java
           java -cp build/offline-test com.reaaurelis.levimusic.bridge.LyricTextSmoke
 
       - name: Compile browser Java into self-contained DEX
