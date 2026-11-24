@@ -28,6 +28,11 @@ final class OfflineLibrary {
     }
     static String save(Context ctx,MusicCatalog.Song song) throws Exception {
         if(song==null||file(ctx,song.id)==null)throw new IllegalArgumentException("Invalid song");
+        File existing=file(ctx,song.id);
+        if(existing.isFile()&&existing.length()>0){
+            PlaylistStore.create(ctx,"Offline");PlaylistStore.add(ctx,"Offline",song);
+            return "Already saved offline: "+song.title;
+        }
         String source=MusicCatalog.resolveAudio(song);
         if(!source.startsWith("https://"))throw new java.io.IOException("No secure audio source");
         File temporary=new File(dir(ctx),song.id+".part");
@@ -36,11 +41,12 @@ final class OfflineLibrary {
         try(okhttp3.Response response=CLIENT.newCall(new Request.Builder().url(source).build()).execute()){
             if(!response.isSuccessful()||response.body()==null)throw new java.io.IOException("Audio download failed");
             String mime=response.header("Content-Type","").toLowerCase(java.util.Locale.ROOT);
-            if(mime.contains("webm"))extension=".webm";
+            if(mime.contains("webm")||source.contains("mime=audio%2Fwebm"))extension=".webm";
             else if(mime.contains("mpeg"))extension=".mp3";
             else if(mime.contains("ogg"))extension=".ogg";
             else if(mime.contains("aac"))extension=".aac";
-            else if(mime.contains("mp4")||mime.contains("m4a"))extension=".m4a";
+            else if(mime.contains("mp4")||mime.contains("m4a")||
+                source.contains("mime=audio%2Fmp4"))extension=".m4a";
             else throw new java.io.IOException("Unsupported audio format: "+mime);
             if(response.body().contentLength()>LIMIT)throw new java.io.IOException("Audio file too large");
             long total=0;

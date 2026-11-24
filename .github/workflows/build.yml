@@ -288,7 +288,22 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version == "1.5.1":
+          if version == "1.6.0":
+              notes = "\n".join([
+                  "# LeviMusic - Aurelis Online v1.6.0 stable",
+                  "",
+                  "Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64. The 3D world renderer includes exact profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1.",
+                  "",
+                  "## Changes since v1.5.1",
+                  "- Import public YouTube / YouTube Music playlist URLs. Bridge stores the source title; Standalone stores a local playlist named from its ID. Private playlists are not supported. Standalone import may be limited by changes to the public YouTube page.",
+                  "- Full mode: Save to Offline downloads a searched song and available LRC through the Bridge APK into an automatically created Offline playlist.",
+                  "- Standalone: Place supported audio files and same-name .lrc files in the mod configuration directory's music folder, then open Playlists → Offline. Playback format support depends on Android's decoder.",
+                  "- Rename and delete playlists in game; the Bridge app also offers playlist management.",
+                  "",
+                  "Choose one LeviPack variant. Full mode requires the matching Bridge APK; Standalone uses Aurelis for online playback.",
+                  "",
+              ])
+          elif version == "1.5.1":
               notes = "\n".join([
                   "# LeviMusic - Aurelis Online v1.5.1 stable",
                   "",
@@ -324,7 +339,7 @@ jobs:
           PY
 
       - name: Publish GitHub Release
-        if: steps.release_check.outputs.exists != 'true' && steps.signing.outputs.enabled == 'true'
+        if: github.ref == 'refs/heads/main' && steps.release_check.outputs.exists != 'true' && steps.signing.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}

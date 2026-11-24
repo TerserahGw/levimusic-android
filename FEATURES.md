@@ -2,6 +2,12 @@
 
 LeviMusic is a client-side music mod for Minecraft Bedrock on LeviLauncher Android ARM64. Choose the Full variant with the Android Bridge APK or the Standalone variant with hosted Aurelis Symphony. Both include an in-game player, search, playlists, Up Next, and synchronized lyrics. The Standalone variant requires internet access but no user-run server.
 
+## Offline music and playlist import
+
+Full mode can save a searched song and its available synchronized LRC through the Bridge app. Saved audio appears in the automatically created Offline playlist and plays from private app storage. Standalone reads compatible audio files and matching same-stem .lrc files from the mod configuration directory's music folder. Format decoding depends on Android MediaPlayer.
+
+Public YouTube and YouTube Music playlist URLs can be imported from the Bridge app or the in-game playlist field. Bridge retains the source playlist name. Standalone reads entries from the public YouTube page; incomplete or inaccessible pages may prevent or limit imports. Imported lists are stored locally, without downloading their audio.
+
 ## Player and playlists
 
 - Search for music, manage playback, and use the Search / Playlist / Lyrics tabs in the in-game interface.
