@@ -4,7 +4,7 @@ LeviMusic draws local lyric panels in Minecraft's 3D world through the LeviLaunc
 
 ## Compatibility
 
-The renderer checks the exact ARM64 game Build ID and required signatures before hooking. Verified profiles cover Minecraft 1.26.52, 1.26.60, and 1.26.62.1. Minecraft 1.26.66.1 3D rendering remains unverified. A successful build does not establish compatibility with an unmatched Minecraft binary. When bindings are unavailable, 3D remains inactive and the player displays a status message. Playback runs separately from renderer preparation.
+The renderer checks the exact ARM64 game Build ID and required signatures before hooking. Profiles cover Minecraft 1.26.52, 1.26.60, 1.26.62.1, and the exact ARM64 binary supplied for 1.26.66.1. The 1.26.66.1 profile has seven unique matching instruction signatures, but on-device 3D behavior is still unverified and may be less stable. A successful build does not establish compatibility with an unmatched Minecraft binary. When bindings are unavailable, 3D remains inactive and the player displays a status message. Playback runs separately from renderer preparation.
 
 ## Behavior and controls
 

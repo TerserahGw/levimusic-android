@@ -288,20 +288,37 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          notes = "\n".join([
-              f"# LeviMusic - Aurelis Online v{version} {label}",
-              "",
-              "A client-side music player for Minecraft Bedrock on LeviLauncher Android ARM64. World-space 3D lyrics are visible only to the local player.",
-              "",
-              "## Minecraft compatibility",
-              "- 3D world lyrics are supported on matching ARM64 Build IDs for Minecraft 1.26.52, 1.26.60, and 1.26.62.1. Core music may run on 1.26.66.1 if the loader accepts the mod; 3D rendering remains unverified there.",
-              "",
-              "## Changes",
-              f"[Review changes since {previous}](https://github.com/TerserahGw/levimusic-android/compare/{previous}...v{version})" if previous else "See the repository history for changes in this release.",
-              "",
-              "Choose one LeviPack variant. Full mode needs the matching Bridge APK; Standalone uses the hosted Aurelis Symphony service and requires internet access.",
-              "",
-          ])
+          if version == "1.5.1":
+              notes = """# LeviMusic - Aurelis Online v1.5.1 stable
+
+Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64.
+
+## Minecraft compatibility
+
+3D world lyrics have exact ARM64 profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1. The 1.26.66.1 profile was checked against the supplied binary, but its behavior has not yet been verified on a device and may be less stable.
+
+## Changes since v1.5.0
+
+- Added a Build ID locked 3D renderer profile for Minecraft 1.26.66.1 with seven unique native instruction signatures.
+- Renderer binding still refuses unknown binaries or mismatched signatures without blocking the music player.
+
+Choose one LeviPack variant: Full mode requires the matching Bridge APK; Standalone requires internet access to the hosted Aurelis Symphony service.
+"""
+          else:
+              notes = "\n".join([
+                  f"# LeviMusic - Aurelis Online v{version} {label}",
+                  "",
+                  "A client-side music player for Minecraft Bedrock on LeviLauncher Android ARM64. World-space 3D lyrics are visible only to the local player.",
+                  "",
+                  "## Minecraft compatibility",
+                  "- 3D world lyrics are supported on matching ARM64 Build IDs for Minecraft 1.26.52, 1.26.60, and 1.26.62.1. Core music may run on 1.26.66.1 if the loader accepts the mod; 3D rendering remains unverified there.",
+                  "",
+                  "## Changes",
+                  f"[Review changes since {previous}](https://github.com/TerserahGw/levimusic-android/compare/{previous}...v{version})" if previous else "See the repository history for changes in this release.",
+                  "",
+                  "Choose one LeviPack variant. Full mode needs the matching Bridge APK; Standalone uses the hosted Aurelis Symphony service and requires internet access.",
+                  "",
+              ])
           Path("release-notes.md").write_text(notes, encoding="utf-8")
           print(notes)
           PY
