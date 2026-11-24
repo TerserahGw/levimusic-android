@@ -277,6 +277,8 @@ public final class BridgeApi {
                     case "tracks": json=PlaylistStore.tracks(context,name);break;
                     case "remove": json=PlaylistStore.remove(context,name,id);break;
                     case "delete": json=PlaylistStore.delete(context,name);break;
+                    case "rename": json=PlaylistStore.rename(context,name,
+                        URLDecoder.decode(getParam(path,"newName"),"UTF-8"));break;
                     case "play": {
                         int index=0;
                         try{index=Integer.parseInt(getParam(path,"index"));}catch(Exception ignored){}

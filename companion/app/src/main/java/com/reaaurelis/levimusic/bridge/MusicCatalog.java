@@ -9,6 +9,8 @@ import org.schabi.newpipe.extractor.downloader.Downloader;
 import org.schabi.newpipe.extractor.downloader.Request;
 import org.schabi.newpipe.extractor.downloader.Response;
 import org.schabi.newpipe.extractor.search.SearchExtractor;
+import org.schabi.newpipe.extractor.playlist.PlaylistExtractor;
+import org.schabi.newpipe.extractor.ListExtractor;
 import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.stream.AudioStream;
@@ -86,6 +88,45 @@ public final class MusicCatalog {
             });
             initialized=true;
         }
+    }
+
+    public static final class ImportedPlaylist {
+        public final String name;
+        public final List<Song> songs;
+        ImportedPlaylist(String name,List<Song> songs){this.name=name;this.songs=songs;}
+    }
+    public static ImportedPlaylist importPublicPlaylist(String link) throws Exception {
+        if(link==null||link.length()>2048)throw new IllegalArgumentException("Invalid playlist URL");
+        android.net.Uri uri=android.net.Uri.parse(link);
+        String host=uri.getHost(),list=uri.getQueryParameter("list");
+        if(host==null||!(host.equals("music.youtube.com")||host.equals("www.youtube.com")||
+            host.equals("youtube.com")||host.equals("m.youtube.com"))||
+            list==null||!list.matches("[A-Za-z0-9_-]{10,100}"))
+            throw new IllegalArgumentException("Use a public YouTube or YouTube Music playlist URL");
+        String canonical="https://www.youtube.com/playlist?list="+list;
+        initialize();
+        PlaylistExtractor extractor=ServiceList.YouTube.getPlaylistExtractor(canonical);
+        extractor.fetchPage();
+        String name=extractor.getName();
+        List<Song> songs=new ArrayList<>();
+        java.util.HashSet<String> ids=new java.util.HashSet<>();
+        ListExtractor.InfoItemsPage<StreamInfoItem> page=extractor.getInitialPage();
+        for(int pages=0;page!=null&&pages<15&&songs.size()<300;pages++){
+            for(StreamInfoItem stream:page.getItems()){
+                String id=idFromUrl(stream.getUrl());
+                if(id.isEmpty()||!ids.add(id))continue;
+                String art="";
+                if(stream.getThumbnails()!=null&&!stream.getThumbnails().isEmpty())
+                    art=stream.getThumbnails().get(stream.getThumbnails().size()-1).getUrl();
+                if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
+                songs.add(new Song(id,stream.getName(),stream.getUploaderName(),
+                    "https://www.youtube.com/watch?v="+id,art,
+                    Math.max(0,stream.getDuration())*1000L));
+                if(songs.size()>=300)break;
+            }
+            page=page.getNextPage()==null?null:extractor.getPage(page.getNextPage());
+        }
+        return new ImportedPlaylist(name,songs);
     }
 
     public static synchronized Song find(String id){

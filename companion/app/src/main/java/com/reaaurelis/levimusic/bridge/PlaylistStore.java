@@ -127,6 +127,38 @@ public final class PlaylistStore {
         boolean saved=write(context,updated);
         return result(saved,saved?"Playlist deleted":"Could not save playlist");
     }
+    public static synchronized JSONObject rename(Context context,String oldName,String newName) {
+        newName=cleanName(newName);
+        if(newName.isEmpty())return result(false,"Enter a playlist name");
+        JSONArray data=read(context);
+        int index=find(data,cleanName(oldName));
+        if(index<0)return result(false,"Playlist not found");
+        int duplicate=find(data,newName);
+        if(duplicate>=0&&duplicate!=index)return result(false,"Playlist already exists");
+        try{data.getJSONObject(index).put("name",newName);}
+        catch(Exception error){return result(false,"Unable to rename playlist");}
+        boolean saved=write(context,data);
+        return result(saved,saved?"Playlist renamed":"Could not save playlist");
+    }
+    public static synchronized JSONObject importSongs(Context context,String requestedName,List<MusicCatalog.Song> songs) {
+        String name=cleanName(requestedName);
+        if(name.isEmpty())name="Imported playlist";
+        JSONArray data=read(context);
+        if(find(data,name)>=0)return result(false,"Playlist name already exists; rename it first");
+        if(data.length()>=MAX_PLAYLISTS)return result(false,"Maximum 40 playlists");
+        JSONArray tracks=new JSONArray();
+        java.util.HashSet<String> seen=new java.util.HashSet<>();
+        for(MusicCatalog.Song song:songs){
+            if(tracks.length()>=MAX_TRACKS)break;
+            if(song!=null&&song.id.matches("[A-Za-z0-9_-]{11}")&&seen.add(song.id))tracks.put(song.json());
+        }
+        if(tracks.length()==0)return result(false,"No playable video entries found");
+        JSONObject entry=new JSONObject();
+        try{entry.put("name",name).put("tracks",tracks);}catch(Exception error){return result(false,"Invalid playlist");}
+        data.put(entry);
+        boolean saved=write(context,data);
+        return result(saved,saved?"Imported "+tracks.length()+" tracks as "+name:"Could not save playlist");
+    }
     public static synchronized JSONObject list(Context context,String filter) {
         JSONArray data=read(context), items=new JSONArray();
         String q=filter==null?"":filter.toLowerCase(Locale.ROOT).trim();

@@ -511,6 +511,45 @@ public final class MainActivity extends Activity {
                 showPlaylists();
             }).setNegativeButton("Cancel",null).show();
     }
+    private void importPublicPlaylist(){
+        EditText url=new EditText(this);
+        url.setSingleLine(true);url.setHint("https://music.youtube.com/playlist?list=...");
+        url.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_URI);
+        new AlertDialog.Builder(this).setTitle("Import public YouTube playlist")
+            .setView(url).setNegativeButton("Cancel",null)
+            .setPositiveButton("Import",(dialog,which)->{
+                String link=url.getText().toString().trim();
+                headerStatus.setText("Importing playlist...");
+                io.execute(()->{
+                    try{
+                        MusicCatalog.ImportedPlaylist imported=MusicCatalog.importPublicPlaylist(link);
+                        JSONObject result=PlaylistStore.importSongs(this,imported.name,imported.songs);
+                        handler.post(()->{headerStatus.setText(result.optString("message"));showPlaylists();});
+                    }catch(Exception error){
+                        handler.post(()->headerStatus.setText("Import failed: "+error.getMessage()));
+                    }
+                });
+            }).show();
+    }
+    private void editPlaylist(String name){
+        new AlertDialog.Builder(this).setTitle(name)
+            .setItems(new String[]{"Open","Rename","Delete"},(dialog,which)->{
+                if(which==0){showPlaylistSongs(name);return;}
+                if(which==1){
+                    EditText input=new EditText(this);input.setSingleLine(true);input.setText(name);
+                    input.setFilters(new android.text.InputFilter[]{new android.text.InputFilter.LengthFilter(48)});
+                    new AlertDialog.Builder(this).setTitle("Rename playlist").setView(input)
+                        .setNegativeButton("Cancel",null)
+                        .setPositiveButton("Save",(d,w)->{
+                            JSONObject result=PlaylistStore.rename(this,name,input.getText().toString());
+                            headerStatus.setText(result.optString("message"));showPlaylists();
+                        }).show();
+                }else new AlertDialog.Builder(this).setTitle("Delete "+name+"?")
+                    .setMessage("Remove this playlist? Songs are not deleted from the service.")
+                    .setPositiveButton("Delete",(d,w)->{PlaylistStore.delete(this,name);showPlaylists();})
+                    .setNegativeButton("Cancel",null).show();
+            }).show();
+    }
     private void showPlaylists(){
         showingPlaylists=true;libraryTitle.setText("My Playlists");
         trackCount.setText("");
@@ -538,6 +577,12 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams backupMargin=new LinearLayout.LayoutParams(-1,dp(48));
         backupMargin.bottomMargin=dp(12);
         list.addView(backupControls,backupMargin);
+        TextView importUrl=text("+ Import YouTube playlist URL",13,PRIMARY,true);
+        importUrl.setPadding(dp(15),dp(15),dp(15),dp(15));
+        importUrl.setBackground(bg(SURFACE,12));
+        importUrl.setOnClickListener(v->importPublicPlaylist());
+        LinearLayout.LayoutParams importMargin=new LinearLayout.LayoutParams(-1,-2);
+        importMargin.bottomMargin=dp(12);list.addView(importUrl,importMargin);
         org.json.JSONArray items=PlaylistStore.list(this,"").optJSONArray("playlists");
         if(items==null||items.length()==0){
             TextView empty=text("No playlists yet. Tap + New to create one.",14,SECONDARY,false);
@@ -552,13 +597,7 @@ public final class MainActivity extends Activity {
             item.setBackground(bg(SURFACE,14));
             item.setPadding(dp(18),dp(16),dp(12),dp(16));
             item.setOnClickListener(v->showPlaylistSongs(name));
-            item.setOnLongClickListener(v->{
-                new AlertDialog.Builder(this).setTitle("Delete "+name+"?")
-                    .setMessage("Remove this playlist? Songs are not deleted from the service.")
-                    .setPositiveButton("Delete",(d,w)->{PlaylistStore.delete(this,name);showPlaylists();})
-                    .setNegativeButton("Cancel",null).show();
-                return true;
-            });
+            item.setOnLongClickListener(v->{editPlaylist(name);return true;});
             LinearLayout.LayoutParams row=new LinearLayout.LayoutParams(-1,-2);
             row.bottomMargin=dp(8);list.addView(item,row);
         }
