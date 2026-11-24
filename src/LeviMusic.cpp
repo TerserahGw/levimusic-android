@@ -3017,10 +3017,10 @@ private:
                 vol=volume_;key=apiKey_;playing_=false;elapsed_=0;total_=0;
                 lyrics_.clear();lyricsSource_.clear();lyric_.clear();++lyricSerial_;
             }
+            const bool offline=localTrack(tr);
 #if defined(LEVI_STANDALONE)
             std::string server;
             {std::lock_guard lock(mu_);server=chruBase_;}
-            const bool offline=localTrack(tr);
             std::string mediaUrl;
             if(offline){
                 const auto name=tr.id.substr(8);
