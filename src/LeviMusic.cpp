@@ -164,7 +164,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
     jstring family=toJava(env,families[std::clamp(font,0,3)]);
     jobject face=family?env->CallStaticObjectMethod(faceClass,faceCreate,family,0):nullptr;
     if(paint&&face){
-        env->CallVoidMethod(paint,setSize,36.f);
+        env->CallVoidMethod(paint,setSize,48.f);
         // Android may choose the same CJK fallback for several family names.
         // Give every choice a visible weight, slant, or width of its own.
         env->CallVoidMethod(paint,setScale,font==3?.82f:font==2?1.08f:1.f);
@@ -182,8 +182,8 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         // Missing font glyphs should be handled by romanized fallback, not boxes.
         if(!env->CallBooleanMethod(paint,hasGlyph,text))ok=false;
         const float measured=ok?env->CallFloatMethod(paint,measure,text):0.f;
-        const int width=std::clamp(int(std::ceil(measured))+7,8,420);
-        constexpr int height=48;
+        const int width=std::clamp(int(std::ceil(measured))+14,14,600);
+        constexpr int height=68;
         jobject bitmap=ok?env->CallStaticObjectMethod(bitmapClass,bitmapCreate,
             width,height,config):nullptr;
         jobject canvas=bitmap?env->NewObject(canvasClass,canvasCtor,bitmap):nullptr;
@@ -191,7 +191,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         if(!bitmap||!canvas||!pixels||clearException(env,"world font bitmap"))ok=false;
         lm_world3d::GlyphMesh mesh;
         if(ok){
-            env->CallVoidMethod(canvas,draw,text,3.f,39.f,paint);
+            env->CallVoidMethod(canvas,draw,text,6.f,56.f,paint);
             env->CallVoidMethod(bitmap,getPixels,pixels,0,width,0,0,width,height);
             if(clearException(env,"world font draw"))ok=false;
             else {
@@ -201,7 +201,10 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
                 else {
                     std::vector<uint8_t> alpha(rgba.size());
                     for(size_t i=0;i<rgba.size();++i)alpha[i]=uint8_t(uint32_t(rgba[i])>>24);
-                    mesh=lm_world3d::rasterMesh(alpha,width,height,39);
+                    const bool complex=std::any_of(part.begin(),part.end(),
+                        [](unsigned char ch){return ch>=128;});
+                    const int sampleStep=complex&&lm_timing::utf8Length(part)<=2?1:2;
+                    mesh=lm_world3d::rasterMesh(alpha,width,height,56,sampleStep);
                     if(mesh.pixels.empty())ok=false;
                 }
             }
@@ -1730,7 +1733,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.5 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.6 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2427,7 +2430,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.5 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.6 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);

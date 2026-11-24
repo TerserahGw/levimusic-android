@@ -225,7 +225,7 @@ inline GlyphMesh rasterMesh(std::span<const uint8_t> alpha,int width,int height,
     GlyphMesh mesh;
     if(width<=0||height<=0||step<=0||alpha.size()!=size_t(width)*size_t(height))return mesh;
     const int cols=(width+step-1)/step,rows=(height+step-1)/step;
-    mesh.width=float(cols);mesh.scale=.0095f;
+    mesh.width=float(cols);mesh.scale=.00375f*float(step);
     std::vector<uint8_t> cells(size_t(cols)*size_t(rows));
     for(int cy=0;cy<rows;++cy)for(int cx=0;cx<cols;++cx){
         int sum=0,n=0;
@@ -243,13 +243,16 @@ inline GlyphMesh rasterMesh(std::span<const uint8_t> alpha,int width,int height,
         const uint8_t coverage=cells[at];
         if(coverage>=12)mesh.pixels.push_back(pixel(x,y,coverage));
         if(coverage>=32)continue;
-        int adjacent=0;
-        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){
+        int near=0,outer=0;
+        for(int dy=-2;dy<=2;++dy)for(int dx=-2;dx<=2;++dx){
             int nx=x+dx,ny=y+dy;
             if(nx<0||nx>=cols||ny<0||ny>=rows)continue;
-            adjacent=std::max(adjacent,int(cells[size_t(ny)*size_t(cols)+size_t(nx)]));
+            const int neighbor=cells[size_t(ny)*size_t(cols)+size_t(nx)];
+            if(std::abs(dx)<=1&&std::abs(dy)<=1)near=std::max(near,neighbor);
+            else outer=std::max(outer,neighbor);
         }
-        if(adjacent>=55)mesh.outline.push_back(pixel(x,y,uint8_t(std::min(adjacent,210))));
+        if(near>=55)mesh.outline.push_back(pixel(x,y,235));
+        else if(outer>=70)mesh.outline.push_back(pixel(x,y,165));
     }
     return mesh;
 }
@@ -296,6 +299,7 @@ struct Panel{
     Vec3 spawnPlayer{};
     std::vector<Pixel> pixels;
     std::vector<Pixel> outline;
+    std::vector<float> transitionWords;
     int64_t born=0;
     int64_t appeared=0;
     float entryStrength=0.f;
@@ -395,6 +399,20 @@ inline std::vector<std::string> unicodeParts(std::string_view text,
     return splitUnicodeLyric(text);
 }
 inline float smoothstep(float t){t=std::clamp(t,0.f,1.f);return t*t*(3.f-2.f*t);}
+inline float timedWordAlpha(const Panel& panel,std::span<const lm_timing::WordCue> words,
+                            int displayWords,float position,int newestWord,uint8_t localWord){
+    if(words.empty())return 1.f;
+    const int index=displayWords==1?panel.sourceWord:
+        lm_timing::sourceWordIndex(panel.wordBase+int(localWord),displayWords,int(words.size()));
+    if(index<0)return 1.f;
+    const auto& word=words[size_t(index)];
+    if(position<float(word.startMs))return 0.f;
+    const float entry=std::max(.03f,smoothstep((position-float(word.startMs))/160.f));
+    float trail=1.f;
+    if(index+4<int(words.size())&&newestWord-index>=4)
+        trail=1.f-smoothstep((position-float(words[size_t(index+4)].startMs))/380.f);
+    return entry*(position<float(word.endMs)?1.f:.84f)*trail;
+}
 inline float cueProgress(float position,int start,int end){
     return std::clamp(float(position-start)/float(std::max(end-start,1)),0.f,1.f);
 }
@@ -568,7 +586,18 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const bool newCue=scene.serial!=serial||reset;
     if(newCue){
         if(reset){scene.previous.clear();scene.previousUntil=0;}
-        else if(scene.serial!=serial)scene.previous=std::move(scene.panels);
+        else if(scene.serial!=serial){
+            int latest=-1;
+            for(size_t i=0;i<scene.words.size();++i)
+                if(scene.cueClock>=float(scene.words[i].startMs))latest=int(i);
+            for(auto& old:scene.panels){
+                old.transitionWords.resize(size_t(std::max(old.wordCount,1)));
+                for(size_t i=0;i<old.transitionWords.size();++i)
+                    old.transitionWords[i]=timedWordAlpha(old,scene.words,
+                        scene.displayWords,scene.cueClock,latest,uint8_t(i));
+            }
+            scene.previous=std::move(scene.panels);
+        }
         scene.panels.clear();
         const bool thirdPerson=magnitude2(cam-(view.position+Vec3{0,1.6f,0}))>6.25f;
         const std::string display=meshes?text:latinDisplay(text);
@@ -760,18 +789,11 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const float activeFade=cueFade(position,start,end);
     if(activeFade<=0.f)for(auto& panel:scene.panels)panel.visibleAlpha=0.f;
     auto timedAlpha=[&](const Panel& panel,uint8_t localWord){
-        if(scene.words.empty())return 1.f;
-        const int index=scene.displayWords==1?panel.sourceWord:
-            lm_timing::sourceWordIndex(panel.wordBase+int(localWord),
-                scene.displayWords,int(scene.words.size()));
-        if(index<0)return 1.f;
-        const auto& word=scene.words[static_cast<size_t>(index)];
-        if(position<float(word.startMs))return 0.f;
-        const float entry=std::max(.03f,smoothstep((position-float(word.startMs))/160.f));
-        float trail=1.f;
-        if(index+4<int(scene.words.size())&&newestWord-index>=4)
-            trail=1.f-smoothstep((position-float(scene.words[size_t(index+4)].startMs))/380.f);
-        return entry*(position<float(word.endMs)?1.f:.84f)*trail;
+        return timedWordAlpha(panel,scene.words,scene.displayWords,position,newestWord,localWord);
+    };
+    auto exitAlpha=[](const Panel& panel,uint8_t word){
+        return panel.transitionWords.empty()?1.f:
+            panel.transitionWords[std::min<size_t>(word,panel.transitionWords.size()-1)];
     };
     ColorGuard guard(colors);
     size_t count=0;
@@ -786,8 +808,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         }
     if(fading)for(const auto& panel:scene.previous)if(panel.appeared&&
         panel.transitionAlpha*transitionFade(now,scene.previousFadeStart,
-            panel.partIndex*scene.previousStagger+(panel.wordCount-1)*65,1)>0.f)
-        count+=panel.pixels.size()+panel.outline.size();
+            panel.partIndex*scene.previousStagger+(panel.wordCount-1)*65,1)>0.f){
+        for(const auto& pixel:panel.pixels)if(exitAlpha(panel,pixel.word)>0.f)++count;
+        for(const auto& pixel:panel.outline)if(exitAlpha(panel,pixel.word)>0.f)++count;
+    }
     if(!count)return;
     tessBegin(tess,nullptr,1,int(count*4),0);
     auto draw=[&](const Panel& panel,float alpha,float lift,bool leaving=false){
@@ -820,13 +844,13 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             const auto origin=anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
             const auto& pixels=outline?panel.outline:panel.pixels;
             for(const auto& p:pixels){
-                const float reveal=leaving?1.f:timedAlpha(panel,p.word);
+                const float reveal=leaving?exitAlpha(panel,p.word):timedAlpha(panel,p.word);
                 if(reveal<=0.f)continue;
                 const auto tint=lyricTint(panel.partIndex,p.word);
                 const float wordAlpha=leaving?transitionFade(now,scene.previousFadeStart,
                     panel.partIndex*scene.previousStagger+int(p.word)*65,1):1.f;
                 tessColor(tess,outline?0.f:tint[0],outline?0.f:tint[1],outline?0.f:tint[2],
-                          alpha*wordAlpha*reveal*(outline?.72f:1.f)*float(p.coverage)/255.f);
+                          alpha*wordAlpha*reveal*float(p.coverage)/255.f);
                 quad(origin+right*(p.x*scale)+up*(p.y*scale));
             }
         }

@@ -111,9 +111,9 @@ int main(){
     auto wrapped=splitUnicodeLyric("あいうえおかきくけこさしすせそ");
     assert(wrapped.size()==2&&wrapped[0]+wrapped[1]=="あいうえおかきくけこさしすせそ");
     assert(unicodeParts("夜に駆ける",japanese).size()==4);
-    std::array<uint8_t,25> mask{};mask[12]=255;
-    auto crisp=rasterMesh(mask,5,5,3,1);
-    assert(crisp.pixels.size()==1&&crisp.outline.size()==8);
+    std::array<uint8_t,49> mask{};mask[24]=255;
+    auto crisp=rasterMesh(mask,7,7,4,1);
+    assert(crisp.pixels.size()==1&&crisp.outline.size()==24);
     for(const auto& edge:crisp.outline)
         assert(edge.x!=crisp.pixels[0].x||edge.y!=crisp.pixels[0].y);
     assert(panelClearance({0,0,2},.6f,{0,0,0},{.08f,0,2},.6f)<1.f);
@@ -270,6 +270,21 @@ int main(){
     assert(scene.panels.size()==unicodeMesh.size());
     assert(scene.panels.front().pixels.front().coverage==180);
     assert(scene.panels.front().pixelScale==.016f);
+    scene=Scene{};
+    pose.time=nowMs();
+    const std::vector<lm_timing::WordCue> fadeWords{{100,200,"one"},
+        {200,300,"two"},{300,400,"three"},{400,500,"four"},{500,900,"five"}};
+    std::vector<GlyphMesh> fadeMeshes(5);
+    for(auto& part:fadeMeshes){part.width=12;part.pixels.push_back({0,0,0,255});}
+    publish("one two three four five",100,2000,100,false,fadeWords,fadeMeshes);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    publish("one two three four five",100,2000,1000,false,fadeWords,fadeMeshes);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    publish("next",1200,3000,1200,false);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.previous.size()==5);
+    assert(scene.previous.front().transitionWords[0]==0.f);
+    assert(scene.previous.back().transitionWords[0]>0.f);
     return 0;
 }
 

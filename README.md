@@ -5,7 +5,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Latest beta:** v1.4.5 beta (24 November 2026) · **Stable:** v1.3.6  
+**Latest beta:** v1.4.6 beta (24 November 2026) · **Stable:** v1.3.6  
 **Author:** ReaAurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional 3D floating lyrics rendered locally in your Minecraft world.
@@ -38,7 +38,7 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-For the **v1.4.5 beta full mode**, download [LeviPack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.5-beta/LeviMusic-1.4.5-arm64-v8a.levipack) and the matching [Bridge APK](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.5-beta/LeviMusic-Bridge-1.4.5.apk). The v1.3.6 files below remain the stable alternative.\n\nChoose **one** of the following modes. **Do not install or enable both LeviPack variants at the same time.**
+For the **v1.4.6 beta full mode**, download [LeviPack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.6-beta/LeviMusic-1.4.6-arm64-v8a.levipack) and the matching [Bridge APK](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.6-beta/LeviMusic-Bridge-1.4.6.apk). The v1.3.6 files below remain the stable alternative.\n\nChoose **one** of the following modes. **Do not install or enable both LeviPack variants at the same time.**
 
 ### Option A — Full mode (recommended)
 
@@ -55,21 +55,20 @@ Current v1.3.6 downloads:
 
 **Note for External Mods catalog users:** the catalog can distribute the LeviPack, but the **Bridge APK must also be installed separately** from GitHub Releases for full mode.
 
-### Option B — Standalone mode (v1.4.5 beta)
+### Option B — Standalone mode (v1.4.6 beta)
 
-Download [LeviMusic-Standalone-1.4.5-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.5-beta/LeviMusic-Standalone-1.4.5-arm64-v8a.levipack) instead of the full LeviPack.
+Download [LeviMusic-Standalone-1.4.6-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.4.6-beta/LeviMusic-Standalone-1.4.6-arm64-v8a.levipack) instead of the full LeviPack.
 
 This beta uses the **hosted Aurelis Symphony API** by default. No Bridge APK, local backend, account, or user-run server is required. It offers search, direct audio resolution, synchronized lyrics, and an editable radio queue. Internet access and the hosted service are required. YouTube audio can return HTTP 424 or stop if the upstream blocks streaming; the bundled original demo tracks are more reliable. See [Standalone browser notes](docs/STANDALONE_BROWSER.md).
 
 For newer releases, use the matching files from the [latest release page](https://github.com/TerserahGw/levimusic-android/releases/latest) rather than mixing versions.
 
-## What's new in v1.4.5 beta
+## What's new in v1.4.6 beta
 
-- Non-Latin 3D lyrics are rasterized at twice the previous resolution with antialiased coverage. Japanese and other supported scripts are clearer.
-- The dark outline follows the outside of the glyph silhouette instead of outlining every square pixel.
-- Font choices now visibly adjust slant, weight, or width even where Android resolves several families to the same CJK fallback.
-- Projected word size guides placement, and older words fade progressively as new timed words appear, reducing collisions in crowded lyric lines.
-- Synchronized 2D lyrics remain visible above the compact HUD. Font availability and exact Minecraft renderer profiles still depend on the device and game build.
+- Fixed completed 3D lyric lines popping back in full when the next line begins. The exit transition now retains the final visibility of each old word.
+- A stronger two-cell contour follows the silhouette of Latin letters, so the dark outline is visible without outlining every pixel square.
+- Unicode rasterization uses higher source resolution. Short non-Latin lyric fragments use full-resolution sampling for sharper Kanji and other characters while keeping the same world-space font size.
+- The 2D lyric above the compact HUD remains synchronized when 3D lyrics are enabled.
 
 ## Stable v1.3.6
 
