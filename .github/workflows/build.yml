@@ -345,7 +345,7 @@ jobs:
           PY
 
       - name: Publish GitHub Release
-        if: github.ref == 'refs/heads/main' && steps.release_check.outputs.exists != 'true' && steps.signing.outputs.enabled == 'true'
+        if: github.ref == 'refs/heads/main' && steps.signing.outputs.enabled == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
