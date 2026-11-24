@@ -63,8 +63,23 @@ std::vector<Track> offlineTracks(const std::filesystem::path& folder,const std::
                 entry.file_size()==0||entry.file_size()>200'000'000)continue;
             auto name=entry.path().filename().string();
             if(name.size()>200||name.find('/')!=std::string::npos)continue;
-            if(!query.empty()&&query!="offline"&&name.find(query)==std::string::npos)continue;
-            found.push_back({"offline:"+name,entry.path().stem().string(),"Local music",""});
+            Track track{"offline:"+name,entry.path().stem().string(),"Local music",""};
+            auto meta=entry.path();meta.replace_extension(".meta");
+            if(std::filesystem::is_regular_file(meta)&&!std::filesystem::is_symlink(meta)&&
+               std::filesystem::file_size(meta)<4000){
+                std::ifstream source(meta);
+                std::string title,artist,art;
+                if(source>>std::quoted(title)>>std::quoted(artist)>>std::quoted(art)){
+                    if(!title.empty())track.title=title;
+                    if(!artist.empty())track.artist=artist;
+                    if(art.rfind("https://",0)==0)track.art=art;
+                }
+            }
+            if(!query.empty()&&query!="offline"&&
+               track.title.find(query)==std::string::npos&&
+               track.artist.find(query)==std::string::npos&&
+               name.find(query)==std::string::npos)continue;
+            found.push_back(std::move(track));
             if(found.size()>=300)break;
         }
     }catch(...){}
@@ -80,7 +95,7 @@ struct Lyric {
     std::vector<lm_timing::WordCue> words;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistRename, PlaylistDelete, PlaylistAdd, PlaylistRemove, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistRename, PlaylistDelete, PlaylistAdd, PlaylistRemove, OfflineSave, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
@@ -380,6 +395,88 @@ std::string getHttp(JNIEnv* env, const std::string& url,
     return content;
 }
 
+// Stream directly to disk so a song never occupies the game process's heap.
+std::filesystem::path downloadAudio(JNIEnv* env,const std::string& url,
+                                    const std::filesystem::path& folder,
+                                    const std::string& id){
+    if(url.rfind("https://",0)!=0||id.size()!=11||
+       !std::all_of(id.begin(),id.end(),[](unsigned char c){
+           return std::isalnum(c)||c=='_'||c=='-';}))return {};
+    try{std::filesystem::create_directories(folder);}catch(...){return {};}
+    jclass urlClass=env->FindClass("java/net/URL");
+    auto ctor=urlClass?env->GetMethodID(urlClass,"<init>","(Ljava/lang/String;)V"):nullptr;
+    auto open=urlClass?env->GetMethodID(urlClass,"openConnection","()Ljava/net/URLConnection;"):nullptr;
+    auto jurl=toJava(env,url);
+    jobject address=ctor&&jurl?env->NewObject(urlClass,ctor,jurl):nullptr;
+    jobject connection=address&&open?env->CallObjectMethod(address,open):nullptr;
+    if(clearException(env,"offline connection"))connection=nullptr;
+    std::filesystem::path saved;
+    if(connection){
+        jclass cl=env->FindClass("java/net/URLConnection");
+        auto timeout=cl?env->GetMethodID(cl,"setConnectTimeout","(I)V"):nullptr;
+        auto readTimeout=cl?env->GetMethodID(cl,"setReadTimeout","(I)V"):nullptr;
+        auto contentType=cl?env->GetMethodID(cl,"getContentType","()Ljava/lang/String;"):nullptr;
+        auto streamMethod=cl?env->GetMethodID(cl,"getInputStream","()Ljava/io/InputStream;"):nullptr;
+        if(timeout)env->CallVoidMethod(connection,timeout,15000);
+        if(readTimeout)env->CallVoidMethod(connection,readTimeout,30000);
+        jstring type=contentType?(jstring)env->CallObjectMethod(connection,contentType):nullptr;
+        std::string mime=type?fromJava(env,type):"";
+        if(type)env->DeleteLocalRef(type);
+        std::transform(mime.begin(),mime.end(),mime.begin(),[](unsigned char c){return std::tolower(c);});
+        std::string ext;
+        if(mime.find("webm")!=std::string::npos)ext=".webm";
+        else if(mime.find("mpeg")!=std::string::npos)ext=".mp3";
+        else if(mime.find("ogg")!=std::string::npos)ext=".ogg";
+        else if(mime.find("aac")!=std::string::npos)ext=".aac";
+        else if(mime.find("flac")!=std::string::npos)ext=".flac";
+        else if(mime.find("wav")!=std::string::npos)ext=".wav";
+        else if(mime.find("mp4")!=std::string::npos||mime.find("m4a")!=std::string::npos)ext=".m4a";
+        jobject stream=ext.empty()?nullptr:(streamMethod?env->CallObjectMethod(connection,streamMethod):nullptr);
+        if(clearException(env,"offline stream"))stream=nullptr;
+        auto temporary=folder/(id+".part");
+        bool valid=false;
+        if(stream){
+            jclass sc=env->FindClass("java/io/InputStream");
+            auto read=sc?env->GetMethodID(sc,"read","([B)I"):nullptr;
+            auto close=sc?env->GetMethodID(sc,"close","()V"):nullptr;
+            jbyteArray buffer=env->NewByteArray(16384);
+            std::ofstream file(temporary,std::ios::binary|std::ios::trunc);
+            size_t total=0;bool failed=!file||!read||!buffer;
+            while(!failed){
+                jint n=env->CallIntMethod(stream,read,buffer);
+                if(clearException(env,"offline read")){failed=true;break;}
+                if(n<0)break;
+                if(n==0)continue;
+                total+=static_cast<size_t>(n);
+                if(total>150'000'000){failed=true;break;}
+                char bytes[16384];env->GetByteArrayRegion(buffer,0,n,reinterpret_cast<jbyte*>(bytes));
+                if(clearException(env,"offline copy")){failed=true;break;}
+                file.write(bytes,n);
+                if(!file){failed=true;break;}
+            }
+            file.close();
+            if(close)env->CallVoidMethod(stream,close);
+            clearException(env,"offline close");
+            if(buffer)env->DeleteLocalRef(buffer);
+            if(sc)env->DeleteLocalRef(sc);
+            valid=!failed&&total>0;
+            env->DeleteLocalRef(stream);
+        }
+        if(valid){
+            try{auto target=folder/(id+ext);
+                std::filesystem::rename(temporary,target);saved=std::move(target);
+            }catch(...){}
+        }
+        if(saved.empty()){try{std::filesystem::remove(temporary);}catch(...){}}
+        if(cl)env->DeleteLocalRef(cl);
+        env->DeleteLocalRef(connection);
+    }
+    if(address)env->DeleteLocalRef(address);
+    if(jurl)env->DeleteLocalRef(jurl);
+    if(urlClass)env->DeleteLocalRef(urlClass);
+    return saved;
+}
+
 std::string optString(JNIEnv* env, jobject obj, const char* field) {
     if (!obj) return {};
     jclass cl = env->FindClass("org/json/JSONObject");
@@ -629,21 +726,70 @@ std::string chruRequest(JNIEnv* env,const std::string& server,const std::string&
     env->DeleteLocalRef(root);
     return selected;
 }
-std::vector<Track> importYoutubePlaylist(JNIEnv* env,const std::string& url){
-    std::vector<Track> tracks;
+struct ImportedPlaylist {std::string name;std::vector<Track> tracks;};
+ImportedPlaylist importYoutubePlaylist(JNIEnv* env,const std::string& url){
+    ImportedPlaylist imported;
     if(url.size()>512||!(url.rfind("https://music.youtube.com/playlist?",0)==0||
-       url.rfind("https://www.youtube.com/playlist?",0)==0))return tracks;
+       url.rfind("https://www.youtube.com/playlist?",0)==0||
+       url.rfind("https://youtube.com/playlist?",0)==0))return imported;
     const auto pos=url.find("list=");
-    if(pos==std::string::npos)return tracks;
+    if(pos==std::string::npos)return imported;
     auto id=url.substr(pos+5);id=id.substr(0,id.find('&'));
     if(id.size()<10||id.size()>100||!std::all_of(id.begin(),id.end(),[](unsigned char c){
-        return std::isalnum(c)||c=='_'||c=='-';}))return tracks;
+        return std::isalnum(c)||c=='_'||c=='-';}))return imported;
+    imported.name="YouTube "+id.substr(0,16);
+    const auto canonical="https://www.youtube.com/playlist?list="+id;
+    auto root=makeJson(env,getHttp(env,
+        "https://aurelis-symphony.go.altare.global/api/v1/playlists/import?url="+
+        encode(env,canonical)));
+    if(root){
+        auto info=optObject(env,root,"playlist");
+        if(info){auto name=optString(env,info,"title");
+            if(!name.empty())imported.name=name;env->DeleteLocalRef(info);}
+        auto entries=optArray(env,root,"tracks");
+        if(entries){
+            jclass cls=env->FindClass("org/json/JSONArray");
+            auto length=cls?env->GetMethodID(cls,"length","()I"):nullptr;
+            auto item=cls?env->GetMethodID(cls,"optJSONObject","(I)Lorg/json/JSONObject;"):nullptr;
+            int count=length?env->CallIntMethod(entries,length):0;
+            if(clearException(env,"playlist length"))count=0;
+            std::set<std::string> seen;
+            for(int i=0;i<std::min(count,300);++i){
+                auto row=item?env->CallObjectMethod(entries,item,i):nullptr;
+                if(!row||clearException(env,"playlist row"))continue;
+                auto video=optString(env,row,"id");
+                if(video.size()!=11){
+                    auto link=optString(env,row,"url");auto at=link.find("v=");
+                    if(at!=std::string::npos)video=link.substr(at+2,11);
+                    else if((at=link.find("youtu.be/"))!=std::string::npos)
+                        video=link.substr(at+9,11);
+                }
+                if(video.size()==11&&std::all_of(video.begin(),video.end(),[](unsigned char c){
+                    return std::isalnum(c)||c=='_'||c=='-';})&&seen.insert(video).second){
+                    auto title=optString(env,row,"title");
+                    if(title.empty())title=optString(env,row,"name");
+                    auto artist=optString(env,row,"artist");
+                    if(artist.empty())artist=optString(env,row,"author");
+                    auto art=optString(env,row,"artwork");
+                    if(art.empty())art=optString(env,row,"thumbnail");
+                    imported.tracks.push_back({video,title.empty()?video:title,
+                        artist.empty()?"YouTube":artist,art.empty()?
+                        "https://i.ytimg.com/vi/"+video+"/hqdefault.jpg":art});
+                }
+                env->DeleteLocalRef(row);
+            }
+            if(cls)env->DeleteLocalRef(cls);
+            env->DeleteLocalRef(entries);
+        }
+        env->DeleteLocalRef(root);
+        if(!imported.tracks.empty())return imported;
+    }
     auto page=getHttp(env,"https://www.youtube.com/playlist?list="+id);
-    if(page.empty())return tracks;
+    if(page.empty())return imported;
     std::set<std::string> seen;
     const std::string marker="\"playlistVideoRenderer\":{";
     size_t at=0;
-    while((at=page.find(marker,at))!=std::string::npos&&tracks.size()<300){
+    while((at=page.find(marker,at))!=std::string::npos&&imported.tracks.size()<300){
         auto next=page.find(marker,at+marker.size());
         std::string_view block(page.data()+at,std::min<size_t>(
             std::min(next==std::string::npos?page.size():next,page.size())-at,5000));
@@ -663,14 +809,14 @@ std::vector<Track> importYoutubePlaylist(JNIEnv* env,const std::string& url){
                                 title=std::string(block.substr(text,stop-text));
                         }
                     }
-                    tracks.push_back({video,title,artist,
+                    imported.tracks.push_back({video,title,artist,
                         "https://i.ytimg.com/vi/"+video+"/hqdefault.jpg"});
                 }
             }
         }
         at+=marker.size();
     }
-    return tracks;
+    return imported;
 }
 std::vector<Track> searchAurelis(JNIEnv* env,const std::string& server,
                                  const std::string& query,const std::string& artist={}){
@@ -1207,6 +1353,8 @@ std::string bridgeGet(const std::string& path,const std::string& token) {
     // External searches run on the native worker and may take several seconds.
     const int timeoutMs=path.rfind("/v1/search?",0)==0?30000:
                        path.rfind("/v1/lyrics?",0)==0?26000:
+                       path.rfind("/v1/offline/save?",0)==0?180000:
+                       path.rfind("/v1/playlist/import?",0)==0?45000:
                        path.rfind("/v1/play?",0)==0?3500:1500;
     timeval timeout{};timeout.tv_sec=timeoutMs/1000;
     timeout.tv_usec=(timeoutMs%1000)*1000;
@@ -2351,7 +2499,7 @@ private:
             }else if(tab!=2){
                 int selected=-1;
                 std::string id,name;
-                bool plus=false,minus=false,playlistAdd=false,playlistRemove=false;
+                bool plus=false,minus=false,playlistAdd=false,playlistRemove=false,offlineSave=false;
                 bool renamePlaylist=false,deletePlaylist=false;
                 {
                     std::lock_guard lock(mu_);
@@ -2366,11 +2514,14 @@ private:
                         plus=tab==0 && e.x>l.rows[i].x+l.rows[i].w-42*l.s;
                         playlistAdd=tab==0 && !plus &&
                             e.x>l.rows[i].x+l.rows[i].w-83*l.s;
+                        const bool saveOffline=tab==0 && !plus && !playlistAdd &&
+                            e.x>l.rows[i].x+l.rows[i].w-124*l.s;
                         minus=tab==1 && mode==3 && index>0
                             && e.x>l.rows[i].x+l.rows[i].w-42*l.s;
                         playlistRemove=tab==1 && mode==2 &&
                             e.x>l.rows[i].x+l.rows[i].w-42*l.s;
-                        if(tab==0)id=results_[static_cast<size_t>(index)].id;
+                        if(tab==0){id=results_[static_cast<size_t>(index)].id;
+                            if(saveOffline)offlineSave=true;}
                         else if(mode==3)id=queueTracks_[static_cast<size_t>(index)].id;
                         else if(mode==1)name=playlistNames_[static_cast<size_t>(index)];
                         if(tab==1&&mode==1){
@@ -2383,7 +2534,8 @@ private:
                 }
                 if(selected>=0){
                     if(tab==0)addJob(plus?Action::QueueAdd:
-                                      playlistAdd?Action::PlaylistAdd:Action::Select,id);
+                                      playlistAdd?Action::PlaylistAdd:
+                                      offlineSave?Action::OfflineSave:Action::Select,id);
                     else if(mode==3)addJob(minus?Action::QueueRemove:Action::QueuePlay,id);
                     else if(mode==1){
                         if(renamePlaylist){
@@ -2863,7 +3015,7 @@ private:
                 box(row,chosen?0xFF414750U:0xFF292C32U,8.f);
                 const std::string prefix=isRadio?(n==0?"NOW  ":"NEXT "+std::to_string(n)+"  "):
                     (std::to_string(n+1)+".  ");
-                const float suffixWidth=addControl?85*u:(isRadio&&n>0)||isSaved?45*u:12*u;
+                const float suffixWidth=addControl?125*u:(isRadio&&n>0)||isSaved?45*u:12*u;
                 const size_t maxChars=static_cast<size_t>(
                     std::max(13.f,(row.w-16*u-suffixWidth)/(7.1f*u)));
                 text(row.x+10*u,row.y+std::min(row.h-3*u,19*u),
@@ -2873,6 +3025,8 @@ private:
                 }else if(isSaved){
                     icon("x",row.x+row.w-28*u,row.y+5*u,18*u);
                 }else if(addControl){
+                    text(row.x+row.w-119*u,row.y+std::min(row.h-3*u,19*u),
+                         "DL",10*u,C_TEXT,3);
                     text(row.x+row.w-73*u,row.y+std::min(row.h-3*u,19*u),
                          "P+",11*u,C_TEXT,3);
                     icon("plus",row.x+row.w-27*u,row.y+5*u,18*u);
@@ -2932,7 +3086,7 @@ private:
             box(l.searchGo,0xFF50555EU,8.f);
             icon("search",l.searchGo.x+13*u,l.searchGo.y+7*u,20*u);
             text(l.right.x+15*u,l.right.y+106*u,
-                 "SEARCH RESULTS  •  Tap play | P+ playlist | + queue",
+                 "SEARCH RESULTS  •  Tap play | DL offline | P+ playlist | + queue",
                  10*u,C_DIM,75);
             if(tracks.empty()){
                 text(l.right.x+18*u,l.right.y+169*u,
@@ -3334,6 +3488,17 @@ private:
                                    accepted?"Song saved":"Check the playlist and Bridge");
                             break;
                         }
+                        case Action::OfflineSave:{
+                            if(key.empty()){update("Bridge unavailable","Offline","Open the Bridge app");break;}
+                            update("Saving offline",job.query,"Downloading audio and available lyrics...");
+                            auto reply=bridgeGet("/v1/offline/save?id="+encode(env,job.query),key);
+                            auto root=makeJson(env,reply);
+                            bool accepted=root&&optString(env,root,"accepted")=="true";
+                            auto message=root?optString(env,root,"message"):"Bridge download timed out";
+                            if(root)env->DeleteLocalRef(root);
+                            update(accepted?"Saved to Offline":"Offline save failed",job.query,message);
+                            break;
+                        }
                         case Action::PlaylistRemove: {
                             std::string name;
                             {std::lock_guard lock(mu_);name=activePlaylist_;}
@@ -3582,6 +3747,52 @@ private:
                         break;
                     }
                     case Action::Select:playSelected();break;
+                    case Action::OfflineSave:{
+                        Track track;std::string server;
+                        {std::lock_guard lock(mu_);
+                            auto found=std::find_if(results_.begin(),results_.end(),
+                                [&](const Track& item){return item.id==job.query;});
+                            if(found!=results_.end())track=*found;
+                            server=chruBase_;
+                        }
+                        if(track.id.empty()||localTrack(track)||track.id.size()!=11){
+                            update("Offline save unavailable",track.title,"Choose an online search result");break;
+                        }
+                        auto folder=self_.getConfigDir()/"music";
+                        auto existing=offlineTracks(folder);
+                        if(std::any_of(existing.begin(),existing.end(),[&](const Track& t){
+                            return t.id.rfind("offline:"+track.id+".",0)==0;})){
+                            update("Already saved offline",track.title,"Open Playlists > Offline");break;
+                        }
+                        update("Saving offline",track.title,"Downloading audio...");
+                        auto source=aurelisStream(env,server,track.id);
+                        auto saved=downloadAudio(env,source,folder,track.id);
+                        if(saved.empty()){
+                            update("Offline save failed",track.title,"Audio unavailable or unsupported format");break;
+                        }
+                        try{
+                            std::ofstream meta(folder/(track.id+".meta"),std::ios::trunc);
+                            meta<<std::quoted(track.title)<<' '\n+                                <<std::quoted(track.artist)<<' '<<std::quoted(track.art)<<'\n';
+                        }catch(...){}
+                        update("Saving lyrics",track.title,"Checking synchronized LRC...");
+                        auto lyrics=aurelisLyrics(env,server,track,0);
+                        if(lyrics.empty())lyrics=searchLyrics(env,track);
+                        if(!lyrics.empty()){
+                            auto target=folder/(track.id+".lrc");
+                            std::ofstream lrc(target,std::ios::trunc);
+                            for(const auto& line:lyrics){
+                                int hundredths=std::max(0,line.ms)/10;
+                                lrc<<'['<<std::setfill('0')<<std::setw(2)<<hundredths/6000
+                                   <<':'<<std::setw(2)<<(hundredths/100)%60
+                                   <<'.'<<std::setw(2)<<hundredths%100<<']'
+                                   <<line.line<<'\n';
+                            }
+                        }
+                        update("Saved to Offline",track.title,
+                            lyrics.empty()?"Audio saved; no synchronized lyrics found":
+                                           "Audio and synchronized lyrics saved");
+                        break;
+                    }
                     case Action::PlayPause:
                         if(player.isPlaying(env)){
                             player.toggle(env);{std::lock_guard lock(mu_);playing_=false;}
@@ -3637,16 +3848,16 @@ private:
                     case Action::PlaylistCreate:{
                         std::string name=job.query;
                         if(name.rfind("https://",0)==0){
-                            auto songs=importYoutubePlaylist(env,name);
-                            if(songs.empty()){
+                            auto imported=importYoutubePlaylist(env,name);
+                            if(imported.tracks.empty()){
                                 update("Playlist import failed","YouTube","Public playlist unavailable or empty");break;
                             }
-                            auto at=name.find("list=");
-                            name="YouTube "+name.substr(at+5,16);
+                            name=imported.name;
+                            if(name.size()>96)name.resize(96);
                             if(localPlaylists_.contains(name)){
                                 update("Playlist already imported",name,"Rename it before importing again");break;
                             }
-                            localPlaylists_[name]=std::move(songs);
+                            localPlaylists_[name]=std::move(imported.tracks);
                             if(!saveLocalPlaylists()){
                                 localPlaylists_.erase(name);update("Playlist save failed",name,"Check storage");break;
                             }

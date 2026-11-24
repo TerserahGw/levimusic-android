@@ -267,6 +267,13 @@ public final class BridgeApi {
                 json=LyricsFinder.find(context,title,artist,duration,
                     song==null?"":song.url,LyricsStore.romanizationLanguage(context));
             }
+            else if(path.startsWith("/v1/offline/save?")){
+                MusicCatalog.Song song=MusicCatalog.find(getParam(path,"id"));
+                try{json=new JSONObject().put("accepted",true)
+                    .put("message",OfflineLibrary.save(context,song));}
+                catch(Exception error){json=new JSONObject().put("accepted",false)
+                    .put("message",error.getMessage()==null?"Download failed":error.getMessage());}
+            }
             else if(path.startsWith("/v1/playlist/")){
                 String op=path.substring("/v1/playlist/".length()).split("[?]")[0];
                 String name=URLDecoder.decode(getParam(path,"name"),"UTF-8");

@@ -147,7 +147,7 @@ public final class MainActivity extends Activity {
         searchInput.setTextSize(15);
         searchInput.setHintTextColor(SOFT);
         searchInput.setTextColor(PRIMARY);
-        searchInput.setHint("Lagu, artis, atau suasana…");
+        searchInput.setHint("Songs, artists, or moods…");
         searchInput.setPadding(dp(12),0,dp(10),0);
         searchInput.setBackgroundColor(Color.TRANSPARENT);
         searchInput.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
@@ -170,10 +170,10 @@ public final class MainActivity extends Activity {
         hero.setPadding(dp(20),dp(15),dp(18),dp(15));
         TextView eyebrow=text("✦  SOUNDTRACK FOR YOUR WORLD",10,ACCENT,true);
         eyebrow.setLetterSpacing(.11f);add(hero,eyebrow,-1,-2);
-        heroNow=text("Dunia baru, musik baru.",19,PRIMARY,true);
+        heroNow=text("A new world, a new soundtrack.",19,PRIMARY,true);
         heroNow.setSingleLine(true);heroNow.setEllipsize(android.text.TextUtils.TruncateAt.END);
         heroNow.setPadding(0,dp(8),0,dp(2));add(hero,heroNow,-1,-2);
-        TextView hint=text("Cari lagu atau lanjutkan dari mini player",12,SECONDARY,false);
+        TextView hint=text("Search for music or continue from the mini player",12,SECONDARY,false);
         add(hero,hint,-1,-2);
         hero.setOnClickListener(v->expandPlayer(true));
         LinearLayout.LayoutParams heroParams=new LinearLayout.LayoutParams(-1,-2);
@@ -181,7 +181,7 @@ public final class MainActivity extends Activity {
 
         LinearLayout listTitle=new LinearLayout(this);
         listTitle.setGravity(Gravity.CENTER_VERTICAL);
-        libraryTitle=text("Jelajahi musik",18,PRIMARY,true);
+        libraryTitle=text("Discover music",18,PRIMARY,true);
         listTitle.addView(libraryTitle,new LinearLayout.LayoutParams(0,-2,1));
         TextView playlistTab=text("Playlists",13,PRIMARY,true);
         playlistTab.setPadding(dp(9),dp(10),dp(9),dp(10));
@@ -208,7 +208,7 @@ public final class MainActivity extends Activity {
         list.setPadding(0,0,0,dp(22));
         scroller.addView(list);
         mainArea.addView(scroller,new LinearLayout.LayoutParams(-1,0,1));
-        empty=text("Temukan musik untuk menemani dunia Minecraft-mu.\nCari lagu di atas, lalu buka mini player untuk lirik dan antrean.",
+        empty=text("Find a soundtrack for your Minecraft world.\nSearch above, then open the mini player for lyrics and Up Next.",
                 14,SECONDARY,false);
         empty.setGravity(Gravity.CENTER);
         empty.setLineSpacing(dp(5),1.0f);
@@ -295,7 +295,7 @@ public final class MainActivity extends Activity {
         add(controls,next,49,47);
         add(player,controls,-1,58);
 
-        headerStatus=text("Bridge siap menghubungkan musik dan Minecraft",10,SOFT,false);
+        headerStatus=text("Bridge is ready to connect your music and Minecraft",10,SOFT,false);
         headerStatus.setGravity(Gravity.CENTER);
         headerStatus.setPadding(0,dp(9),0,0);
         add(root,headerStatus,-1,25);
@@ -346,7 +346,7 @@ public final class MainActivity extends Activity {
         return b;
     }
     private void search(){
-        showingPlaylists=false;libraryTitle.setText("Jelajahi musik");
+        showingPlaylists=false;libraryTitle.setText("Discover music");
         String query=searchInput.getText().toString().trim();
         if(query.isEmpty()||searching)return;
         searching=true;
@@ -374,7 +374,7 @@ public final class MainActivity extends Activity {
     private void render(List<MusicCatalog.Song> songs){
         searching=false;
         lastSearch=new java.util.ArrayList<>(songs);
-        showingPlaylists=false;libraryTitle.setText("Jelajahi musik");
+        showingPlaylists=false;libraryTitle.setText("Discover music");
         trackCount.setText(songs.size()+" results");
         list.removeAllViews();
         if(songs.isEmpty()){
@@ -423,6 +423,15 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_LRC=1201;
     private static final int REQUEST_PLAYLIST_EXPORT=1202;
     private static final int REQUEST_PLAYLIST_IMPORT=1203;
+    private static final int REQUEST_LOCAL_MUSIC=1204;
+
+    private void importLocalMusic(){
+        Intent intent=new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true);
+        startActivityForResult(intent,REQUEST_LOCAL_MUSIC);
+    }
 
     private void exportPlaylists(){
         Intent intent=new Intent(Intent.ACTION_CREATE_DOCUMENT);
@@ -453,7 +462,23 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int request,int result,Intent data){
         super.onActivityResult(request,result,data);
-        if(result!=RESULT_OK||data==null||data.getData()==null)return;
+        if(result!=RESULT_OK||data==null)return;
+        if(request==REQUEST_LOCAL_MUSIC){
+            java.util.ArrayList<android.net.Uri> selected=new java.util.ArrayList<>();
+            if(data.getClipData()!=null){
+                for(int i=0;i<data.getClipData().getItemCount();i++)
+                    selected.add(data.getClipData().getItemAt(i).getUri());
+            }else if(data.getData()!=null)selected.add(data.getData());
+            headerStatus.setText("Importing local music...");
+            io.execute(()->{
+                try{String message=OfflineLibrary.importFiles(this,selected);
+                    handler.post(()->{headerStatus.setText(message);showPlaylists();});}
+                catch(Exception error){handler.post(()->headerStatus.setText(
+                    "Local import failed: "+error.getMessage()));}
+            });
+            return;
+        }
+        if(data.getData()==null)return;
         if(request==REQUEST_PLAYLIST_EXPORT){
             try(java.io.OutputStream out=getContentResolver().openOutputStream(data.getData())){
                 if(out==null)throw new java.io.IOException("No output stream");
@@ -583,6 +608,12 @@ public final class MainActivity extends Activity {
         importUrl.setOnClickListener(v->importPublicPlaylist());
         LinearLayout.LayoutParams importMargin=new LinearLayout.LayoutParams(-1,-2);
         importMargin.bottomMargin=dp(12);list.addView(importUrl,importMargin);
+        TextView importLocal=text("+ Import local audio and matching LRC",13,PRIMARY,true);
+        importLocal.setPadding(dp(15),dp(15),dp(15),dp(15));
+        importLocal.setBackground(bg(SURFACE,12));
+        importLocal.setOnClickListener(v->importLocalMusic());
+        LinearLayout.LayoutParams localMargin=new LinearLayout.LayoutParams(-1,-2);
+        localMargin.bottomMargin=dp(12);list.addView(importLocal,localMargin);
         org.json.JSONArray items=PlaylistStore.list(this,"").optJSONArray("playlists");
         if(items==null||items.length()==0){
             TextView empty=text("No playlists yet. Tap + New to create one.",14,SECONDARY,false);
@@ -679,7 +710,7 @@ public final class MainActivity extends Activity {
         searchBar.setVisibility(tab==0?View.VISIBLE:View.GONE);
         mainArea.setVisibility(View.VISIBLE);
         homeHero.setVisibility(tab==0?View.VISIBLE:View.GONE);
-        if(tab==0){render(lastSearch);libraryTitle.setText("Jelajahi musik");}
+        if(tab==0){render(lastSearch);libraryTitle.setText("Discover music");}
         else if(tab==1)showPlaylists();
         else showSettingsTab();
         for(int i=0;i<navigation.getChildCount();i++)
@@ -809,7 +840,7 @@ public final class MainActivity extends Activity {
             slot.bottomMargin=dp(8);queueList.addView(row,slot);
         }
         if(tracks==null||tracks.length()==0){
-            TextView help=text("Antrean masih kosong. Cari lagu dan tambahkan lewat menu ⋮.",14,SECONDARY,false);
+            TextView help=text("Up Next is empty. Search for a song and add it from the ⋮ menu.",14,SECONDARY,false);
             help.setPadding(dp(14),dp(20),dp(14),dp(20));add(queueList,help,-1,-2);
         }
         loadedQueueId=id;
@@ -819,7 +850,7 @@ public final class MainActivity extends Activity {
         setDetailTab(1);
         JSONObject state=PlayerService.getStatus();
         if(state==null||!state.optBoolean("available")){
-            lyricPanel.showMessage("Putar lagu untuk melihat lirik tersinkron");return;
+            lyricPanel.showMessage("Play a song to view synchronized lyrics");return;
         }
         String id=state.optString("id");
         if(id.equals(loadedLyricId)||id.equals(requestedLyricId))return;
@@ -827,7 +858,7 @@ public final class MainActivity extends Activity {
         int duration=state.optInt("durationMs");
         MusicCatalog.Song song=MusicCatalog.find(id);
         requestedLyricId=id;
-        lyricPanel.showMessage("Mencari lirik tersinkron…");
+        lyricPanel.showMessage("Finding synchronized lyrics…");
         io.execute(()->{
             JSONObject result=LyricsFinder.find(this,title,artist,duration,
                 song==null?"":song.url,LyricsStore.romanizationLanguage(this));
@@ -858,7 +889,7 @@ public final class MainActivity extends Activity {
                 currentArtist.setText(state.optString("artist",""));
                 miniTitle.setText(state.optString("title","Nothing playing"));
                 miniArtist.setText(state.optString("artist",""));
-                heroNow.setText(state.optString("title","Dunia baru, musik baru."));
+                heroNow.setText(state.optString("title","A new world, a new soundtrack."));
                 miniPlay.setImageResource(state.optBoolean("playing")?R.drawable.ic_pause:R.drawable.ic_play);
                 boolean playing=state.optBoolean("playing");
                 playButton.setImageResource(playing?R.drawable.ic_pause:R.drawable.ic_play);

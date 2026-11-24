@@ -4,9 +4,9 @@ LeviMusic is a client-side music mod for Minecraft Bedrock on LeviLauncher Andro
 
 ## Offline music and playlist import
 
-Full mode can save a searched song and its available synchronized LRC through the Bridge app. Saved audio appears in the automatically created Offline playlist and plays from private app storage. Standalone reads compatible audio files and matching same-stem .lrc files from the mod configuration directory's music folder. Format decoding depends on Android MediaPlayer.
+Full mode saves a searched song and available synchronized LRC from the Bridge app or the in-game **DL** button. The Bridge app also imports local audio files and matching `.lrc` files via Android's document picker; a later LRC-only import can match a song already in Offline. Standalone downloads a searched online track and available lyrics with the in-game **DL** button, or scans manually placed audio and same-stem `.lrc` in the mod configuration directory's `music/` folder. Both variants show saved tracks in Offline. Android codec support determines playable formats.
 
-Public YouTube and YouTube Music playlist URLs can be imported from the Bridge app or the in-game playlist field. Bridge retains the source playlist name. Standalone reads entries from the public YouTube page; incomplete or inaccessible pages may prevent or limit imports. Imported lists are stored locally, without downloading their audio.
+Public YouTube and YouTube Music playlist URLs can be imported from the Bridge app or in-game playlist field. Bridge first uses its NewPipe extractor and falls back to the Aurelis playlist API. Standalone uses Aurelis first, then a public YouTube page parser. The track list is saved locally without downloading audio. Private or inaccessible playlists and unavailable entries cannot be imported.
 
 ## Player and playlists
 

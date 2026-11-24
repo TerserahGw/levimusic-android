@@ -104,29 +104,68 @@ public final class MusicCatalog {
             list==null||!list.matches("[A-Za-z0-9_-]{10,100}"))
             throw new IllegalArgumentException("Use a public YouTube or YouTube Music playlist URL");
         String canonical="https://www.youtube.com/playlist?list="+list;
-        initialize();
-        PlaylistExtractor extractor=ServiceList.YouTube.getPlaylistExtractor(canonical);
-        extractor.fetchPage();
-        String name=extractor.getName();
-        List<Song> songs=new ArrayList<>();
-        java.util.HashSet<String> ids=new java.util.HashSet<>();
-        ListExtractor.InfoItemsPage<StreamInfoItem> page=extractor.getInitialPage();
-        for(int pages=0;page!=null&&pages<15&&songs.size()<300;pages++){
-            for(StreamInfoItem stream:page.getItems()){
-                String id=idFromUrl(stream.getUrl());
-                if(id.isEmpty()||!ids.add(id))continue;
-                String art="";
-                if(stream.getThumbnails()!=null&&!stream.getThumbnails().isEmpty())
-                    art=stream.getThumbnails().get(stream.getThumbnails().size()-1).getUrl();
-                if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
-                songs.add(new Song(id,stream.getName(),stream.getUploaderName(),
-                    "https://www.youtube.com/watch?v="+id,art,
-                    Math.max(0,stream.getDuration())*1000L));
-                if(songs.size()>=300)break;
+        Exception primaryFailure=null;
+        try {
+            initialize();
+            PlaylistExtractor extractor=ServiceList.YouTube.getPlaylistExtractor(canonical);
+            extractor.fetchPage();
+            String name=extractor.getName();
+            List<Song> songs=new ArrayList<>();
+            java.util.HashSet<String> ids=new java.util.HashSet<>();
+            ListExtractor.InfoItemsPage<StreamInfoItem> page=extractor.getInitialPage();
+            for(int pages=0;page!=null&&pages<15&&songs.size()<300;pages++){
+                for(StreamInfoItem stream:page.getItems()){
+                    String id=idFromUrl(stream.getUrl());
+                    if(id.isEmpty()||!ids.add(id))continue;
+                    String art="";
+                    if(stream.getThumbnails()!=null&&!stream.getThumbnails().isEmpty())
+                        art=stream.getThumbnails().get(stream.getThumbnails().size()-1).getUrl();
+                    if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
+                    songs.add(new Song(id,stream.getName(),stream.getUploaderName(),
+                        "https://www.youtube.com/watch?v="+id,art,
+                        Math.max(0,stream.getDuration())*1000L));
+                    if(songs.size()>=300)break;
+                }
+                page=page.getNextPage()==null?null:extractor.getPage(page.getNextPage());
             }
-            page=page.getNextPage()==null?null:extractor.getPage(page.getNextPage());
+            if(!songs.isEmpty())return new ImportedPlaylist(name,songs);
+        }catch(Exception error){primaryFailure=error;}
+        try {
+            String endpoint="https://aurelis-symphony.go.altare.global/api/v1/playlists/import?url="+
+                java.net.URLEncoder.encode(canonical,"UTF-8");
+            try(okhttp3.Response response=CLIENT.newCall(new okhttp3.Request.Builder().url(endpoint).build()).execute()){
+                if(!response.isSuccessful()||response.body()==null)throw new IOException("Aurelis playlist service unavailable");
+                String body=response.body().string();
+                if(body.length()>4_000_000)throw new IOException("Playlist response too large");
+                JSONObject root=new JSONObject(body);
+                JSONObject info=root.optJSONObject("playlist");
+                org.json.JSONArray entries=root.optJSONArray("tracks");
+                if(entries==null)throw new IOException("Playlist response has no tracks");
+                String name=info==null?"":info.optString("title");
+                if(name.isEmpty())name="YouTube "+list;
+                List<Song> songs=new ArrayList<>();
+                java.util.HashSet<String> ids=new java.util.HashSet<>();
+                for(int i=0;i<Math.min(entries.length(),300);i++){
+                    JSONObject item=entries.optJSONObject(i);
+                    if(item==null)continue;
+                    String id=item.optString("id");
+                    if(!id.matches("[A-Za-z0-9_-]{11}"))id=idFromUrl(item.optString("url"));
+                    if(!id.matches("[A-Za-z0-9_-]{11}")||!ids.add(id))continue;
+                    String title=item.optString("title",item.optString("name",id));
+                    String artist=item.optString("artist",item.optString("author",item.optString("uploader","YouTube")));
+                    String art=item.optString("artwork",item.optString("thumbnail",item.optString("art","")));
+                    if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
+                    long duration=item.optLong("duration",0);
+                    songs.add(new Song(id,title,artist,"https://www.youtube.com/watch?v="+id,art,
+                        Math.max(0,duration)*1000L));
+                }
+                if(songs.isEmpty())throw new IOException("Aurelis returned no playable tracks");
+                return new ImportedPlaylist(name,songs);
+            }
+        }catch(Exception fallback){
+            if(primaryFailure!=null)fallback.addSuppressed(primaryFailure);
+            throw fallback;
         }
-        return new ImportedPlaylist(name,songs);
     }
 
     public static synchronized Song find(String id){

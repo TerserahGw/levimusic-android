@@ -56,9 +56,9 @@ Standalone uses the hosted Aurelis Symphony API. It needs internet access but no
 
 ## New in v1.6.0
 
-- Import a public YouTube or YouTube Music playlist URL from **Playlists** in the Bridge app, or paste it into the in-game playlist name field. Imported track lists are saved locally. The Bridge uses the provider's playlist title; Standalone names it by playlist ID. Private playlists are not supported, and Standalone's YouTube page parser may not retrieve every page.
-- In Full mode, choose **Save to Offline** on a search result. Bridge saves the audio in private app storage, stores available synchronized LRC, and creates an **Offline** playlist. Downloaded audio plays without a network connection; adding new music still needs internet.
-- In Standalone, place audio files and an optional matching `.lrc` file in the mod configuration directory's `music/` folder (beside `settings.conf`). Open **Playlists → Offline**, or search for `offline`. Supported extensions: MP3, M4A, AAC, OGG, Opus, FLAC, WAV, MP4, and WebM, subject to Android's codec support.
+- Import a public YouTube or YouTube Music playlist URL from **Playlists** in the Bridge app, or paste it into the in-game playlist name field. Bridge uses NewPipeExtractor first and Aurelis as a fallback; Standalone uses Aurelis first and a public page fallback. The playlist title and track list are stored locally. Private playlists and unavailable entries cannot be imported.
+- In Full mode, use **Save to Offline** in the Bridge app or tap **DL** on an in-game search result. Bridge saves audio and any available synchronized LRC into an automatically created **Offline** playlist. You can also import local audio files and matching `.lrc` files together through the Bridge app's Android file picker, or add a matching LRC later.
+- In Standalone, tap **DL** on an in-game online search result to download its audio and available synchronized lyrics. You can also place audio files and same-name `.lrc` files manually in the mod configuration directory's `music/` folder (beside `settings.conf`). Open **Playlists → Offline**, or search for `offline`. Supported extensions: MP3, M4A, AAC, OGG, Opus, FLAC, WAV, MP4, and WebM, subject to Android's codec support.
 - Rename or delete playlists from the in-game list using **R** and **X**; tap **X** twice to confirm deletion. Bridge playlists can also be renamed or deleted in the app. Removing a playlist does not delete its downloaded audio.
 
 ## Changes in v1.5.1 stable

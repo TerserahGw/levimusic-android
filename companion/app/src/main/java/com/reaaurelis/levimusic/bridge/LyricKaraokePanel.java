@@ -49,9 +49,9 @@ final class LyricKaraokePanel extends LinearLayout {
         rows=new LinearLayout(context);rows.setOrientation(VERTICAL);
         rows.setPadding(dp(7),dp(12),dp(7),dp(85));
         scroll.addView(rows);addView(scroll,new LayoutParams(-1,0,1));
-        empty=label("Putar lagu untuk melihat lirik tersinkron",15,MUTED,false);
+        empty=label("Play a song to view synchronized lyrics",15,MUTED,false);
         empty.setGravity(Gravity.CENTER);empty.setPadding(dp(16),dp(56),dp(16),dp(56));
-        showMessage("Putar lagu untuk melihat lirik tersinkron");
+        showMessage("Play a song to view synchronized lyrics");
     }
     private int dp(float n){return (int)(getResources().getDisplayMetrics().density*n+.5f);}
     private GradientDrawable surface(int fill,float radius){
@@ -103,7 +103,7 @@ final class LyricKaraokePanel extends LinearLayout {
         rows.removeAllViews();scroll.scrollTo(0,0);
         heading.setText("✦  LIVE LYRICS"+(source==null||source.isEmpty()?"":"  ·  "+source));
         if(cues.isEmpty()){
-            showMessage("Belum ada lirik tersinkron untuk lagu ini. Kamu bisa impor LRC di Pengaturan.");
+            showMessage("No synchronized lyrics for this song. You can import an LRC file in Settings.");
             return;
         }
         Map<Long,String> reading=new HashMap<>();

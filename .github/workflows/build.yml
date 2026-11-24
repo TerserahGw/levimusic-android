@@ -273,7 +273,7 @@ jobs:
           fi
 
       - name: Prepare version notes
-        if: github.ref == 'refs/heads/main' && steps.release_check.outputs.exists != 'true' && steps.signing.outputs.enabled == 'true'
+        if: github.ref == 'refs/heads/main' && steps.signing.outputs.enabled == 'true'
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
@@ -295,9 +295,9 @@ jobs:
                   "Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64. The 3D world renderer includes exact profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1.",
                   "",
                   "## Changes since v1.5.1",
-                  "- Import public YouTube / YouTube Music playlist URLs. Bridge stores the source title; Standalone stores a local playlist named from its ID. Private playlists are not supported. Standalone import may be limited by changes to the public YouTube page.",
-                  "- Full mode: Save to Offline downloads a searched song and available LRC through the Bridge APK into an automatically created Offline playlist.",
-                  "- Standalone: Place supported audio files and same-name .lrc files in the mod configuration directory's music folder, then open Playlists → Offline. Playback format support depends on Android's decoder.",
+                  "- Import public YouTube / YouTube Music playlists. Bridge tries NewPipe first and falls back to the Aurelis playlist API; Standalone tries Aurelis first and the public YouTube page as fallback. Lists are saved locally.",
+                  "- Full mode: Save to Offline in Bridge or DL in-game downloads a searched song and available LRC. Bridge can also import local audio and same-name LRC files using Android's file picker.",
+                  "- Standalone: DL in-game saves searched audio and available synced lyrics. Manually added audio with a matching .lrc in the mod configuration directory's music folder remains supported. Saved tracks appear in Offline.",
                   "- Rename and delete playlists in game; the Bridge app also offers playlist management.",
                   "",
                   "Choose one LeviPack variant. Full mode requires the matching Bridge APK; Standalone uses Aurelis for online playback.",
@@ -353,11 +353,19 @@ jobs:
           set -euo pipefail
           release_flags=()
           if [[ "$CHANNEL" == beta ]]; then release_flags+=(--prerelease); fi
-          gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
-            --target "$GITHUB_SHA" \
-            "${release_flags[@]}" \
-            --title "LeviMusic - Aurelis Online v$VERSION" \
-            --notes-file release-notes.md
-          echo "Published release $TAG with $PACKAGE."
+          if [[ "${{ steps.release_check.outputs.exists }}" == true ]]; then
+            gh release upload "$TAG" "$PACKAGE" "$STANDALONE" "$APK" --clobber
+            gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file release-notes.md
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
+              -f sha="$GITHUB_SHA" -F force=true >/dev/null
+            echo "Replaced release $TAG assets and updated its source tag."
+          else
+            gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
+              --target "$GITHUB_SHA" \
+              "${release_flags[@]}" \
+              --title "LeviMusic - Aurelis Online v$VERSION" \
+              --notes-file release-notes.md
+            echo "Published release $TAG with $PACKAGE."
+          fi
 
 
