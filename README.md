@@ -33,7 +33,7 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 | Game / launcher | Minecraft Bedrock running through LeviLauncher Android with a compatible native mod loader |
 | Core music features | Full mode uses Bridge; Standalone defaults to the hosted Aurelis Symphony API and needs internet access, without a user-run server |
 | 3D world lyrics | Native profiles for Minecraft **1.26.52**, **1.26.60**, **1.26.62.1**, and **1.26.66.1** (exact ARM64 Build ID only), and only when the ARM64 binary's Build ID/signatures match |
-| Minecraft 1.26.66.1 | Exact binary profile added in v1.6.0; **3D runtime behavior has not yet been verified on a device and may be less stable** |
+| Minecraft 1.26.66.1 | Exact binary profile added in v1.5.1; the maintainer reported working 3D lyrics on this version. v1.6.0 still needs device testing |
 
 **Important:** A successful CI build does not prove on-device compatibility. The renderer checks native game signatures and may refuse to activate on an unmatched game binary. Do not assume all Minecraft patch versions support 3D lyrics.
 
@@ -63,7 +63,7 @@ Standalone uses the hosted Aurelis Symphony API. It needs internet access but no
 
 ## Changes in v1.5.1 stable
 
-- Added an exact ARM64 3D renderer profile for Minecraft 1.26.66.1 based on its Build ID and seven verified instruction signatures. Runtime testing on this version is still pending; 3D may be less stable.
+- Added an exact ARM64 3D renderer profile for Minecraft 1.26.66.1 based on its Build ID and seven verified instruction signatures. The maintainer reported 3D lyrics working on 1.5.1; changes in 1.6.0 still need device testing.
 
 ## Previous v1.5.0 changes
 
