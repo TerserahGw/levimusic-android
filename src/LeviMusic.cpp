@@ -3747,6 +3747,7 @@ private:
                         break;
                     }
                     case Action::Select:playSelected();break;
+#if defined(LEVI_STANDALONE)
                     case Action::OfflineSave:{
                         Track track;std::string server;
                         {std::lock_guard lock(mu_);
@@ -3772,7 +3773,8 @@ private:
                         }
                         try{
                             std::ofstream meta(folder/(track.id+".meta"),std::ios::trunc);
-                            meta<<std::quoted(track.title)<<' '\n+                                <<std::quoted(track.artist)<<' '<<std::quoted(track.art)<<'\n';
+                            meta<<std::quoted(track.title)<<' '
+                                <<std::quoted(track.artist)<<' '<<std::quoted(track.art)<<'\n';
                         }catch(...){}
                         update("Saving lyrics",track.title,"Checking synchronized LRC...");
                         auto lyrics=aurelisLyrics(env,server,track,0);
@@ -3793,6 +3795,7 @@ private:
                                            "Audio and synchronized lyrics saved");
                         break;
                     }
+#endif
                     case Action::PlayPause:
                         if(player.isPlaying(env)){
                             player.toggle(env);{std::lock_guard lock(mu_);playing_=false;}
