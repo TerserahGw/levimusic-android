@@ -13,7 +13,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  sync-english-notes:
+    if: contains(github.event.head_commit.message, '[sync-english-notes]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout English release notes
+        uses: actions/checkout@v4
+      - name: Update the existing v1.5.0 release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit v1.5.0 --notes-file release-notes/v1.5.0.md
+
   build-and-release:
+    if: ${{ !contains(github.event.head_commit.message, '[sync-english-notes]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code and version tags
@@ -265,6 +277,7 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PREVIOUS_TAG: ${{ steps.version.outputs.previous_tag }}
+          CHANNEL: ${{ steps.version.outputs.channel }}
         shell: bash
         run: |
           python3 - <<'PY'
@@ -272,20 +285,21 @@ jobs:
           from pathlib import Path
 
           version = os.environ["VERSION"]
+          channel = os.environ["CHANNEL"]
+          previous = os.environ.get("PREVIOUS_TAG", "")
+          label = "beta" if channel == "beta" else "stable"
           notes = "\n".join([
-              f"# LeviMusic - Aurelis Online v{version} stable",
+              f"# LeviMusic - Aurelis Online v{version} {label}",
               "",
-              "Mod musik client-only untuk Minecraft Bedrock melalui LeviLauncher Android ARM64. Lirik 3D tampil di world hanya untuk pemain lokal; Bridge APK menyediakan pemutar, antrean, dan lirik tersinkron.",
+              "A client-side music player for Minecraft Bedrock on LeviLauncher Android ARM64. World-space 3D lyrics are visible only to the local player.",
               "",
-              "## Versi Minecraft yang didukung untuk lirik 3D",
-              "- 1.26.52, 1.26.60, dan 1.26.62.1 pada profil ARM64 dengan Build ID yang cocok. Minecraft 1.26.66.1 dapat menjalankan mod musik jika loader memuatnya, tetapi renderer 3D menunggu pemeriksaan binary ARM64 versi tersebut.",
+              "## Minecraft compatibility",
+              "- 3D world lyrics are supported on matching ARM64 Build IDs for Minecraft 1.26.52, 1.26.60, and 1.26.62.1. Core music may run on 1.26.66.1 if the loader accepts the mod; 3D rendering remains unverified there.",
               "",
-              "## Perubahan dari v1.4.6 beta",
-              "- Default pengaturan lirik 3D mengikuti preset pengguna; pengaturan lama tetap dipertahankan. Menu setting in-game kini dibagi empat halaman yang mudah disentuh.",
-              "- Playlist dapat dibuat, ditambah dari hasil pencarian, dan lagu dapat dihapus dari playlist langsung di menu game. Standalone menyimpan playlist lokal; Bridge memigrasikan playlist lama ke file atomik dengan cadangan.",
-              "- Penyimpanan settings.conf dan playlist Standalone memakai file sementara dan cadangan agar lebih tahan terhadap kegagalan tulis.",
+              "## Changes",
+              f"[Review changes since {previous}](https://github.com/TerserahGw/levimusic-android/compare/{previous}...v{version})" if previous else "See the repository history for changes in this release.",
               "",
-              "Gunakan paket Standalone tanpa Bridge APK; koneksi internet ke Aurelis Symphony tetap diperlukan. Jangan aktifkan kedua varian LeviPack sekaligus.",
+              "Choose one LeviPack variant. Full mode needs the matching Bridge APK; Standalone uses the hosted Aurelis Symphony service and requires internet access.",
               "",
           ])
           Path("release-notes.md").write_text(notes, encoding="utf-8")

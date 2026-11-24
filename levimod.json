@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
   "id": "levimusic",
-  "version": "1.3.6",
+  "version": "1.5.0",
   "minecraft_versions": [
     "1.26.52",
     "1.26.60",
     "1.26.62.1"
   ],
   "info": {
-    "name": "LeviMusic Online",
-    "author": "ReaAurelis",
-    "summary": "Client-side music player with synchronized and experimental 3D lyrics for LeviLauncher Android. Full mode also requires the Bridge APK.",
-    "description": "LeviMusic adds music search, playback controls, artwork, editable Up Next queue, saved playlists, word-synchronized lyrics, romanization, and optional client-only 3D world lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. For the full player, install the separate LeviMusic Bridge APK from GitHub Releases alongside the standard LeviPack. The Standalone LeviPack instead requires your own ChruPipe server. 3D world lyrics depend on a matching Minecraft ARM64 Build ID; Minecraft 1.26.66.1 3D support is not verified.",
+    "name": "LeviMusic - Aurelis Online",
+    "author": "Liliyana Rea de Aurelis",
+    "summary": "Client-side music player with synchronized 2D and 3D world lyrics for LeviLauncher Android. Full mode requires the Bridge APK.",
+    "description": "LeviMusic adds music search, playback, an editable Up Next queue, user playlists, word-synchronized lyrics, romanization, and client-only 3D floating lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. Full mode uses the matching LeviMusic Bridge APK. Standalone connects to the hosted Aurelis Symphony API and does not require an APK or user-run server, but it does need internet access. Native 3D world lyrics require a matching Minecraft ARM64 Build ID; 1.26.66.1 3D rendering is not yet verified.",
     "homepage_url": "https://github.com/TerserahGw/levimusic-android",
     "tags": [
       "Music",
@@ -25,9 +25,9 @@
       "*.levipack"
     ],
     "labels": {
-      "LeviMusic-1.3.6-arm64-v8a.levipack": "Full mod — requires Bridge APK",
-      "LeviMusic-Standalone-1.3.6-arm64-v8a.levipack": "Standalone — requires ChruPipe server"
+      "LeviMusic-1.5.0-arm64-v8a.levipack": "Full mod — install the matching Bridge APK",
+      "LeviMusic-Standalone-1.5.0-arm64-v8a.levipack": "Standalone — uses hosted Aurelis Symphony"
     }
   },
-  "changelog": "v1.3.6: Smoother segmented 3D lyric transitions; QQ Music QRC word-timing support; redesigned Android Bridge player, artwork, queue, and synchronized word-highlighting lyric timeline. 3D support for Minecraft 1.26.66.1 is not verified."
+  "changelog": "v1.5.0 stable: LeviMusic - Aurelis Online naming, saved 3D lyric defaults, four-page in-game settings, playlist creation and editing in both variants, and safer playlist/settings storage with backups."
 }
