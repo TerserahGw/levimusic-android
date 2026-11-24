@@ -63,7 +63,7 @@ struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;Vec3 p
 inline Pose pose;
 inline std::string currentLine;
 struct Pixel{float x,y;uint8_t word=0,coverage=255;};
-struct GlyphMesh{std::vector<Pixel> pixels;float width=0,scale=.011f;};
+struct GlyphMesh{std::vector<Pixel> pixels,outline;float width=0,scale=.011f;};
 inline std::shared_ptr<const std::vector<GlyphMesh>> currentMeshes;
 inline uint32_t currentStyle=0;
 inline std::vector<lm_timing::WordCue> currentWords;
@@ -218,6 +218,41 @@ inline std::vector<Pixel> glyphs(std::string_view text){
     }
     return result;
 }
+// Build two separate silhouettes: colored glyph coverage and an outer contour.
+// The dark contour only occupies empty cells beside a glyph, never each pixel.
+inline GlyphMesh rasterMesh(std::span<const uint8_t> alpha,int width,int height,
+                           int baseline,int step=2){
+    GlyphMesh mesh;
+    if(width<=0||height<=0||step<=0||alpha.size()!=size_t(width)*size_t(height))return mesh;
+    const int cols=(width+step-1)/step,rows=(height+step-1)/step;
+    mesh.width=float(cols);mesh.scale=.0095f;
+    std::vector<uint8_t> cells(size_t(cols)*size_t(rows));
+    for(int cy=0;cy<rows;++cy)for(int cx=0;cx<cols;++cx){
+        int sum=0,n=0;
+        for(int dy=0;dy<step&&cy*step+dy<height;++dy)
+            for(int dx=0;dx<step&&cx*step+dx<width;++dx){
+                sum+=alpha[size_t(cy*step+dy)*size_t(width)+size_t(cx*step+dx)];++n;
+            }
+        cells[size_t(cy)*size_t(cols)+size_t(cx)]=uint8_t(sum/std::max(n,1));
+    }
+    auto pixel=[&](int x,int y,uint8_t coverage){
+        return Pixel{float(x)-float(cols)*.5f,float(baseline)/float(step)-float(y),0,coverage};
+    };
+    for(int y=0;y<rows;++y)for(int x=0;x<cols;++x){
+        const auto at=size_t(y)*size_t(cols)+size_t(x);
+        const uint8_t coverage=cells[at];
+        if(coverage>=12)mesh.pixels.push_back(pixel(x,y,coverage));
+        if(coverage>=32)continue;
+        int adjacent=0;
+        for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){
+            int nx=x+dx,ny=y+dy;
+            if(nx<0||nx>=cols||ny<0||ny>=rows)continue;
+            adjacent=std::max(adjacent,int(cells[size_t(ny)*size_t(cols)+size_t(nx)]));
+        }
+        if(adjacent>=55)mesh.outline.push_back(pixel(x,y,uint8_t(std::min(adjacent,210))));
+    }
+    return mesh;
+}
 inline void publish(std::string_view value,int start=0,int end=0,int position=0,
                     bool playing=false,std::span<const lm_timing::WordCue> words={},
                     std::span<const GlyphMesh> meshes={},uint32_t style=0){
@@ -260,6 +295,7 @@ struct Panel{
     Vec3 visualAnchor{};
     Vec3 spawnPlayer{};
     std::vector<Pixel> pixels;
+    std::vector<Pixel> outline;
     int64_t born=0;
     int64_t appeared=0;
     float entryStrength=0.f;
@@ -426,10 +462,12 @@ inline float panelClearance(Vec3 candidate,float width,Vec3 cam,Vec3 otherAnchor
     Vec3 a=candidate-cam,b=otherAnchor-cam;
     float da=std::sqrt(magnitude2(a)),db=std::sqrt(magnitude2(b));
     if(da<.01f||db<.01f)return -1.f;
-    float horizontal=std::abs(a.x/da-b.x/db)+std::abs(a.z/da-b.z/db);
+    float horizontal=std::hypot(a.x/da-b.x/db,a.z/da-b.z/db);
     float vertical=std::abs(a.y/da-b.y/db);
-    const float minH=(width+otherWidth)*.5f/std::min(da,db)+.07f;
-    const float minV=.18f/std::min(da,db)+.035f;
+    // Compare projected extents, including each word's actual raster width.
+    // The vertical allowance covers a full glyph, not only its baseline.
+    const float minH=width*.5f/da+otherWidth*.5f/db+.07f;
+    const float minV=.22f/da+.22f/db+.035f;
     return std::max(horizontal/minH,vertical/minV);
 }
 inline float panelClearance(Vec3 candidate,float width,Vec3 cam,const Panel& other){
@@ -617,6 +655,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.facing=normalized(cam-panel.anchor);
             panel.right=normalized({panel.facing.z,0,-panel.facing.x});
             panel.pixels=raster?(*meshes)[i].pixels:glyphs(parts[i]);
+            if(raster)panel.outline=(*meshes)[i].outline;
             panel.born=scene.words.empty()?now+int64_t(i)*spacing:now;
             scene.panels.push_back(std::move(panel));
         }
@@ -654,6 +693,9 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     if(pulse!=scene.lastBeatPulse&&!freshPulse)scene.lastBeatPulse=pulse;
     const float followDt=1.f-std::exp(-dt*.001f*7.f);
     const float liftDt=1.f-std::exp(-dt/135.f);
+    int newestWord=-1;
+    for(size_t i=0;i<scene.words.size();++i)
+        if(position>=float(scene.words[i].startMs))newestWord=int(i);
     auto follow=[&](std::vector<Panel>& panels){for(auto& panel:panels){
         if(lyricTrailFollow.load()){
             const float age=cueProgress(position,panel.cueStart,panel.cueEnd);
@@ -692,7 +734,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
                     if(alignment>.94f&&distance>std::sqrt(magnitude2(playerRay))+.35f)
                         score=-4.f; // player would hide the lyric
                 }
-                for(const auto& old:scene.panels)if(old.appeared)
+                for(const auto& old:scene.panels)if(old.appeared&&
+                    (old.sourceWord<0||newestWord-old.sourceWord<4))
                     score=std::min(score,panelClearance(candidate,panel.width,cam,
                         old.visualAnchor+Vec3{0,old.visualLift,0},old.width));
                 for(const auto& old:scene.previous)if(old.appeared&&old.visibleAlpha>.05f)
@@ -718,13 +761,17 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     if(activeFade<=0.f)for(auto& panel:scene.panels)panel.visibleAlpha=0.f;
     auto timedAlpha=[&](const Panel& panel,uint8_t localWord){
         if(scene.words.empty())return 1.f;
-        const int index=lm_timing::sourceWordIndex(panel.wordBase+int(localWord),
-            scene.displayWords,int(scene.words.size()));
+        const int index=scene.displayWords==1?panel.sourceWord:
+            lm_timing::sourceWordIndex(panel.wordBase+int(localWord),
+                scene.displayWords,int(scene.words.size()));
         if(index<0)return 1.f;
         const auto& word=scene.words[static_cast<size_t>(index)];
         if(position<float(word.startMs))return 0.f;
         const float entry=std::max(.03f,smoothstep((position-float(word.startMs))/160.f));
-        return entry*(position<float(word.endMs)?1.f:.84f);
+        float trail=1.f;
+        if(index+4<int(scene.words.size())&&newestWord-index>=4)
+            trail=1.f-smoothstep((position-float(scene.words[size_t(index+4)].startMs))/380.f);
+        return entry*(position<float(word.endMs)?1.f:.84f)*trail;
     };
     ColorGuard guard(colors);
     size_t count=0;
@@ -733,15 +780,16 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         for(const auto& panel:scene.panels)if(panel.appeared){
             size_t visible=0;
             for(const auto& pixel:panel.pixels)if(timedAlpha(panel,pixel.word)>0.f)++visible;
+            for(const auto& pixel:panel.outline)if(timedAlpha(panel,pixel.word)>0.f)++visible;
             count+=visible;
             if(visible)currentPart=panel.partIndex;
         }
     if(fading)for(const auto& panel:scene.previous)if(panel.appeared&&
         panel.transitionAlpha*transitionFade(now,scene.previousFadeStart,
             panel.partIndex*scene.previousStagger+(panel.wordCount-1)*65,1)>0.f)
-        count+=panel.pixels.size();
+        count+=panel.pixels.size()+panel.outline.size();
     if(!count)return;
-    tessBegin(tess,nullptr,1,int(count*20),0);
+    tessBegin(tess,nullptr,1,int(count*4),0);
     auto draw=[&](const Panel& panel,float alpha,float lift,bool leaving=false){
         if(alpha<=0.f)return;
         const float baseScale=panel.pixelScale*float(panel.fontPercent)*.01f;
@@ -764,23 +812,22 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             lift+=panel.visualLift;
         }
         auto quad=[&](Vec3 tl){
-            auto tr=tl+right*(scale*.88f),bl=tl-up*(scale*.88f),br=tr-up*(scale*.88f);
+            auto tr=tl+right*(scale*.98f),bl=tl-up*(scale*.98f),br=tr-up*(scale*.98f);
             for(auto p:{bl,br,tr,tl})tessVertex(tess,p.x,p.y,p.z);
         };
-        for(int pass=0;pass<5;++pass){
-            const bool outline=pass<4;
-            const float dx=pass==0?-.12f:pass==1?.12f:0.f;
-            const float dy=pass==2?-.12f:pass==3?.12f:0.f;
-            auto origin=anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
-            for(const auto& p:panel.pixels){
+        for(int pass=0;pass<2;++pass){
+            const bool outline=pass==0;
+            const auto origin=anchor-cam+up*lift+panel.facing*(outline?0.f:.001f);
+            const auto& pixels=outline?panel.outline:panel.pixels;
+            for(const auto& p:pixels){
                 const float reveal=leaving?1.f:timedAlpha(panel,p.word);
                 if(reveal<=0.f)continue;
                 const auto tint=lyricTint(panel.partIndex,p.word);
                 const float wordAlpha=leaving?transitionFade(now,scene.previousFadeStart,
                     panel.partIndex*scene.previousStagger+int(p.word)*65,1):1.f;
                 tessColor(tess,outline?0.f:tint[0],outline?0.f:tint[1],outline?0.f:tint[2],
-                          alpha*wordAlpha*reveal*(outline?.45f:1.f)*float(p.coverage)/255.f);
-                quad(origin+right*((p.x+dx)*scale)+up*((p.y+dy)*scale));
+                          alpha*wordAlpha*reveal*(outline?.72f:1.f)*float(p.coverage)/255.f);
+                quad(origin+right*(p.x*scale)+up*(p.y*scale));
             }
         }
     };

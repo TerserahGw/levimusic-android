@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "LeviMusic Standalone - Aurelis Symphony",
   "author": "ReaAurelis",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "entry": "liblevimusic_standalone.so",
   "minecraft_versions": []
 }

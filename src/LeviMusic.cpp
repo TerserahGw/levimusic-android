@@ -136,6 +136,9 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
        !bitmapClass||!configClass)return false;
     auto paintCtor=env->GetMethodID(paintClass,"<init>","(I)V");
     auto setSize=env->GetMethodID(paintClass,"setTextSize","(F)V");
+    auto setScale=env->GetMethodID(paintClass,"setTextScaleX","(F)V");
+    auto setSkew=env->GetMethodID(paintClass,"setTextSkewX","(F)V");
+    auto setBold=env->GetMethodID(paintClass,"setFakeBoldText","(Z)V");
     auto setFace=env->GetMethodID(paintClass,"setTypeface",
         "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
     auto setColor=env->GetMethodID(paintClass,"setColor","(I)V");
@@ -152,7 +155,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         "(Ljava/lang/String;FFLandroid/graphics/Paint;)V");
     auto configField=env->GetStaticFieldID(configClass,"ARGB_8888",
         "Landroid/graphics/Bitmap$Config;");
-    if(clearException(env,"world font methods")||!paintCtor||!setSize||!setFace||!setColor||
+    if(clearException(env,"world font methods")||!paintCtor||!setSize||!setScale||!setSkew||!setBold||!setFace||!setColor||
        !measure||!hasGlyph||!faceCreate||!bitmapCreate||!getPixels||!recycle||
        !canvasCtor||!draw||!configField)return false;
     jobject config=env->GetStaticObjectField(configClass,configField);
@@ -161,7 +164,12 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
     jstring family=toJava(env,families[std::clamp(font,0,3)]);
     jobject face=family?env->CallStaticObjectMethod(faceClass,faceCreate,family,0):nullptr;
     if(paint&&face){
-        env->CallVoidMethod(paint,setSize,18.f);
+        env->CallVoidMethod(paint,setSize,36.f);
+        // Android may choose the same CJK fallback for several family names.
+        // Give every choice a visible weight, slant, or width of its own.
+        env->CallVoidMethod(paint,setScale,font==3?.82f:font==2?1.08f:1.f);
+        env->CallVoidMethod(paint,setSkew,font==1?-.12f:0.f);
+        env->CallVoidMethod(paint,setBold,font==2?JNI_TRUE:JNI_FALSE);
         env->CallVoidMethod(paint,setColor,jint(0xFFFFFFFFU));
         jobject old=env->CallObjectMethod(paint,setFace,face);
         if(old)env->DeleteLocalRef(old);
@@ -174,8 +182,8 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         // Missing font glyphs should be handled by romanized fallback, not boxes.
         if(!env->CallBooleanMethod(paint,hasGlyph,text))ok=false;
         const float measured=ok?env->CallFloatMethod(paint,measure,text):0.f;
-        const int width=std::clamp(int(std::ceil(measured))+5,6,240);
-        constexpr int height=26;
+        const int width=std::clamp(int(std::ceil(measured))+7,8,420);
+        constexpr int height=48;
         jobject bitmap=ok?env->CallStaticObjectMethod(bitmapClass,bitmapCreate,
             width,height,config):nullptr;
         jobject canvas=bitmap?env->NewObject(canvasClass,canvasCtor,bitmap):nullptr;
@@ -183,7 +191,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         if(!bitmap||!canvas||!pixels||clearException(env,"world font bitmap"))ok=false;
         lm_world3d::GlyphMesh mesh;
         if(ok){
-            env->CallVoidMethod(canvas,draw,text,2.f,20.f,paint);
+            env->CallVoidMethod(canvas,draw,text,3.f,39.f,paint);
             env->CallVoidMethod(bitmap,getPixels,pixels,0,width,0,0,width,height);
             if(clearException(env,"world font draw"))ok=false;
             else {
@@ -191,20 +199,9 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
                 env->GetIntArrayRegion(pixels,0,width*height,rgba.data());
                 if(clearException(env,"world font coverage"))ok=false;
                 else {
-                    // 2x2 coverage cells bound tessellation cost on long lines.
-                    constexpr int step=2;
-                    mesh.width=float(width/step);
-                    mesh.scale=.008f*step;
-                    mesh.pixels.reserve(300);
-                    for(int y=0;y<height;y+=step)for(int x=0;x<width;x+=step){
-                        int coverage=0;
-                        for(int dy=0;dy<step&&y+dy<height;++dy)
-                            for(int dx=0;dx<step&&x+dx<width;++dx)
-                                coverage=std::max(coverage,int((uint32_t(rgba[(y+dy)*width+x+dx])>>24)&255U));
-                        if(coverage>=28)
-                            mesh.pixels.push_back({float(x-width/2)/step,
-                                float(19-y)/step,0,uint8_t(coverage)});
-                    }
+                    std::vector<uint8_t> alpha(rgba.size());
+                    for(size_t i=0;i<rgba.size();++i)alpha[i]=uint8_t(uint32_t(rgba[i])>>24);
+                    mesh=lm_world3d::rasterMesh(alpha,width,height,39);
                     if(mesh.pixels.empty())ok=false;
                 }
             }
@@ -1733,7 +1730,7 @@ public:
             std::string saved;
             if(keyFile>>saved && validToken(saved))bridgeKey_=saved;
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.4 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.4.5 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -1756,7 +1753,7 @@ public:
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
             .config("worldTextScript","3D Script (0 Original / 1 Romanized)",pl::modmenu::ConfigType::SliderInt,remembered("worldTextScript","0"),"0","1")
-            .config("worldFont","3D Font (0 Sans / 1 Serif / 2 Mono / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","0"),"0","3")
+            .config("worldFont","3D Font (0 Sans / 1 Serif Italic / 2 Mono Bold / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","0"),"0","3")
             .config("lyricPalette","3D Colors (0 Pearl / 1 Pastel / 2 Rainbow / 3 Neon)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","0"),"0","3")
             .config("lyricDistance","First Person Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
             .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","13"),"0","30")
@@ -2430,7 +2427,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC",19*u,C_TEXT);
-        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.4 BETA",10.0f*u,C_DIM);
+        text(l.outer.x+199*u,l.outer.y+31*u,"v1.4.5 BETA",10.0f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);

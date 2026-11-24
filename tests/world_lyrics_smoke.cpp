@@ -111,6 +111,13 @@ int main(){
     auto wrapped=splitUnicodeLyric("あいうえおかきくけこさしすせそ");
     assert(wrapped.size()==2&&wrapped[0]+wrapped[1]=="あいうえおかきくけこさしすせそ");
     assert(unicodeParts("夜に駆ける",japanese).size()==4);
+    std::array<uint8_t,25> mask{};mask[12]=255;
+    auto crisp=rasterMesh(mask,5,5,3,1);
+    assert(crisp.pixels.size()==1&&crisp.outline.size()==8);
+    for(const auto& edge:crisp.outline)
+        assert(edge.x!=crisp.pixels[0].x||edge.y!=crisp.pixels[0].y);
+    assert(panelClearance({0,0,2},.6f,{0,0,0},{.08f,0,2},.6f)<1.f);
+    assert(panelClearance({0,.8f,2},.6f,{0,0,0},{0,0,2},.6f)>1.f);
     lyricPalette=2;
     assert(lyricTint(0,0)!=lyricTint(1,0));
     lyricPalette=0;

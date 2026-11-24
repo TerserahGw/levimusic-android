@@ -207,7 +207,7 @@ public final class BridgeApi {
                     PlayerService.setBeatEnabled("1".equals(setting));
                 json=PlayerService.getBeatStatus(context);
             }
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.4.4").put("api",3);
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.4.5").put("api",3);
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
                 String id=player==null?"":player.optString("id");
