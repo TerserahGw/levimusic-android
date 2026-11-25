@@ -2,6 +2,10 @@
 
 LeviMusic is a client-side music mod for Minecraft Bedrock on LeviLauncher Android ARM64. Choose the Full variant with the Android Bridge APK or the Standalone variant with hosted Aurelis Symphony. Both include an in-game player, search, playlists, Up Next, and synchronized lyrics. The Standalone variant requires internet access but no user-run server.
 
+## v1.6.3 Standard Offline playlist hotfix
+
+Standard mode now always exposes the automatic Offline playlist in Minecraft. The Bridge reconciles playlist metadata with audio actually downloaded or imported through the app before serving the playlist and its tracks. Duplicate Offline entries are removed. Standalone behavior is unchanged.
+
 ## v1.6.2 playlist, HUD, and input fixes
 
 Saved playlists now drive Up Next in their stored order and loop after the final track in both variants. HUD lyrics have an independent visibility switch and four corner positions around the compact player. 3D Lyrics Beats is grouped under a dedicated Experimental tab. Opening the menu while a movement touch is active no longer traps movement. If an offline non-Latin lyric cannot be rasterized and has no usable romanization, LeviMusic skips that 3D line instead of drawing a missing-font message; its 2D HUD lyric remains available.

@@ -1404,7 +1404,10 @@ std::vector<Track> parseBridgeSearch(JNIEnv* env,const std::string& source) {
 }
 
 std::vector<std::string> parsePlaylistNames(JNIEnv* env,const std::string& body) {
-    std::vector<std::string> names;
+    // Offline is an automatic Bridge library, just like Standalone's local
+    // library. Keep it discoverable even while the Bridge repairs stale
+    // playlist metadata from the actual downloaded/imported audio files.
+    std::vector<std::string> names{"Offline"};
     jobject root=makeJson(env,body);
     if(!root)return names;
     jobject array=optArray(env,root,"playlists");
@@ -1416,7 +1419,9 @@ std::vector<std::string> parsePlaylistNames(JNIEnv* env,const std::string& body)
         for(int i=0;i<std::min(40,size);i++){
             jobject obj=item?env->CallObjectMethod(array,item,i):nullptr;
             if(obj){std::string name=optString(env,obj,"name");
-                if(!name.empty())names.push_back(std::move(name));
+                if(!name.empty()&&std::none_of(names.begin(),names.end(),
+                    [&](const std::string& saved){return saved==name;}))
+                    names.push_back(std::move(name));
                 env->DeleteLocalRef(obj);
             }
         }
@@ -2011,7 +2016,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.2 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.3 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2940,7 +2945,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.2 STABLE",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.3 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);

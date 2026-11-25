@@ -15,6 +15,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.HashSet;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 
@@ -32,6 +33,38 @@ final class OfflineLibrary {
             if(candidate.isFile())return candidate;
         }
         return new File(dir(ctx),id+".m4a");
+    }
+    /**
+     * Rebuild the automatic Offline playlist from audio that is really stored
+     * by the Bridge. This keeps the local HTTP API and Minecraft in sync even
+     * after an interrupted playlist write or an upgrade from an older APK.
+     */
+    static synchronized int reconcilePlaylist(Context ctx){
+        File folder=dir(ctx);
+        if(!folder.isDirectory())return 0;
+        HashSet<String> known=new HashSet<>();
+        for(MusicCatalog.Song song:PlaylistStore.songs(ctx,"Offline"))known.add(song.id);
+        File[] files=folder.listFiles();
+        if(files==null)return known.size();
+        ArrayList<File> audio=new ArrayList<>();
+        for(File candidate:files){
+            if(candidate==null||!candidate.isFile()||candidate.length()<=0)continue;
+            String name=candidate.getName();
+            int dot=name.lastIndexOf('.');
+            if(dot<=0)continue;
+            String id=name.substring(0,dot),ext=name.substring(dot).toLowerCase(Locale.ROOT);
+            if(id.matches("[A-Za-z0-9_-]{11}")&&
+                ext.matches("\\.(m4a|webm|mp3|ogg|aac|opus|flac|wav|mp4)"))audio.add(candidate);
+        }
+        if(audio.isEmpty())return known.size();
+        PlaylistStore.create(ctx,"Offline");
+        for(File candidate:audio){
+            String name=candidate.getName();
+            String id=name.substring(0,name.lastIndexOf('.'));
+            if(known.add(id))PlaylistStore.add(ctx,"Offline",new MusicCatalog.Song(
+                id,id,"Local music","","",0));
+        }
+        return known.size();
     }
     static String save(Context ctx,MusicCatalog.Song song) throws Exception {
         if(song==null||file(ctx,song.id)==null)throw new IllegalArgumentException("Invalid song");

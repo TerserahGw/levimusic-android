@@ -207,7 +207,7 @@ public final class BridgeApi {
                     PlayerService.setBeatEnabled("1".equals(setting));
                 json=PlayerService.getBeatStatus(context);
             }
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.2").put("api",3);
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.3").put("api",3);
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
                 String id=player==null?"":player.optString("id");
@@ -252,6 +252,7 @@ public final class BridgeApi {
                     .put("queueEditing",true).put("audioBeats",true)
                     .put("pairing","local-clipboard");
             else if(path.equals("/v1/playlists")||path.startsWith("/v1/playlists?")){
+                OfflineLibrary.reconcilePlaylist(context);
                 String filter=URLDecoder.decode(getParam(path,"query"),"UTF-8");
                 json=PlaylistStore.list(context,filter);
             }
@@ -278,6 +279,7 @@ public final class BridgeApi {
                 String op=path.substring("/v1/playlist/".length()).split("[?]")[0];
                 String name=URLDecoder.decode(getParam(path,"name"),"UTF-8");
                 String id=getParam(path,"id");
+                if("Offline".equalsIgnoreCase(name))OfflineLibrary.reconcilePlaylist(context);
                 switch(op){
                     case "create": json=PlaylistStore.create(context,name);break;
                     case "add": json=PlaylistStore.add(context,name,MusicCatalog.find(id));break;
