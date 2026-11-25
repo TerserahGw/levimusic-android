@@ -248,7 +248,12 @@ public final class MusicCatalog {
             Song now=find(currentId);
             if(now!=null)items.put(now.json());
         }else if(index>=0){
-            for(int i=index;i<Math.min(PLAY_QUEUE.size(),index+4);i++)items.put(PLAY_QUEUE.get(i).json());
+            int visible=Math.min(PLAY_QUEUE.size(),4);
+            for(int offset=0;offset<visible;offset++){
+                int at=playlistQueueMode?(index+offset)%PLAY_QUEUE.size():index+offset;
+                if(at>=PLAY_QUEUE.size())break;
+                items.put(PLAY_QUEUE.get(at).json());
+            }
         }
         try {
             out.put("success",true).put("tracks",items).put("count",items.length())

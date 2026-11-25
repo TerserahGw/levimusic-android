@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "LeviMusic - Aurelis Online (Standalone)",
   "author": "Liliyana Rea de Aurelis",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "entry": "liblevimusic_standalone.so",
   "minecraft_versions": []
 }

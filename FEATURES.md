@@ -2,6 +2,10 @@
 
 LeviMusic is a client-side music mod for Minecraft Bedrock on LeviLauncher Android ARM64. Choose the Full variant with the Android Bridge APK or the Standalone variant with hosted Aurelis Symphony. Both include an in-game player, search, playlists, Up Next, and synchronized lyrics. The Standalone variant requires internet access but no user-run server.
 
+## v1.6.2 playlist, HUD, and input fixes
+
+Saved playlists now drive Up Next in their stored order and loop after the final track in both variants. HUD lyrics have an independent visibility switch and four corner positions around the compact player. 3D Lyrics Beats is grouped under a dedicated Experimental tab. Opening the menu while a movement touch is active no longer traps movement. If an offline non-Latin lyric cannot be rasterized and has no usable romanization, LeviMusic skips that 3D line instead of drawing a missing-font message; its 2D HUD lyric remains available.
+
 ## v1.6.1 offline hotfix
 
 The in-game DL button accepts valid Aurelis track IDs and verifies downloaded audio by its file signature, including responses marked application/octet-stream. Bridge retries downloads through Aurelis when its primary source fails. Enhanced and local LRC now restore Latin word spaces without inserting spaces into CJK text.
@@ -21,7 +25,7 @@ Public YouTube and YouTube Music playlist URLs can be imported from the Bridge a
 
 ## Lyrics
 
-- Synchronized 2D lyrics remain above the compact HUD, including when 3D lyrics are enabled.
+- Synchronized 2D lyrics can remain above or below the compact HUD, aligned left or right, including when 3D lyrics are enabled.
 - Word-by-word timing is used when a provider supplies word timestamps. Otherwise, lyrics follow line timestamps.
 - Optional romanization shows a smaller Latin reading below the original script.
 - Client-only 3D world lyrics support Unicode font fallback, font and color choices, configurable placement, and segmented transitions. Other players cannot see them; no per-world addon is needed.
@@ -29,7 +33,7 @@ Public YouTube and YouTube Music playlist URLs can be imported from the Bridge a
 
 ## Settings and storage
 
-- A four-page in-game settings menu exposes common controls; Advanced Settings includes the full list.
+- A five-tab in-game settings menu exposes common controls and a dedicated Experimental tab; Advanced Settings includes the full list.
 - Mod settings and Standalone playlists use temporary writes and backups. Bridge playlists are migrated from Android preferences on first edit, retaining the previous copy.
 
 See the [README](README.md) for installation and troubleshooting. Online media and lyric providers may be unavailable for individual tracks.

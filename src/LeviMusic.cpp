@@ -1798,12 +1798,12 @@ struct UI {
     bool ok()const{return w>0&&h>0;}
 };
 struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
-constexpr std::array<SettingRow,24> quickSettings{{
+constexpr std::array<SettingRow,25> quickSettings{{
     {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
     {"lyricTrailFollow","Follow player and rise",0,0,1,true},
-    {"lyricBeats","Experimental beats",0,0,1,true},
     {"romanizeLyrics","Romanized subtitles",0,0,1,true},
-    {"lyrics","Show lyrics",0,0,1,true},
+    {"hudLyrics","Show HUD lyrics",0,0,1,true},
+    {"hudLyricPosition","HUD lyric: UL / UR / DL / DR",0,0,3,false},
     {"animation","Smooth animation",0,0,1,true},
     {"lyricDistance","Distance (0.1 block)",1,12,60,false},
     {"lyricHeight","Spawn height (0.1 block)",1,0,30,false},
@@ -1823,9 +1823,10 @@ constexpr std::array<SettingRow,24> quickSettings{{
     {"hudSize","Compact HUD size (%)",3,55,125,false},
     {"hudX","Compact HUD horizontal (%)",3,0,100,false},
     {"hudY","Compact HUD vertical (%)",3,0,100,false},
+    {"lyricBeats","3D Lyrics Beats (Bridge audio)",4,0,1,true},
 }};
 inline Rect settingsTab(const UI& l,int page){
-    const float u=l.s,gap=6*u,w=(l.outer.w-48*u-3*gap)/4.f;
+    const float u=l.s,gap=5*u,w=(l.outer.w-48*u-4*gap)/5.f;
     return {l.outer.x+24*u+float(page)*(w+gap),l.outer.y+58*u,w,34*u};
 }
 inline Rect settingsRow(const UI& l,int index){
@@ -1931,6 +1932,7 @@ class LeviMusic {
     std::vector<Track> searchCache_;
     std::vector<Track> queueTracks_;
     bool standaloneQueueSelection_=false;
+    bool standalonePlaylistQueue_=false;
     int rightTab_=0; // 0 Search, 1 Playlist / Up Next, 2 Lyrics
     std::vector<std::string> playlistNames_;
     std::string activePlaylist_;
@@ -1948,8 +1950,11 @@ class LeviMusic {
     int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
     bool settingsOpen_=false;int settingsPage_=0;
+    std::set<int> menuPointers_;
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
+    std::atomic<int> hudLyricPosition_{0};
+    std::atomic<bool> hudLyrics_{true};
     std::atomic<bool> animation_{true};
     std::atomic<bool> browserEnabled_{false},worldLyrics3D_{true},romanizeLyrics_{true};
     std::atomic<int> worldFont_{3},worldTextScript_{0};
@@ -1991,6 +1996,9 @@ public:
                         savedSettings_[row.substr(0,eq)]=row.substr(eq+1);
                 }
             }
+            if(savedSettings_.find("hudLyricPosition")==savedSettings_.end())
+                savedSettings_["hudLyricPosition"]=
+                    savedSettings_["lyricBelow"]=="true"||savedSettings_["lyricBelow"]=="1"?"2":"0";
 #if defined(LEVI_STANDALONE)
             if(savedSettings_["chruServer"].empty()||
                savedSettings_["chruServer"]=="http://127.0.0.1:8080")
@@ -2003,13 +2011,13 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.0 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.2 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
         {
             std::lock_guard lock(mu_);
-            shutdown_=false;open_=false;settingsOpen_=false;typing_=false;
+            shutdown_=false;open_=false;settingsOpen_=false;typing_=false;menuPointers_.clear();
         }
         restoringSettings_=true;
         bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic - Aurelis Online")
@@ -2056,6 +2064,8 @@ public:
 #endif
             .config("hud","Show compact HUD",pl::modmenu::ConfigType::Toggle,remembered("hud","true"))
             .config("lyrics","Enable lyrics",pl::modmenu::ConfigType::Toggle,remembered("lyrics","true"))
+            .config("hudLyrics","Show 2D lyrics near compact HUD",pl::modmenu::ConfigType::Toggle,remembered("hudLyrics","true"))
+            .config("hudLyricPosition","HUD Lyrics Position (0 Up Left / 1 Up Right / 2 Down Left / 3 Down Right)",pl::modmenu::ConfigType::SliderInt,remembered("hudLyricPosition","0"),"0","3")
             .config("hudSize","HUD Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("hudSize","84"),"55","125")
             .config("hudX","HUD Horizontal Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudX","3"),"0","100")
             .config("hudY","HUD Vertical Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudY","93"),"0","100")
@@ -2083,7 +2093,8 @@ public:
     }
     bool disable(){
         enabled_=false;
-        {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();++lyricSerial_;}
+        {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();
+            menuPointers_.clear();++lyricSerial_;}
         cv_.notify_all();lyricCv_.notify_all();
         if(drawWorker_.joinable())drawWorker_.join();
         if(worker_.joinable())worker_.join();
@@ -2281,6 +2292,12 @@ private:
             useBridge_=v=="true"||v=="1";
         } else if(k=="lyricBelow") {
             lyricsBelow_=v=="true"||v=="1";
+            if(savedSettings_.find("hudLyricPosition")==savedSettings_.end())
+                hudLyricPosition_=lyricsBelow_?2:0;
+        } else if(k=="hudLyrics") {
+            hudLyrics_=v=="true"||v=="1";
+        } else if(k=="hudLyricPosition") {
+            try{hudLyricPosition_=std::clamp(std::stoi(std::string(v)),0,3);}catch(...){}
         } else if(k=="hudSize") {
             try{hudSize_=std::clamp(std::stoi(std::string(v)),55,125);}catch(...){}
         } else if(k=="hudX") {
@@ -2341,7 +2358,8 @@ private:
         if(k=="lyricBeats")return lm_world3d::experimentalBeats;
         if(k=="romanizeLyrics")return romanizeLyrics_;
         if(k=="animation")return animation_;
-        if(k=="lyrics"){std::lock_guard lock(mu_);return lyricsOn_;}
+        if(k=="hudLyrics")return hudLyrics_;
+        if(k=="hudLyricPosition")return hudLyricPosition_;
         if(k=="lyricDistance")return lm_world3d::lyricDistanceTenths;
         if(k=="lyricHeight")return lm_world3d::lyricHeightTenths;
         if(k=="lyricVerticalRange")return lm_world3d::lyricVerticalRangeTenths;
@@ -2363,13 +2381,28 @@ private:
         return row.low;
     }
     bool touch(const pl::input::TouchEvent& e){
-        if(!enabled_ || (e.action!=0 && e.action!=1))return false;
+        if(!enabled_)return false;
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
         if(!l.ok())return false;
         bool opened,hud,settingsOpen;int settingsPage;
         {std::lock_guard lock(mu_);opened=open_;hud=hud_;
             settingsOpen=settingsOpen_;settingsPage=settingsPage_;}
-        if(e.action==0)return opened || (hud&&l.mini.contains(e.x,e.y));
+        // Android actions: DOWN=0, UP=1, MOVE=2, CANCEL=3,
+        // POINTER_DOWN=5 and POINTER_UP=6. Only pointers that started on our
+        // UI are consumed. A joystick pointer that predates opening the menu
+        // must still reach Minecraft on UP/CANCEL so movement cannot stick.
+        if(e.action==0||e.action==5){
+            const bool capture=opened||(hud&&l.mini.contains(e.x,e.y));
+            if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);}
+            return capture;
+        }
+        bool captured=false;
+        {std::lock_guard lock(mu_);captured=menuPointers_.contains(e.pointerId);}
+        if(!captured)return false;
+        if(e.action==2)return true;
+        if(e.action==3){std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);return true;}
+        if(e.action!=1&&e.action!=6)return true;
+        {std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);}
         if(!opened){
             if(hud&&l.mini.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);open_=true;panelToggled_=std::chrono::steady_clock::now();}
@@ -2386,7 +2419,7 @@ private:
                 pl::modmenu::requestOpenMenu();
             }else{
                 bool tab=false;
-                for(int page=0;page<4;++page)if(settingsTab(l,page).contains(e.x,e.y)){
+                for(int page=0;page<5;++page)if(settingsTab(l,page).contains(e.x,e.y)){
                     std::lock_guard lock(mu_);settingsPage_=page;tab=true;break;
                 }
                 if(!tab){
@@ -2690,7 +2723,7 @@ private:
                    !worldItem->romanizedWorld.empty())
                     worldLine=worldItem->romanizedWorld;
                 else if(std::any_of(worldLine.begin(),worldLine.end(),
-                    [](unsigned char ch){return ch>=128;}))worldLine="Font unavailable";
+                    [](unsigned char ch){return ch>=128;}))worldLine.clear();
             }
             lm_world3d::publish((lyricsOn_ && wordCues)?worldLine:std::string{},
                                  cueStart,cueEnd,elapsed,playing,
@@ -2755,8 +2788,8 @@ private:
             text(l.outer.x+34*u,l.outer.y+52*u,"Changes are saved automatically",9.2f*u,C_DIM,48);
             box(l.close,0xFF41444CU,8.f);
             icon("x",l.close.x+6*u,l.close.y+6*u,18*u);
-            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD"};
-            for(int n=0;n<4;++n){
+            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD","EXPERIMENTAL"};
+            for(int n=0;n<5;++n){
                 Rect tab=settingsTab(l,n);const bool active=n==settingsPage;
                 box(tab,active?0xFF415661U:0xFF292D34U,8.f);
                 text(tab.x+11*u,tab.y+22*u,tabs[n],10.3f*u,
@@ -2824,7 +2857,7 @@ private:
             // No background: white text + black multi-pass outline.
             // LRC lines remain until the NEXT timestamp, never a fixed 5-second cutoff.
             // Keep synchronized lyrics above the compact HUD even when world text is active.
-            if(lyricsOn_ && !timedLyrics.empty() && elapsed>=0) {
+            if(lyricsOn_ && hudLyrics_ && !timedLyrics.empty() && elapsed>=0) {
                 int active=-1;
                 for(size_t i=0;i<timedLyrics.size();i++) {
                     if(timedLyrics[i].ms>elapsed)break;
@@ -2834,7 +2867,10 @@ private:
                     auto drawLyric=[&](int index,float alpha){
                         const Lyric& item=timedLyrics[static_cast<size_t>(index)];
                         if(item.line.empty()||alpha<=0.f)return;
-                        float subtitleY=lyricsBelow_?l.mini.y+l.mini.h+26*u:l.mini.y-16*u;
+                        const int hudPosition=hudLyricPosition_.load();
+                        const bool below=hudPosition>=2;
+                        const bool alignRight=(hudPosition&1)!=0;
+                        float subtitleY=below?l.mini.y+l.mini.h+26*u:l.mini.y-16*u;
                         float subtitleX=l.mini.x+3*u;
                         if(floatingLyrics_ && !worldLyrics3D_){
                             // Client-only 2D fallback, per-line location (not 3D world text).
@@ -2846,7 +2882,7 @@ private:
                             subtitleY=std::clamp(l.h*(.32f+py*.40f),44*u,l.h-36*u);
                         }
                         if(!(floatingLyrics_ && !worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
-                            subtitleY=lyricsBelow_?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
+                            subtitleY=below?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
                         if(subtitleY>23*u&&subtitleY<l.h-10*u){
                             const std::string visible=lm_timing::revealedText(item.line,item.words,elapsed);
                             if(visible.empty())return;
@@ -2857,17 +2893,23 @@ private:
                             const std::string prior=entering?lm_timing::revealedText(
                                 item.line,item.words,item.words[shown-1].startMs-1):std::string{};
                             const float lyricSize=((floatingLyrics_ && !worldLyrics3D_)?15.8f:14.4f)*u;
+                            auto alignedX=[&](std::string_view value,float size){
+                                if(!alignRight||(floatingLyrics_&&!worldLyrics3D_))return subtitleX;
+                                const float width=float(lm_timing::utf8Length(value))*size*.56f;
+                                return std::max(3*u,l.mini.x+l.mini.w-3*u-width);
+                            };
                             if(!prior.empty()&&blend<1.f)
-                                outlineText(subtitleX,subtitleY,prior,lyricSize,alpha*(1.f-blend));
-                            outlineText(subtitleX,subtitleY,visible,lyricSize,alpha*blend);
+                                outlineText(alignedX(prior,lyricSize),subtitleY,prior,lyricSize,alpha*(1.f-blend));
+                            outlineText(alignedX(visible,lyricSize),subtitleY,visible,lyricSize,alpha*blend);
                             if(romanizeLyrics_&&!item.romanized.empty()&&subtitleY+15*u<l.h-10*u){
-                                if(!prior.empty()&&blend<1.f)
-                                    outlineText(subtitleX,subtitleY+15*u,
-                                        lm_timing::revealedText(item.romanized,item.words,
-                                            item.words[shown-1].startMs-1),10.1f*u,alpha*.78f*(1.f-blend));
-                                outlineText(subtitleX,subtitleY+15*u,
-                                    lm_timing::revealedText(item.romanized,item.words,elapsed),
-                                    10.1f*u,alpha*.78f*blend);
+                                const std::string priorReading=!prior.empty()?lm_timing::revealedText(
+                                    item.romanized,item.words,item.words[shown-1].startMs-1):std::string{};
+                                const std::string reading=lm_timing::revealedText(item.romanized,item.words,elapsed);
+                                if(!priorReading.empty()&&blend<1.f)
+                                    outlineText(alignedX(priorReading,10.1f*u),subtitleY+15*u,
+                                        priorReading,10.1f*u,alpha*.78f*(1.f-blend));
+                                outlineText(alignedX(reading,10.1f*u),subtitleY+15*u,
+                                    reading,10.1f*u,alpha*.78f*blend);
                             }
                         }
                     };
@@ -2898,7 +2940,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.0 STABLE",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.2 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3154,7 +3196,9 @@ private:
                 std::lock_guard lock(mu_);
                 if(selected_<0||selected_>=static_cast<int>(results_.size()))return;
                 tr=results_[static_cast<size_t>(selected_)];
-                if(!standaloneQueueSelection_){queueTracks_.clear();queueTracks_.push_back(tr);}
+                if(!standalonePlaylistQueue_&&!standaloneQueueSelection_){
+                    queueTracks_.clear();queueTracks_.push_back(tr);
+                }
                 else if(queueTracks_.empty()||queueTracks_.front().id!=tr.id){
                     queueTracks_.erase(std::remove_if(queueTracks_.begin(),queueTracks_.end(),
                         [&](const Track& item){return item.id==tr.id;}),queueTracks_.end());
@@ -3242,7 +3286,8 @@ private:
             );
 #if defined(LEVI_STANDALONE)
             bool needSuggestions;
-            {std::lock_guard lock(mu_);needSuggestions=queueTracks_.size()<4;}
+            {std::lock_guard lock(mu_);
+                needSuggestions=!standalonePlaylistQueue_&&queueTracks_.size()<4;}
             if(needSuggestions&&!offline){
                 std::string server;{std::lock_guard lock(mu_);server=chruBase_;}
                 auto suggestions=searchAurelis(env,server,tr.title,tr.artist);
@@ -3739,7 +3784,12 @@ private:
 #endif
                         break;
                     }
-                    case Action::Select:playSelected();break;
+                    case Action::Select:{
+#if defined(LEVI_STANDALONE)
+                        {std::lock_guard lock(mu_);standalonePlaylistQueue_=false;}
+#endif
+                        playSelected();break;
+                    }
 #if defined(LEVI_STANDALONE)
                     case Action::OfflineSave:{
                         Track track;std::string server;
@@ -3801,7 +3851,14 @@ private:
                         {
                             std::lock_guard lock(mu_);
 #if defined(LEVI_STANDALONE)
-                            if(job.action==Action::Next&&queueTracks_.size()>1){
+                            if(standalonePlaylistQueue_&&!results_.empty()){
+                                const int n=static_cast<int>(results_.size());
+                                selected_=(selected_+(job.action==Action::Next?1:n-1))%n;
+                                queueTracks_.clear();
+                                for(int i=0;i<n&&i<40;++i)
+                                    queueTracks_.push_back(results_[static_cast<size_t>((selected_+i)%n)]);
+                                standaloneQueueSelection_=false;page_=selected_/5;
+                            }else if(job.action==Action::Next&&queueTracks_.size()>1){
                                 Track next=queueTracks_[1];queueTracks_.erase(queueTracks_.begin());
                                 results_.push_back(next);selected_=static_cast<int>(results_.size())-1;
                                 standaloneQueueSelection_=true;page_=selected_/5;
@@ -3982,7 +4039,12 @@ private:
                         else if(auto it=localPlaylists_.find(name);it!=localPlaylists_.end())songs=it->second;
                         if(index<0||index>=int(songs.size()))break;
                         {std::lock_guard lock(mu_);results_=std::move(songs);selected_=index;
-                            standaloneQueueSelection_=false;}
+                            standaloneQueueSelection_=false;standalonePlaylistQueue_=true;
+                            queueTracks_.clear();
+                            const int n=static_cast<int>(results_.size());
+                            for(int i=0;i<n&&i<40;++i)
+                                queueTracks_.push_back(results_[static_cast<size_t>((selected_+i)%n)]);
+                        }
                         playSelected();break;
                     }
                     case Action::QueueAdd:{
@@ -4011,7 +4073,8 @@ private:
                              Track next=*it;
                              queueTracks_.erase(queueTracks_.begin(),it);
                              results_.push_back(next);selected_=static_cast<int>(results_.size())-1;
-                             standaloneQueueSelection_=true;page_=selected_/5;found=true;
+                             standaloneQueueSelection_=true;standalonePlaylistQueue_=false;
+                             page_=selected_/5;found=true;
                          }}
                         if(found)playSelected();
                         break;
@@ -4036,7 +4099,8 @@ private:
 #if defined(LEVI_STANDALONE)
             if(!playing&&standaloneWasPlaying&&dur>0&&pos>=dur-1500){
                 bool hasNext;
-                {std::lock_guard lock(mu_);hasNext=queueTracks_.size()>1;}
+                {std::lock_guard lock(mu_);
+                    hasNext=standalonePlaylistQueue_||queueTracks_.size()>1;}
                 if(hasNext)addJob(Action::Next);
             }
             standaloneWasPlaying=playing;
