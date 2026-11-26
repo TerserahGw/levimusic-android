@@ -4,6 +4,7 @@
 // opt-in and verifies the exact audited SetupCamera prologue before hooking.
 #include <pl/memory/Hook.hpp>
 #include <algorithm>
+#include <array>
 #include <android/log.h>
 #include <atomic>
 #include <chrono>
@@ -54,6 +55,16 @@ inline bool matches(const uint8_t* at,std::string_view pattern){
     }
     return false;
 }
+inline bool plausible(const void* value,size_t alignment=alignof(void*)){
+    const auto raw=reinterpret_cast<uintptr_t>(value);
+    return raw>0x10000 && raw<0x0001000000000000ULL && raw%alignment==0;
+}
+inline bool saneMatrix(const float* matrix){
+    if(!plausible(matrix,alignof(float)))return false;
+    for(size_t i=0;i<16;++i)
+        if(!std::isfinite(matrix[i])||std::abs(matrix[i])>1.e7f)return false;
+    return true;
+}
 inline void applyOrbit(float* m,float yaw,float pitch,float distance,float amount){
     if(!m||amount<=0.f)return;
     const float sy=std::sin(yaw*amount),cy=std::cos(yaw*amount);
@@ -87,12 +98,21 @@ inline bool shouldRun(Pose& out,float& strength,float& angle){
 inline void setupHook(void* owner,void* stack,float partial){
     if(original)original(owner,stack,partial);
     Pose current;float strength=0,angle=0;
-    if(!shouldRun(current,strength,angle)||!matrixTopDirty||!cameraDeps)return;
+    if(!shouldRun(current,strength,angle)||!matrixTopDirty||!cameraDeps||!plausible(stack))return;
     float* matrix=matrixTopDirty(stack);
-    if(!matrix)return;
+    if(!saneMatrix(matrix))return;
+    std::array<float,16> originalMatrix{};
+    std::memcpy(originalMatrix.data(),matrix,sizeof(originalMatrix));
     const float shot=std::sin(angle*.43f);
     applyOrbit(matrix,angle,-.12f+shot*.08f,5.4f+shot*.9f,strength);
-    cameraDeps(owner);
+    if(!saneMatrix(matrix)){
+        std::memcpy(matrix,originalMatrix.data(),sizeof(originalMatrix));
+        return;
+    }
+    // Both audited helpers receive the matrix-stack argument (x1). Passing the
+    // camera owner here made CameraDeps interpret an unrelated object as a
+    // matrix stack and was the activation-time crash in 1.6.4.
+    cameraDeps(stack);
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=false;return;}
@@ -100,7 +120,7 @@ inline void prepare(uintptr_t base,bool exact26661){
     constexpr auto topRva=uintptr_t(0x11A1A218);
     constexpr auto depsRva=uintptr_t(0x11A1CBCC);
     constexpr std::string_view signature=
-        "FF 03 04 D1 EE 3B 00 FD ED 33 08 6D EB 2B 09 6D E9 23 0A 6D FD 7B 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9 FD C3 02 91";
+        "FF 03 04 D1 EE 3B 00 FD ED 33 08 6D EB 2B 09 6D E9 23 0A 6D FD 7B 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9 FD C3 02 91 59 D0 3B D5 F3 03 00 AA E0 03 01 AA 28 17 40 F9 F7 03 01 AA";
     auto* entry=reinterpret_cast<uint8_t*>(base+setupRva);
     if(!matches(entry,signature)){
         supported=false;

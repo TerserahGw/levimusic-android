@@ -943,8 +943,9 @@ inline void prepare(){
         __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","libminecraftpe.so not loaded; renderer cannot bind");
         state=State::Unsupported;return;
     }
-    lm_immersive::prepare();
-    lm_cinematic::discover(image.base,image.selected&&image.selected->name=="1.26.66.1");
+    const bool exact26661=image.selected&&image.selected->name=="1.26.66.1";
+    lm_immersive::prepare(image.base,exact26661);
+    lm_cinematic::discover(image.base,exact26661);
     std::array<uintptr_t,BindingCount> addresses{};
     auto exact=[&](const Profile& candidate){
         for(size_t i=0;i<addresses.size();++i){

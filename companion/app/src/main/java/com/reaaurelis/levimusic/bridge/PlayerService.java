@@ -72,6 +72,7 @@ public final class PlayerService extends MediaSessionService {
     private Equalizer immersiveEq;
     private PresetReverb immersiveReverb;
     private int immersiveSession=-1;
+    private String appliedImmersiveEnvironment="open";
     private int navigationGeneration=0;
     private boolean endQueued=false;
     private boolean radioFilling=false, pendingNext=false;
@@ -87,7 +88,11 @@ public final class PlayerService extends MediaSessionService {
         if(immersiveEq!=null){try{immersiveEq.release();}catch(RuntimeException ignored){}immersiveEq=null;}
         if(immersiveReverb!=null){try{immersiveReverb.release();}catch(RuntimeException ignored){}immersiveReverb=null;}
         immersiveSession=-1;
+        appliedImmersiveEnvironment="open";
         if(player!=null)try{player.setAuxEffectInfo(new AuxEffectInfo(0,0f));}catch(RuntimeException ignored){}
+    }
+    private static short clampBandLevel(int value,short[] range){
+        return (short)Math.max(range[0],Math.min(range[1],value));
     }
     private void applyImmersiveSound(){
         if(player==null)return;
@@ -98,23 +103,29 @@ public final class PlayerService extends MediaSessionService {
             try{
                 immersiveEq=new Equalizer(0,session);immersiveEq.setEnabled(true);
                 immersiveReverb=new PresetReverb(0,0);
-                immersiveReverb.setPreset("underwater".equals(immersiveEnvironment)?
-                        PresetReverb.PRESET_SMALLROOM:PresetReverb.PRESET_LARGEHALL);
                 immersiveReverb.setEnabled(true);
-                player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),
-                        "underwater".equals(immersiveEnvironment)?.18f:.58f));
                 immersiveSession=session;
             }catch(RuntimeException error){releaseImmersiveSound();Log.w(TAG,"Immersive audio unavailable",error);return;}
         }
+        boolean changed=!immersiveEnvironment.equals(appliedImmersiveEnvironment);
+        if(immersiveReverb!=null&&changed)try{
+            boolean underwater="underwater".equals(immersiveEnvironment);
+            immersiveReverb.setPreset(underwater?PresetReverb.PRESET_SMALLROOM:PresetReverb.PRESET_LARGEHALL);
+            immersiveReverb.setEnabled(true);
+            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),underwater?.12f:.86f));
+        }catch(RuntimeException error){Log.w(TAG,"Immersive reverb update failed",error);}
         if(immersiveEq!=null)try{
             short bands=immersiveEq.getNumberOfBands();
+            short[] range=immersiveEq.getBandLevelRange();
             for(short band=0;band<bands;band++){
                 short level=0;
                 if("underwater".equals(immersiveEnvironment))
-                    level=(short)(band<Math.max(1,bands/3)?180:-1500);
-                else level=(short)(band<Math.max(1,bands/3)?130:-180);
+                    level=clampBandLevel(band<Math.max(1,bands/3)?260:-1450,range);
+                else level=clampBandLevel(band<Math.max(1,bands/3)?180:-260,range);
                 immersiveEq.setBandLevel(band,level);
             }
+            immersiveEq.setEnabled(true);
+            appliedImmersiveEnvironment=immersiveEnvironment;
         }catch(RuntimeException error){Log.w(TAG,"Immersive equalizer update failed",error);}
     }
     public static void setBeatEnabled(boolean enabled){

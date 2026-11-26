@@ -4,7 +4,17 @@ namespace {
 int originals=0,meshes=0,vertices=0,declared=0,batchVertices=0;
 float maxChroma=0.f;
 float shader[4]{.2f,.3f,.4f,.5f};
+float cameraMatrix[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+void* cameraDependencyReceiver=nullptr;
+int environmentFixture=0;
 void original(void*,void*,void*){++originals;}
+void cameraOriginal(void*,void*,float){}
+float* cameraTop(void*){return cameraMatrix;}
+void cameraDependency(void* receiver){cameraDependencyReceiver=receiver;}
+bool fixtureWater(void*){return environmentFixture==2;}
+bool fixtureSolid(void*,const lm_immersive::BlockPos& position){
+    return environmentFixture==1&&(position.y>=67||std::abs(position.x)>=2||std::abs(position.z)>=2);
+}
 void begin(void*,void*,int mode,int count,int){assert(mode==1);declared=count;batchVertices=0;}
 void color(void*,float r,float,float b,float){assert(shader[0]==1.f);maxChroma=std::max(maxChroma,std::abs(r-b));}
 void vertex(void*,float x,float y,float z){assert(std::isfinite(x)&&std::isfinite(y)&&std::isfinite(z));++vertices;++batchVertices;}
@@ -44,6 +54,38 @@ int main(){
     for(size_t i=0;i<20;++i)note[16+i]=uint8_t(hex(id[i*2])*16+hex(id[i*2+1]));
     assert(matchesBuildId(note,id));
     note[17]^=1;assert(!matchesBuildId(note,id));
+    // The cinematic post-process must pass the matrix stack, not the camera
+    // owner, to both native matrix helpers.
+    alignas(8) std::array<char,64> cameraOwner{},cameraStack{};
+    lm_cinematic::original=cameraOriginal;
+    lm_cinematic::matrixTopDirty=cameraTop;
+    lm_cinematic::cameraDeps=cameraDependency;
+    lm_cinematic::enabled=true;lm_cinematic::supported=true;lm_cinematic::playing=true;
+    lm_cinematic::idleDelay=10;lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
+    lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
+    lm_cinematic::observePlayer(0,64,0,0,0,1);
+    lm_cinematic::setupHook(cameraOwner.data(),cameraStack.data(),0);
+    assert(cameraDependencyReceiver==cameraStack.data());
+    lm_cinematic::shutdown();
+    // Exact-build environment callbacks drive both underwater and enclosure
+    // classification without reading private Block string layouts.
+    alignas(8) std::array<char,0x300> actorFixture{};
+    alignas(8) std::array<char,0x200> dimensionFixture{},sourceFixture{};
+    auto fixturePtr=[](char* base,size_t offset,uintptr_t value){std::memcpy(base+offset,&value,sizeof(value));};
+    fixturePtr(actorFixture.data(),0x1c0,reinterpret_cast<uintptr_t>(dimensionFixture.data()));
+    fixturePtr(dimensionFixture.data(),0xd0,reinterpret_cast<uintptr_t>(sourceFixture.data()));
+    lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;lm_immersive::isSolid=fixtureSolid;
+    lm_immersive::request(true);
+    environmentFixture=2;lm_immersive::lastSample=0;
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    assert(lm_immersive::current()==lm_immersive::Environment::Underwater);
+    environmentFixture=1;lm_immersive::lastSample=0;
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    assert(lm_immersive::current()==lm_immersive::Environment::Cave);
+    environmentFixture=0;lm_immersive::lastSample=0;
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    assert(lm_immersive::current()==lm_immersive::Environment::Open);
+    lm_immersive::request(false);
     // The actual detour submits local world glyphs once, restores game color,
     // and leaves Minecraft's original world-render call intact.
     profile=&profiles[0];originalRender=original;
