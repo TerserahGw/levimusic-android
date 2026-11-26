@@ -243,15 +243,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.6.6-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
+          source_file="$release_file"
+          if [[ ! -f "$source_file" ]]; then
+            mapfile -t candidates < <(find build -maxdepth 1 -type f -name 'LeviMusic-*-arm64-v8a.levipack' ! -name 'LeviMusic-Standalone-*' -print)
+            [[ "${#candidates[@]}" -eq 1 ]] || { printf 'Expected one Standard LeviPack, found %s\n' "${#candidates[@]}"; exit 1; }
+            source_file="${candidates[0]}"
+          fi
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.6.6-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
+          standalone_src="$standalone_release"
+          if [[ ! -f "$standalone_src" ]]; then
+            mapfile -t candidates < <(find build -maxdepth 1 -type f -name 'LeviMusic-Standalone-*-arm64-v8a.levipack' -print)
+            [[ "${#candidates[@]}" -eq 1 ]] || { printf 'Expected one Standalone LeviPack, found %s\n' "${#candidates[@]}"; exit 1; }
+            standalone_src="${candidates[0]}"
+          fi
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
           fi
@@ -303,7 +313,9 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version == "1.6.6":
+          if version == "1.6.7":
+              notes = Path("release-notes/v1.6.7.md").read_text(encoding="utf-8")
+          elif version == "1.6.6":
               notes = "\n".join([
                   "# LeviMusic - Aurelis Online v1.6.6 stable",
                   "",
