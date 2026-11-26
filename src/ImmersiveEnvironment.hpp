@@ -73,7 +73,6 @@ inline void observePlayer(void* player,float x,float y,float z){
     if(!plausible(region)){environment=0;return;}
     const BlockPos head{int(std::floor(x)),int(std::floor(y+1.55f)),int(std::floor(z))};
     auto* source=reinterpret_cast<void*>(region);
-    bool roof=false;
     constexpr int roofOffsets[9][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
         {2,0},{-2,0},{0,2},{0,-2}};
     int roofHits=0;
