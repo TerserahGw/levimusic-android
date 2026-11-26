@@ -1671,7 +1671,7 @@ public:
             auto set=env->GetMethodID(eq,"setBandLevel","(SS)V");
             const short bands=count?env->CallShortMethod(equalizer_,count):0;
             short limits[2]{-1500,1500};
-            auto range=rangeFn?static_cast<jshortArray>(env->CallObjectMethod(equalizer_,rangeFn)):nullptr;
+            auto range=rangeFn?reinterpret_cast<jshortArray>(env->CallObjectMethod(equalizer_,rangeFn)):nullptr;
             if(range&&env->GetArrayLength(range)>=2)env->GetShortArrayRegion(range,0,2,limits);
             if(range)env->DeleteLocalRef(range);
             for(short band=0;set&&band<bands;++band){
