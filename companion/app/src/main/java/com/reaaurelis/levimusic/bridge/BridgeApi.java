@@ -200,7 +200,9 @@ public final class BridgeApi {
             String path=parts.length>1?parts[1]:"";
             if(parts.length<3||!"GET".equals(parts[0])) {
                 status=405;json=new JSONObject().put("error","GET only");
-            }else if(path.equals("/v1/status"))json=state();
+            }else if(path.equals("/v1/status")){
+                PlayerService.minecraftHeartbeat();json=state();
+            }
             else if(path.startsWith("/v1/beat")){
                 String setting=getParam(path,"enabled");
                 if("1".equals(setting)||"0".equals(setting))
@@ -213,7 +215,14 @@ public final class BridgeApi {
                 json=new JSONObject().put("accepted",true).put("environment",
                     "underwater".equals(environment)?"underwater":"cave".equals(environment)?"cave":"open");
             }
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.6").put("api",4);
+            else if(path.equals("/v1/game-exit")){
+                json=new JSONObject().put("accepted",true);
+                PlayerService.stopFromGame();
+            }
+            else if(path.equals("/v1/health")){
+                PlayerService.minecraftHeartbeat();
+                json=new JSONObject().put("ok",true).put("version","1.6.7").put("api",4);
+            }
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
                 String id=player==null?"":player.optString("id");

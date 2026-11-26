@@ -19,6 +19,7 @@ inline std::atomic<bool> enabled{false};
 inline std::atomic<bool> supported{false};
 inline std::atomic<int> environment{0};
 inline std::atomic<int64_t> lastSample{0};
+inline std::atomic<int64_t> lastCaveEvidence{0};
 inline IsInWaterFn isInWater=nullptr;
 inline IsSolidFn isSolid=nullptr;
 
@@ -97,10 +98,15 @@ inline void observePlayer(void* player,float x,float y,float z){
     }
     // A roof plus two reflected directions is enough for rooms and broad caves;
     // a highly enclosed ravine also qualifies without a directly overhead roof.
-    environment=((roofHits>=2&&enclosedDirections>=2)||enclosedDirections>=6)?
+    const bool cave=(roofHits>=2&&enclosedDirections>=2)||enclosedDirections>=6;
+    if(cave){lastCaveEvidence=now;environment=int(Environment::Cave);return;}
+    // Block queries can briefly miss at chunk boundaries and while moving.
+    // Holding the last enclosed result prevents the Bridge from destroying and
+    // rebuilding the reverb chain several times per second.
+    environment=now-lastCaveEvidence.load()<3000?
         int(Environment::Cave):int(Environment::Open);
 }
-inline void request(bool value){enabled=value;if(!value)environment=0;}
+inline void request(bool value){enabled=value;if(!value){environment=0;lastCaveEvidence=0;}}
 inline Environment current(){return static_cast<Environment>(environment.load());}
 inline const char* name(Environment value){
     return value==Environment::Underwater?"underwater":value==Environment::Cave?"cave":"open";

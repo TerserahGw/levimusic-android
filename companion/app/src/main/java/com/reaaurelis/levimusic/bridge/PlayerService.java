@@ -27,7 +27,12 @@ import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.Player;
+import androidx.media3.common.audio.AudioProcessor;
+import androidx.media3.common.util.UnstableApi;
+import androidx.media3.exoplayer.DefaultRenderersFactory;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.audio.AudioSink;
+import androidx.media3.exoplayer.audio.DefaultAudioSink;
 import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import org.json.JSONObject;
@@ -38,6 +43,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
 
+@UnstableApi
 public final class PlayerService extends MediaSessionService {
     private static final String TAG="LeviMusicPlayer";
     private static final String CHANNEL="levimusic_player";
@@ -49,6 +55,7 @@ public final class PlayerService extends MediaSessionService {
     private final ExecutorService resolver=Executors.newSingleThreadExecutor();
     private final ExecutorService radioWorker=Executors.newSingleThreadExecutor();
     private ExoPlayer player;
+    private final ImmersiveAudioProcessor immersiveProcessor=new ImmersiveAudioProcessor();
     private Visualizer beatVisualizer;
     private int beatSession=-1;
     private volatile float beatValue=0f;
@@ -69,6 +76,8 @@ public final class PlayerService extends MediaSessionService {
     private volatile boolean autoplay=true;
     private volatile String repeatMode="all";
     private volatile String immersiveEnvironment="open";
+    private volatile long minecraftHeartbeat;
+    private volatile boolean minecraftConnected,stoppingFromGame;
     private Equalizer immersiveEq;
     private EnvironmentalReverb immersiveReverb;
     private int immersiveSession=-1;
@@ -82,6 +91,7 @@ public final class PlayerService extends MediaSessionService {
         PlayerService current=active;
         if(current==null)return;
         String safe="underwater".equals(value)?"underwater":"cave".equals(value)?"cave":"open";
+        current.immersiveProcessor.setEnvironment(safe);
         current.handler.post(()->{current.immersiveEnvironment=safe;current.applyImmersiveSound();});
     }
     private void releaseImmersiveSound(){
@@ -109,15 +119,15 @@ public final class PlayerService extends MediaSessionService {
             immersiveReverb.setDensity((short)700);
             player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.16f));
         }else{
-            immersiveReverb.setRoomLevel((short)-450);
-            immersiveReverb.setRoomHFLevel((short)-1100);
-            immersiveReverb.setDecayTime(2800);
-            immersiveReverb.setDecayHFRatio((short)850);
-            immersiveReverb.setReflectionsLevel((short)-180);
-            immersiveReverb.setReflectionsDelay(58);
-            immersiveReverb.setReverbLevel((short)350);
-            immersiveReverb.setReverbDelay(72);
-            immersiveReverb.setDiffusion((short)900);
+            immersiveReverb.setRoomLevel((short)-250);
+            immersiveReverb.setRoomHFLevel((short)-700);
+            immersiveReverb.setDecayTime(3400);
+            immersiveReverb.setDecayHFRatio((short)900);
+            immersiveReverb.setReflectionsLevel((short)200);
+            immersiveReverb.setReflectionsDelay(38);
+            immersiveReverb.setReverbLevel((short)900);
+            immersiveReverb.setReverbDelay(65);
+            immersiveReverb.setDiffusion((short)1000);
             immersiveReverb.setDensity((short)1000);
             player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),1f));
         }
@@ -306,6 +316,27 @@ public final class PlayerService extends MediaSessionService {
         });
         return true;
     }
+    public static void stopFromGame(){
+        PlayerService instance=active;
+        if(instance==null||instance.stoppingFromGame)return;
+        instance.stoppingFromGame=true;
+        instance.handler.postDelayed(()->{
+            try{
+                if(instance.player!=null){instance.player.pause();instance.player.stop();}
+                instance.playing=false;instance.loading=false;
+                instance.statusMessage="Minecraft closed";
+                instance.stopForeground(STOP_FOREGROUND_REMOVE);
+                instance.stopSelf();
+            }catch(RuntimeException error){Log.w(TAG,"Unable to stop after game exit",error);}
+        },150);
+    }
+    public static void minecraftHeartbeat(){
+        PlayerService instance=active;
+        if(instance!=null){
+            instance.minecraftConnected=true;
+            instance.minecraftHeartbeat=SystemClock.uptimeMillis();
+        }
+    }
     public static void requestRadioRefill(){
         PlayerService instance=active;
         if(instance!=null)instance.handler.post(instance::fillRadio);
@@ -375,7 +406,17 @@ public final class PlayerService extends MediaSessionService {
         }
         AudioAttributes audio=new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build();
-        player=new ExoPlayer.Builder(this).build();
+        DefaultRenderersFactory renderers=new DefaultRenderersFactory(this){
+            @Override protected AudioSink buildAudioSink(Context context,boolean floatOutput,
+                                                          boolean playbackParams){
+                return new DefaultAudioSink.Builder(context)
+                        .setEnableFloatOutput(false)
+                        .setEnableAudioTrackPlaybackParams(playbackParams)
+                        .setAudioProcessors(new AudioProcessor[]{immersiveProcessor})
+                        .build();
+            }
+        };
+        player=new ExoPlayer.Builder(this,renderers).build();
         player.setAudioAttributes(audio,true);
         player.setHandleAudioBecomingNoisy(true);
         player.addListener(new Player.Listener(){
@@ -412,6 +453,9 @@ public final class PlayerService extends MediaSessionService {
                     playing=player.isPlaying();
                     captureBeat();
                     applyImmersiveSound();
+                    if(minecraftConnected&&SystemClock.uptimeMillis()-minecraftHeartbeat>12000){
+                        stopFromGame();return;
+                    }
                 }catch(RuntimeException ignored){}
                 handler.postDelayed(this,beatEnabled?90:400);
             }

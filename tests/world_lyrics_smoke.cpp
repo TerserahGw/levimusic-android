@@ -59,6 +59,9 @@ int main(){
     alignas(8) std::array<char,0xf40> cameraOwner{};
     alignas(8) std::array<char,64> cameraStack{};
     const float identity[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    float zeroOrbit[16];std::memcpy(zeroOrbit,identity,sizeof(identity));
+    lm_cinematic::applyOrbit(zeroOrbit,0,0,0,0,5.4f);
+    assert(std::memcmp(zeroOrbit,identity,sizeof(identity))==0);
     std::memcpy(cameraMatrix,identity,sizeof(identity));
     std::memcpy(cameraOwner.data()+0xeb8,identity,sizeof(identity));
     lm_cinematic::original=cameraOriginal;
@@ -90,6 +93,10 @@ int main(){
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     environmentFixture=0;lm_immersive::lastSample=0;
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    assert(lm_immersive::current()==lm_immersive::Environment::Cave);
+    lm_immersive::lastCaveEvidence=lm_immersive::nowMs()-4000;
+    lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Open);
     lm_immersive::request(false);

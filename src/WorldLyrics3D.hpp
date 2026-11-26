@@ -63,6 +63,8 @@ inline std::thread installer;
 inline const Profile* profile=nullptr;
 struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;Vec3 position{};};
 inline Pose pose;
+inline std::atomic<int64_t> lastPlayerTick{0};
+inline std::atomic<uintptr_t> lastPlayerWorld{0};
 inline std::string currentLine;
 struct Pixel{float x,y;uint8_t word=0,coverage=255;};
 struct GlyphMesh{std::vector<Pixel> pixels,outline;float width=0,scale=.011f;};
@@ -291,12 +293,13 @@ inline void tickHook(void* player){
     if(!std::isfinite(position.x)||!std::isfinite(position.y)||!std::isfinite(position.z)
        ||magnitude2(position)>1.e14f)return;
     const float normalizedYaw=std::remainder(yaw,360.f);
-    lm_cinematic::observePlayer(position.x,position.y,position.z,pitch,normalizedYaw,
-        read<uintptr_t>(player,profile->level));
+    const auto world=read<uintptr_t>(player,profile->level);
+    lastPlayerTick=nowMs();lastPlayerWorld=world;
+    lm_cinematic::observePlayer(position.x,position.y,position.z,pitch,normalizedYaw,world);
     lm_immersive::observePlayer(player,position.x,position.y,position.z);
     if(!enabled.load(std::memory_order_relaxed))return;
     Pose next{pitch,normalizedYaw,reinterpret_cast<uintptr_t>(player),
-              read<uintptr_t>(player,profile->level),nowMs(),position};
+              world,nowMs(),position};
     std::unique_lock lock(poseMutex,std::try_to_lock);
     if(lock)pose=next;
 }
@@ -1035,9 +1038,9 @@ inline void prepare(){
     renderHooked=true;installed.store(true,std::memory_order_release);state=State::Ready;
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicWorld3D","world renderer ready: %s (%s)",profile->name.data(),image.selected?"exact build":"matching hotfix signatures");
 }
-inline void request(bool value){
+inline void request(bool value,bool monitor=false){
     if(enabled.exchange(value)!=value){++generation;lastDraw=0;renderStage=0;}
-    if(!value)return;
+    if(!value&&!monitor)return;
     std::lock_guard lock(lifecycle);
     if(state.load()!=State::Idle)return;
     state=State::Preparing;
@@ -1047,8 +1050,11 @@ inline void request(bool value){
             __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","renderer unavailable (%d)",int(state.load()));
     });
 }
+inline bool inWorld(){
+    return lastPlayerWorld.load()!=0&&nowMs()-lastPlayerTick.load()<1800;
+}
 inline void shutdown(){
-    request(false);publish("");
+    request(false,false);publish("");lastPlayerTick=0;lastPlayerWorld=0;
     lm_cinematic::shutdown();
     lm_immersive::request(false);
     std::lock_guard lock(lifecycle);

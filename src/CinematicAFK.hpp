@@ -65,19 +65,32 @@ inline bool saneMatrix(const float* matrix){
         if(!std::isfinite(matrix[i])||std::abs(matrix[i])>1.e7f)return false;
     return true;
 }
-inline void applyOrbit(float* m,float yaw,float pitch,float distance,float amount){
-    if(!m||amount<=0.f)return;
-    const float sy=std::sin(yaw*amount),cy=std::cos(yaw*amount);
+// Port of the audited reference transform. The old approximation rotated the
+// basis but only subtracted m[14]; that moved the lyric camera calculation
+// while leaving Bedrock's final view effectively on its original pivot.
+inline void applyOrbit(float* m,float yaw,float lateral,float vertical,
+                       float pitch,float pivot){
+    if(!m)return;
+    const float sy=std::sin(yaw),cy=std::cos(yaw);
     for(int row=0;row<3;++row){
-        const float a=m[row*4],c=m[row*4+2];
-        m[row*4]=cy*a+sy*c;m[row*4+2]=cy*c-sy*a;
+        const int i=row*4;
+        const float x=m[i],z=m[i+2];
+        m[i]=cy*x+sy*z;
+        m[i+2]=cy*z-sy*x;
     }
-    const float sp=std::sin(pitch*amount),cp=std::cos(pitch*amount);
-    for(int row=0;row<3;++row){
-        const float b=m[row*4+1],c=m[row*4+2];
-        m[row*4+1]=cp*b-sp*c;m[row*4+2]=sp*b+cp*c;
+    if(std::abs(pitch)>1.e-5f){
+        const float sp=std::sin(pitch),cp=std::cos(pitch);
+        for(int row=0;row<3;++row){
+            const int i=row*4;
+            const float y=m[i+1],z=m[i+2];
+            m[i+1]=cp*y-sp*z;
+            m[i+2]=sp*y+cp*z;
+        }
     }
-    m[14]-=distance*amount;
+    const float tx=m[12],ty=m[13],tz=m[14];
+    m[12]=cy*tx+sy*tz+sy*pivot;
+    m[13]=ty-vertical;
+    m[14]=cy*tz-sy*tx+(cy-1.f)*pivot-lateral;
 }
 inline bool shouldRun(Pose& out,float& strength,float& angle){
     if(!enabled||!supported||!playing)return false;
@@ -110,10 +123,12 @@ inline void setupHook(void* owner,void* stack,float partial){
     std::memcpy(originalStack.data(),stackMatrix,sizeof(originalStack));
     std::memcpy(originalCamera.data(),cameraMatrix,sizeof(originalCamera));
     const float shot=std::sin(angle*.43f);
-    const float pitch=-.12f+shot*.08f;
+    const float pitch=(-.12f+shot*.08f)*strength;
     const float distance=5.4f+shot*.9f;
-    applyOrbit(stackMatrix,angle,pitch,distance,strength);
-    applyOrbit(cameraMatrix,angle,pitch,distance,strength);
+    const float yaw=angle*strength;
+    const float vertical=(2.15f+std::sin(angle*.61f)*.55f)*strength;
+    applyOrbit(stackMatrix,yaw,0.f,vertical,pitch,distance);
+    applyOrbit(cameraMatrix,yaw,0.f,vertical,pitch,distance);
     if(!saneMatrix(stackMatrix)||!saneMatrix(cameraMatrix)){
         std::memcpy(stackMatrix,originalStack.data(),sizeof(originalStack));
         std::memcpy(cameraMatrix,originalCamera.data(),sizeof(originalCamera));

@@ -1538,9 +1538,20 @@ bool registerCover(JNIEnv* env,const std::string& url,const std::string& id){
 
 class AndroidPlayer {
     jobject player_ = nullptr;
+    jobject echo_ = nullptr;
     jobject equalizer_ = nullptr;
     jobject reverb_ = nullptr;
+    std::string playableUrl_;
+    int volume_ = 75;
     int environment_ = 0;
+    void releasePlayer(JNIEnv* env,jobject& object,const char* label){
+        if(!object)return;
+        jclass cls=env->GetObjectClass(object);
+        auto release=env->GetMethodID(cls,"release","()V");
+        if(release)env->CallVoidMethod(object,release);
+        clearException(env,label);env->DeleteLocalRef(cls);
+        env->DeleteGlobalRef(object);object=nullptr;
+    }
     void releaseEffect(JNIEnv* env,jobject& effect,const char* label){
         if(!effect)return;
         jclass cls=env->GetObjectClass(effect);
@@ -1550,6 +1561,7 @@ class AndroidPlayer {
         env->DeleteGlobalRef(effect);effect=nullptr;
     }
     void releaseEnvironmentEffects(JNIEnv* env){
+        releasePlayer(env,echo_,"cave PCM echo release");
         if(player_){
             jclass media=env->GetObjectClass(player_);
             auto attach=env->GetMethodID(media,"attachAuxEffect","(I)V");
@@ -1575,6 +1587,7 @@ public:
         env->DeleteLocalRef(cls);
         env->DeleteGlobalRef(player_);
         player_ = nullptr;
+        playableUrl_.clear();
     }
     bool startUrl(JNIEnv* env, const std::string& url, int volume,
                   bool trustedFirstParty=false) {
@@ -1605,7 +1618,7 @@ public:
         if (jurl) env->DeleteLocalRef(jurl);
         env->DeleteLocalRef(cls);
         if (!ok) release(env);
-        if (ok) setVolume(env, volume);
+        if (ok) {playableUrl_=playableUrl;setVolume(env, volume);}
         return ok;
     }
     bool isPlaying(JNIEnv* env) {
@@ -1623,6 +1636,19 @@ public:
         const bool playing = isPlaying(env);
         jmethodID fn = env->GetMethodID(cls, playing ? "pause" : "start", "()V");
         if (fn) env->CallVoidMethod(player_, fn);
+        if(echo_){
+            jclass echoClass=env->GetObjectClass(echo_);
+            if(!playing){
+                auto seekTo=env->GetMethodID(echoClass,"seekTo","(I)V");
+                auto start=env->GetMethodID(echoClass,"start","()V");
+                if(seekTo)env->CallVoidMethod(echo_,seekTo,std::max(0,position(env)-135));
+                if(start)env->CallVoidMethod(echo_,start);
+            }else{
+                auto pause=env->GetMethodID(echoClass,"pause","()V");
+                if(pause)env->CallVoidMethod(echo_,pause);
+            }
+            env->DeleteLocalRef(echoClass);
+        }
         clearException(env, "toggle");
         env->DeleteLocalRef(cls);
     }
@@ -1636,11 +1662,18 @@ public:
         return std::max(0, static_cast<int>(pos));
     }
     void setVolume(JNIEnv* env, int volume) {
+        volume_=std::clamp(volume,0,100);
         if (!player_) return;
         jclass cls = env->GetObjectClass(player_);
         jmethodID fn = env->GetMethodID(cls, "setVolume", "(FF)V");
         const float v = std::clamp(volume, 0, 100) / 100.f;
         if (fn) env->CallVoidMethod(player_, fn, v, v);
+        if(echo_){
+            jclass echoClass=env->GetObjectClass(echo_);
+            auto echoVolume=env->GetMethodID(echoClass,"setVolume","(FF)V");
+            if(echoVolume)env->CallVoidMethod(echo_,echoVolume,v*.24f,v*.24f);
+            env->DeleteLocalRef(echoClass);
+        }
         clearException(env, "volume");
         env->DeleteLocalRef(cls);
     }
@@ -1661,7 +1694,7 @@ public:
 
         jclass eq=env->FindClass("android/media/audiofx/Equalizer");
         auto eqCtor=eq?env->GetMethodID(eq,"<init>","(II)V"):nullptr;
-        jobject localEq=eqCtor?env->NewObject(eq,0,session):nullptr;
+        jobject localEq=eqCtor?env->NewObject(eq,eqCtor,0,session):nullptr;
         if(localEq&&!clearException(env,"Equalizer create")){
             equalizer_=env->NewGlobalRef(localEq);
             auto enable=env->GetMethodID(eq,"setEnabled","(Z)I");
@@ -1696,7 +1729,7 @@ public:
 
         jclass rv=env->FindClass("android/media/audiofx/EnvironmentalReverb");
         auto rvCtor=rv?env->GetMethodID(rv,"<init>","(II)V"):nullptr;
-        jobject localRv=rvCtor?env->NewObject(rv,0,0):nullptr;
+        jobject localRv=rvCtor?env->NewObject(rv,rvCtor,0,0):nullptr;
         if(localRv&&!clearException(env,"EnvironmentalReverb create")){
             reverb_=env->NewGlobalRef(localRv);
             auto setShort=[&](const char* name,short value){
@@ -1708,15 +1741,15 @@ public:
                 if(method)env->CallVoidMethod(reverb_,method,value);
             };
             const bool underwater=environment==2;
-            setShort("setRoomLevel",underwater?-2200:-450);
-            setShort("setRoomHFLevel",underwater?-6500:-1100);
-            setInt("setDecayTime",underwater?650:2800);
-            setShort("setDecayHFRatio",underwater?250:850);
-            setShort("setReflectionsLevel",underwater?-2400:-180);
-            setInt("setReflectionsDelay",underwater?12:58);
-            setShort("setReverbLevel",underwater?-1800:350);
-            setInt("setReverbDelay",underwater?18:72);
-            setShort("setDiffusion",underwater?650:900);
+            setShort("setRoomLevel",underwater?-2200:-250);
+            setShort("setRoomHFLevel",underwater?-6500:-700);
+            setInt("setDecayTime",underwater?650:3400);
+            setShort("setDecayHFRatio",underwater?250:900);
+            setShort("setReflectionsLevel",underwater?-2400:200);
+            setInt("setReflectionsDelay",underwater?12:38);
+            setShort("setReverbLevel",underwater?-1800:900);
+            setInt("setReverbDelay",underwater?18:65);
+            setShort("setDiffusion",underwater?650:1000);
             setShort("setDensity",underwater?700:1000);
             auto enable=env->GetMethodID(rv,"setEnabled","(Z)I");
             auto getId=env->GetMethodID(rv,"getId","()I");
@@ -1729,6 +1762,39 @@ public:
         if(rv)env->DeleteLocalRef(rv);
         clearException(env,"EnvironmentalReverb configure");
         env->DeleteLocalRef(media);
+        if(environment==1&&!playableUrl_.empty()){
+            // A quiet delayed copy is an early reflection in the actual PCM
+            // playback path. It remains audible in internal screen recordings
+            // that omit Android auxiliary effects; EnvironmentalReverb supplies
+            // the longer decay when the device supports it.
+            jclass cls=env->FindClass("android/media/MediaPlayer");
+            auto ctor=cls?env->GetMethodID(cls,"<init>","()V"):nullptr;
+            jobject local=ctor?env->NewObject(cls,ctor):nullptr;
+            if(local&&!clearException(env,"cave echo ctor")){
+                echo_=env->NewGlobalRef(local);
+                auto stream=env->GetMethodID(cls,"setAudioStreamType","(I)V");
+                auto source=env->GetMethodID(cls,"setDataSource","(Ljava/lang/String;)V");
+                auto prepare=env->GetMethodID(cls,"prepare","()V");
+                auto seekTo=env->GetMethodID(cls,"seekTo","(I)V");
+                auto volume=env->GetMethodID(cls,"setVolume","(FF)V");
+                auto start=env->GetMethodID(cls,"start","()V");
+                jstring url=toJava(env,playableUrl_);
+                if(stream)env->CallVoidMethod(echo_,stream,3);
+                if(source&&url)env->CallVoidMethod(echo_,source,url);
+                if(prepare)env->CallVoidMethod(echo_,prepare);
+                if(!clearException(env,"cave echo prepare")){
+                    const int behind=std::max(0,position(env)-135);
+                    if(seekTo)env->CallVoidMethod(echo_,seekTo,behind);
+                    const float level=(volume_/100.f)*.24f;
+                    if(volume)env->CallVoidMethod(echo_,volume,level,level);
+                    if(start&&isPlaying(env))env->CallVoidMethod(echo_,start);
+                    clearException(env,"cave echo start");
+                }else releasePlayer(env,echo_,"cave echo cleanup");
+                if(url)env->DeleteLocalRef(url);
+            }
+            if(local)env->DeleteLocalRef(local);
+            if(cls)env->DeleteLocalRef(cls);
+        }
     }
     int duration(JNIEnv* env) {
         if(!player_) return 0;
@@ -1744,6 +1810,12 @@ public:
         jclass cls=env->GetObjectClass(player_);
         jmethodID m=env->GetMethodID(cls,"seekTo","(I)V");
         if(m)env->CallVoidMethod(player_,m,std::max(0,ms));
+        if(echo_){
+            jclass echoClass=env->GetObjectClass(echo_);
+            auto echoSeek=env->GetMethodID(echoClass,"seekTo","(I)V");
+            if(echoSeek)env->CallVoidMethod(echo_,echoSeek,std::max(0,ms-135));
+            env->DeleteLocalRef(echoClass);
+        }
         clearException(env,"seek");
         env->DeleteLocalRef(cls);
     }
@@ -2187,7 +2259,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.6 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.7 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2254,7 +2326,7 @@ public:
         for(const auto& [key,value]:savedSettings_)setConfig(key,value);
         lm_cinematic::request(cinematicAfk_,cinematicDelay_);
         lm_immersive::request(immersiveSound_);
-        lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+        lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
         restoringSettings_=false;
         static std::once_flag registered;
         std::call_once(registered,[](){
@@ -2430,18 +2502,18 @@ private:
             cv_.notify_all();
         } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
-            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
         } else if(k=="cinematicAfk") {
             cinematicAfk_=v=="true"||v=="1";
             lm_cinematic::request(cinematicAfk_,cinematicDelay_);
-            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
         } else if(k=="cinematicDelay") {
             try{cinematicDelay_=std::clamp(std::stoi(std::string(v)),10,60);}catch(...){}
             lm_cinematic::request(cinematicAfk_,cinematicDelay_);
         } else if(k=="immersiveSound") {
             immersiveSound_=v=="true"||v=="1";
             lm_immersive::request(immersiveSound_);
-            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
         } else if(k=="worldTextScript") {
             try{worldTextScript_=std::clamp(std::stoi(std::string(v)),0,1);}catch(...){}
         } else if(k=="worldFont") {
@@ -3210,7 +3282,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.6 STABLE",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.7 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3591,6 +3663,7 @@ private:
         auto lastBeat=std::chrono::steady_clock::now()-std::chrono::seconds(3);
         bool beatSent=false;
         int lastImmersive=-1;
+        bool sawWorld=false,lastInWorld=false,pausedForWorld=false,pausedBridge=false;
         std::string previousId,previousTitle,previousArtist,previousProvider,previousArt;
         bool lastBridgeConnected=false;
         while(true){
@@ -3607,10 +3680,37 @@ private:
             }
             // Hook preparation is separate from playback and never scans the
             // entire game library during a music command.
-            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
             const int desiredEnvironment=immersiveSound_?
                 static_cast<int>(lm_immersive::current()):0;
             if(!useBridge_)player.setEnvironment(env,desiredEnvironment);
+            const bool inWorld=lm_world3d::inWorld();
+            if(!sawWorld&&inWorld){sawWorld=true;lastInWorld=true;}
+            else if(sawWorld&&inWorld!=lastInWorld){
+                if(!inWorld){
+                    if(useBridge_){
+                        std::string key;bool wasPlaying;
+                        {std::lock_guard lock(mu_);key=bridgeKey_;wasPlaying=playing_;}
+                        if(wasPlaying&&!key.empty()&&
+                           !bridgeGet("/v1/control?action=pause",key).empty()){
+                            pausedForWorld=true;pausedBridge=true;
+                        }
+                    }else if(player.isPlaying(env)){
+                        player.toggle(env);pausedForWorld=true;pausedBridge=false;
+                        std::lock_guard lock(mu_);playing_=false;
+                    }
+                    __android_log_print(ANDROID_LOG_INFO,TAG,
+                        "world exited; playback auto-pause=%d",int(pausedForWorld));
+                }else if(pausedForWorld){
+                    if(pausedBridge){
+                        std::string key;{std::lock_guard lock(mu_);key=bridgeKey_;}
+                        if(!key.empty())bridgeGet("/v1/control?action=play",key);
+                    }else if(!player.isPlaying(env)&&player.position(env)>0)player.toggle(env);
+                    pausedForWorld=false;
+                    __android_log_print(ANDROID_LOG_INFO,TAG,"world entered; playback resumed");
+                }
+                lastInWorld=inWorld;
+            }
             if(lyricsRebuild_.exchange(false)){
 #if defined(LEVI_STANDALONE)
                 if(!useBridge_){
@@ -4473,6 +4573,10 @@ private:
                 }
             }
             } // Native Standalone or legacy Audius mode.
+        }
+        if(useBridge_){
+            std::string key;{std::lock_guard lock(mu_);key=bridgeKey_;}
+            if(!key.empty())bridgeGet("/v1/game-exit",key);
         }
         player.release(env);
     }
