@@ -33,7 +33,9 @@ public final class MusicCatalog {
     private static final Object INIT_LOCK=new Object();
     private static final ArrayList<Song> RESULTS=new ArrayList<>();
     private static final ArrayList<Song> PLAY_QUEUE=new ArrayList<>();
+    private static final ArrayList<Song> PLAYLIST_SOURCE=new ArrayList<>();
     private static boolean playlistQueueMode=false;
+    private static boolean shuffle=false;
     private static final java.util.HashSet<String> REJECTED=new java.util.HashSet<>();
     private static final OkHttpClient CLIENT=new OkHttpClient.Builder()
             .connectTimeout(12,TimeUnit.SECONDS)
@@ -174,17 +176,33 @@ public final class MusicCatalog {
         for(Song x:PLAY_QUEUE)if(x.id.equals(id))return x;
         return null;
     }
-    public static synchronized Song neighbor(String id,int direction){
+    public static synchronized Song neighbor(String id,int direction){return neighbor(id,direction,playlistQueueMode);}
+    public static synchronized Song neighbor(String id,int direction,boolean wrap){
         ArrayList<Song> queue=PLAY_QUEUE.isEmpty()?RESULTS:PLAY_QUEUE;
         int at=-1;
         for(int i=0;i<queue.size();i++)if(queue.get(i).id.equals(id)){at=i;break;}
         if(queue.isEmpty())return null;
         if(at<0)return direction>=0?queue.get(0):queue.get(queue.size()-1);
-        if(direction>0 && at==queue.size()-1 && !playlistQueueMode)return null;
-        if(queue.size()==1 && !playlistQueueMode)return null;
+        if(direction>0 && at==queue.size()-1 && !wrap)return null;
+        if(direction<0 && at==0 && !wrap)return null;
+        if(queue.size()==1 && !wrap)return null;
         return queue.get((at+direction+queue.size())%queue.size());
     }
     public static synchronized boolean isPlaylistQueue(){return playlistQueueMode;}
+    public static synchronized boolean isShuffle(){return shuffle;}
+    public static synchronized boolean setShuffle(boolean value,String currentId){
+        if(!playlistQueueMode)return false;
+        shuffle=value;
+        PLAY_QUEUE.clear();PLAY_QUEUE.addAll(PLAYLIST_SOURCE);
+        if(value&&PLAY_QUEUE.size()>1){
+            Song current=null;
+            for(Song item:PLAY_QUEUE)if(item.id.equals(currentId)){current=item;break;}
+            if(current!=null)PLAY_QUEUE.remove(current);
+            java.util.Collections.shuffle(PLAY_QUEUE,new java.util.Random(System.nanoTime()));
+            if(current!=null)PLAY_QUEUE.add(0,current);
+        }
+        return true;
+    }
     /** Add an individually recommended track without losing search or playlist data. */
     public static synchronized void appendRecommendation(Song song){
         if(song==null||playlistQueueMode)return;
@@ -198,14 +216,14 @@ public final class MusicCatalog {
     }
     public static synchronized void activatePlaylistQueue(List<Song> tracks){
         playlistQueueMode=true;
-        PLAY_QUEUE.clear();
+        PLAY_QUEUE.clear();PLAYLIST_SOURCE.clear();shuffle=false;
         REJECTED.clear();
-        if(tracks!=null)PLAY_QUEUE.addAll(tracks);
+        if(tracks!=null){PLAY_QUEUE.addAll(tracks);PLAYLIST_SOURCE.addAll(tracks);}
     }
     /** Start a fresh radio from the SELECTED search item, not the next search result. */
     public static synchronized void activateSearchQueue(Song seed){
         playlistQueueMode=false;
-        PLAY_QUEUE.clear();
+        PLAY_QUEUE.clear();PLAYLIST_SOURCE.clear();shuffle=false;
         REJECTED.clear();
         if(seed!=null)PLAY_QUEUE.add(seed);
     }
@@ -258,6 +276,7 @@ public final class MusicCatalog {
         try {
             out.put("success",true).put("tracks",items).put("count",items.length())
                .put("mode",playlistQueueMode?"playlist":"radio")
+               .put("shuffle",shuffle)
                .put("currentId",currentId==null?"":currentId)
                .put("editable",true);
         }catch(Exception ignored){}
@@ -268,10 +287,30 @@ public final class MusicCatalog {
     public static List<Song> search(String keyword) throws Exception {
         if(keyword==null||keyword.trim().isEmpty())return List.of();
         initialize();
-        SearchExtractor extractor=ServiceList.YouTube.getSearchExtractor(
-                keyword.trim(),List.of("videos"),"");
-        extractor.fetchPage();
+        String input=keyword.trim();
+        android.net.Uri direct=android.net.Uri.parse(input);
+        String host=direct.getHost();
+        boolean youtube=host!=null&&(host.equals("youtu.be")||host.equals("www.youtube.com")||
+                host.equals("youtube.com")||host.equals("m.youtube.com")||host.equals("music.youtube.com"));
         List<Song> found=new ArrayList<>();
+        if(youtube&&direct.getQueryParameter("list")!=null){
+            found.addAll(importPublicPlaylist(input).songs);
+        }else if(youtube&&!idFromUrl(input).isEmpty()){
+            StreamInfo info=StreamInfo.getInfo(ServiceList.YouTube,
+                    "https://www.youtube.com/watch?v="+idFromUrl(input));
+            String id=idFromUrl(info.getUrl());
+            if(id.isEmpty())id=idFromUrl(input);
+            String art="";
+            if(info.getThumbnails()!=null&&!info.getThumbnails().isEmpty())
+                art=info.getThumbnails().get(info.getThumbnails().size()-1).getUrl();
+            if(art.isEmpty())art="https://i.ytimg.com/vi/"+id+"/hqdefault.jpg";
+            found.add(new Song(id,info.getName(),info.getUploaderName(),
+                    "https://www.youtube.com/watch?v="+id,art,
+                    Math.max(0,info.getDuration())*1000L));
+        }else{
+        SearchExtractor extractor=ServiceList.YouTube.getSearchExtractor(
+                input,List.of("videos"),"");
+        extractor.fetchPage();
         for(InfoItem item:extractor.getInitialPage().getItems()) {
             if(!(item instanceof StreamInfoItem))continue;
             StreamInfoItem stream=(StreamInfoItem)item;
@@ -286,6 +325,7 @@ public final class MusicCatalog {
             found.add(new Song(id,stream.getName(),stream.getUploaderName(),url,art,
                     Math.max(0,stream.getDuration())*1000L));
             if(found.size()>=25)break;
+        }
         }
         synchronized(MusicCatalog.class){
             RESULTS.clear();
@@ -307,6 +347,13 @@ public final class MusicCatalog {
         if(atShort>=0){
             String piece=url.substring(atShort+9).split("[&#?/]")[0];
             if(piece.matches("[A-Za-z0-9_-]{11}"))return piece;
+        }
+        for(String marker:new String[]{"/shorts/","/live/","/embed/"}){
+            int pos=url.indexOf(marker);
+            if(pos>=0){
+                String piece=url.substring(pos+marker.length()).split("[&#?/]",2)[0];
+                if(piece.matches("[A-Za-z0-9_-]{11}"))return piece;
+            }
         }
         return "";
     }

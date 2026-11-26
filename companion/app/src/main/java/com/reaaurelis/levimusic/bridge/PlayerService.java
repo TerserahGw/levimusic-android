@@ -9,6 +9,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.media.AudioManager;
 import android.media.audiofx.Visualizer;
+import android.media.audiofx.Equalizer;
+import android.media.audiofx.PresetReverb;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -19,6 +21,7 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.media3.common.AudioAttributes;
+import androidx.media3.common.AuxEffectInfo;
 import androidx.media3.common.C;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
@@ -64,11 +67,56 @@ public final class PlayerService extends MediaSessionService {
     private volatile String statusMessage="Choose a song";
     private final ArrayDeque<String> recentSongs=new ArrayDeque<>();
     private volatile boolean autoplay=true;
+    private volatile String repeatMode="all";
+    private volatile String immersiveEnvironment="open";
+    private Equalizer immersiveEq;
+    private PresetReverb immersiveReverb;
+    private int immersiveSession=-1;
     private int navigationGeneration=0;
     private boolean endQueued=false;
     private boolean radioFilling=false, pendingNext=false;
 
     public static boolean isActive(){return active!=null;}
+    public static void setEnvironment(String value){
+        PlayerService current=active;
+        if(current==null)return;
+        String safe="underwater".equals(value)?"underwater":"cave".equals(value)?"cave":"open";
+        current.handler.post(()->{current.immersiveEnvironment=safe;current.applyImmersiveSound();});
+    }
+    private void releaseImmersiveSound(){
+        if(immersiveEq!=null){try{immersiveEq.release();}catch(RuntimeException ignored){}immersiveEq=null;}
+        if(immersiveReverb!=null){try{immersiveReverb.release();}catch(RuntimeException ignored){}immersiveReverb=null;}
+        immersiveSession=-1;
+        if(player!=null)try{player.setAuxEffectInfo(new AuxEffectInfo(0,0f));}catch(RuntimeException ignored){}
+    }
+    private void applyImmersiveSound(){
+        if(player==null)return;
+        if("open".equals(immersiveEnvironment)){releaseImmersiveSound();return;}
+        int session=player.getAudioSessionId();if(session<=0)return;
+        if(session!=immersiveSession){
+            releaseImmersiveSound();
+            try{
+                immersiveEq=new Equalizer(0,session);immersiveEq.setEnabled(true);
+                immersiveReverb=new PresetReverb(0,0);
+                immersiveReverb.setPreset("underwater".equals(immersiveEnvironment)?
+                        PresetReverb.PRESET_SMALLROOM:PresetReverb.PRESET_LARGEHALL);
+                immersiveReverb.setEnabled(true);
+                player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),
+                        "underwater".equals(immersiveEnvironment)?.18f:.58f));
+                immersiveSession=session;
+            }catch(RuntimeException error){releaseImmersiveSound();Log.w(TAG,"Immersive audio unavailable",error);return;}
+        }
+        if(immersiveEq!=null)try{
+            short bands=immersiveEq.getNumberOfBands();
+            for(short band=0;band<bands;band++){
+                short level=0;
+                if("underwater".equals(immersiveEnvironment))
+                    level=(short)(band<Math.max(1,bands/3)?180:-1500);
+                else level=(short)(band<Math.max(1,bands/3)?130:-180);
+                immersiveEq.setBandLevel(band,level);
+            }
+        }catch(RuntimeException error){Log.w(TAG,"Immersive equalizer update failed",error);}
+    }
     public static void setBeatEnabled(boolean enabled){
         PlayerService current=active;
         if(current!=null&&current.beatEnabled==enabled)return;
@@ -198,10 +246,17 @@ public final class PlayerService extends MediaSessionService {
                     case "play": instance.player.play();break;
                     case "pause": instance.player.pause();break;
                     case "seek": instance.player.seekTo(Math.max(0,seek));break;
-                    case "next": instance.advance(1);break;
+                    case "next": instance.advance(1,false);break;
                     case "autoplay_on": instance.autoplay=true;break;
                     case "autoplay_off": instance.autoplay=false;break;
-                    case "previous": instance.advance(-1);break;
+                    case "previous": instance.advance(-1,false);break;
+                    case "repeat_cycle":
+                        instance.repeatMode="all".equals(instance.repeatMode)?"one":
+                                "one".equals(instance.repeatMode)?"off":"all";break;
+                    case "shuffle_toggle": {
+                        String id=instance.song==null?"":instance.song.id;
+                        MusicCatalog.setShuffle(!MusicCatalog.isShuffle(),id);break;
+                    }
                     default:break;
                 }
             }catch(RuntimeException e){Log.w(TAG,"Media control error",e);}
@@ -212,10 +267,12 @@ public final class PlayerService extends MediaSessionService {
         PlayerService instance=active;
         if(instance!=null)instance.handler.post(instance::fillRadio);
     }
-    private void advance(int direction){
+    private void advance(int direction,boolean automatic){
         MusicCatalog.Song current=song;
         if(current==null)return;
-        MusicCatalog.Song next=MusicCatalog.neighbor(current.id,direction);
+        if(automatic&&"one".equals(repeatMode)){startTrack(current);return;}
+        boolean wrap=MusicCatalog.isPlaylistQueue()||"all".equals(repeatMode);
+        MusicCatalog.Song next=MusicCatalog.neighbor(current.id,direction,wrap);
         if(next!=null){startTrack(next);return;}
         if(direction<0 || MusicCatalog.isPlaylistQueue()){
             statusMessage="No previous or next playlist track";
@@ -234,7 +291,7 @@ public final class PlayerService extends MediaSessionService {
         if(current==null || MusicCatalog.isPlaylistQueue() || radioFilling)return;
         int required=3-MusicCatalog.upcomingCount(current.id);
         if(required<=0){
-            if(pendingNext){pendingNext=false;advance(1);}
+            if(pendingNext){pendingNext=false;advance(1,false);}
             return;
         }
         radioFilling=true;
@@ -289,7 +346,7 @@ public final class PlayerService extends MediaSessionService {
                         handler.post(()->{
                             endQueued=false;
                             if(player!=null && player.getPlaybackState()==Player.STATE_ENDED)
-                                advance(1);
+                                advance(1,true);
                         });
                     }
                 }
@@ -311,6 +368,7 @@ public final class PlayerService extends MediaSessionService {
                     durationMs=Math.max(0,player.getDuration());
                     playing=player.isPlaying();
                     captureBeat();
+                    applyImmersiveSound();
                 }catch(RuntimeException ignored){}
                 handler.postDelayed(this,beatEnabled?90:400);
             }
@@ -402,6 +460,9 @@ public final class PlayerService extends MediaSessionService {
                 .put("playing",playing)
                 .put("loading",loading)
                 .put("autoplay",autoplay)
+                .put("repeatMode",repeatMode)
+                .put("shuffle",MusicCatalog.isShuffle())
+                .put("immersiveEnvironment",immersiveEnvironment)
                 .put("queueMode",MusicCatalog.isPlaylistQueue()?"playlist":"radio")
                 .put("nextCount",MusicCatalog.upcomingCount(current==null?"":current.id))
                 .put("positionMs",positionMs)
@@ -414,6 +475,7 @@ public final class PlayerService extends MediaSessionService {
     @Override public void onDestroy(){
         active=null;
         releaseBeat();
+        releaseImmersiveSound();
         handler.removeCallbacks(snapshot);
         resolver.shutdownNow();
         radioWorker.shutdownNow();

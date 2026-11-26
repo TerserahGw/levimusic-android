@@ -207,7 +207,13 @@ public final class BridgeApi {
                     PlayerService.setBeatEnabled("1".equals(setting));
                 json=PlayerService.getBeatStatus(context);
             }
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.3").put("api",3);
+            else if(path.startsWith("/v1/immersive")){
+                String environment=getParam(path,"environment");
+                PlayerService.setEnvironment(environment);
+                json=new JSONObject().put("accepted",true).put("environment",
+                    "underwater".equals(environment)?"underwater":"cave".equals(environment)?"cave":"open");
+            }
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.4").put("api",4);
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
                 String id=player==null?"":player.optString("id");
@@ -243,13 +249,15 @@ public final class BridgeApi {
             else if(path.startsWith("/v1/control?"))json=control(path);
             else if(path.startsWith("/v1/search?")){
                 String query=URLDecoder.decode(getParam(path,"query"),"UTF-8");
-                if(query.length()>160)query=query.substring(0,160);
+                int limit=query.startsWith("https://")?2048:160;
+                if(query.length()>limit)query=query.substring(0,limit);
                 json=MusicCatalog.searchJson(query);
             }
             else if(path.equals("/v1/capabilities"))
-                json=new JSONObject().put("api",2).put("playlist",true).put("search",true)
+                json=new JSONObject().put("api",4).put("playlist",true).put("search",true)
                     .put("player",true).put("radio3",true)
                     .put("queueEditing",true).put("audioBeats",true)
+                    .put("repeat",true).put("shufflePlaylist",true).put("immersiveSound",true)
                     .put("pairing","local-clipboard");
             else if(path.equals("/v1/playlists")||path.startsWith("/v1/playlists?")){
                 OfflineLibrary.reconcilePlaylist(context);

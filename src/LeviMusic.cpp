@@ -36,6 +36,7 @@
 #include <map>
 #include <iomanip>
 #include <set>
+#include <random>
 
 namespace {
 constexpr const char* TAG = "LeviMusic";
@@ -48,6 +49,7 @@ struct Track {
     std::string title;
     std::string artist;
     std::string art;
+    std::string imageId;
 };
 bool localTrack(const Track& track){return track.id.rfind("offline:",0)==0;}
 bool allowedAudio(const std::filesystem::path& path){
@@ -97,7 +99,7 @@ struct Lyric {
     std::vector<lm_timing::WordCue> words;
 };
 
-enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistRename, PlaylistDelete, PlaylistAdd, PlaylistRemove, OfflineSave, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd };
+enum class Action { Search, PlayPause, Next, Previous, Stop, SetVolume, Seek, Select, Pair, PlaylistList, PlaylistOpen, PlaylistPlay, PlaylistCreate, PlaylistRename, PlaylistDelete, PlaylistAdd, PlaylistRemove, OfflineSave, OpenBrowser, QueueRefresh, QueuePlay, QueueRemove, QueueAdd, RepeatCycle, ShuffleToggle };
 struct Job { Action action; std::string query; };
 
 bool clearException(JNIEnv* env, const char* step) {
@@ -726,11 +728,40 @@ std::string chruRequest(JNIEnv* env,const std::string& server,const std::string&
     return selected;
 }
 struct ImportedPlaylist {std::string name;std::vector<Track> tracks;};
+bool youtubeUrl(const std::string& url){
+    return url.rfind("https://www.youtube.com/",0)==0||url.rfind("https://youtube.com/",0)==0||
+           url.rfind("https://m.youtube.com/",0)==0||url.rfind("https://music.youtube.com/",0)==0||
+           url.rfind("https://youtu.be/",0)==0;
+}
+std::string youtubeVideoId(const std::string& url){
+    if(!youtubeUrl(url))return {};
+    size_t at=url.find("v=");size_t skip=2;
+    if(at==std::string::npos){at=url.find("youtu.be/");skip=9;}
+    if(at==std::string::npos){at=url.find("/shorts/");skip=8;}
+    if(at==std::string::npos){at=url.find("/live/");skip=6;}
+    if(at==std::string::npos)return {};
+    auto id=url.substr(at+skip,11);
+    if(id.size()!=11||!std::all_of(id.begin(),id.end(),[](unsigned char c){
+        return std::isalnum(c)||c=='_'||c=='-';}))return {};
+    return id;
+}
+Track resolveYoutubeTrack(JNIEnv* env,const std::string& url){
+    const auto id=youtubeVideoId(url);if(id.empty())return {};
+    Track track{id,id,"YouTube","https://i.ytimg.com/vi/"+id+"/hqdefault.jpg"};
+    auto root=makeJson(env,getHttp(env,"https://www.youtube.com/oembed?format=json&url="+
+        encode(env,"https://www.youtube.com/watch?v="+id)));
+    if(root){
+        auto title=optString(env,root,"title"),artist=optString(env,root,"author_name");
+        auto art=optString(env,root,"thumbnail_url");
+        if(!title.empty())track.title=title;if(!artist.empty())track.artist=artist;
+        if(art.rfind("https://",0)==0)track.art=art;
+        env->DeleteLocalRef(root);
+    }
+    return track;
+}
 ImportedPlaylist importYoutubePlaylist(JNIEnv* env,const std::string& url){
     ImportedPlaylist imported;
-    if(url.size()>512||!(url.rfind("https://music.youtube.com/playlist?",0)==0||
-       url.rfind("https://www.youtube.com/playlist?",0)==0||
-       url.rfind("https://youtube.com/playlist?",0)==0))return imported;
+    if(url.size()>512||!youtubeUrl(url))return imported;
     const auto pos=url.find("list=");
     if(pos==std::string::npos)return imported;
     auto id=url.substr(pos+5);id=id.substr(0,id.find('&'));
@@ -1434,7 +1465,8 @@ std::vector<std::string> parsePlaylistNames(JNIEnv* env,const std::string& body)
 }
 struct BridgeState {
     bool connected=false,available=false,playing=false;
-    std::string id,title,artist,provider,message,art;
+    bool shuffle=false;
+    std::string id,title,artist,provider,message,art,repeatMode,queueMode;
     int elapsed=0,duration=0;
 };
 BridgeState decodeBridge(JNIEnv* env,const std::string& response) {
@@ -1450,6 +1482,9 @@ BridgeState decodeBridge(JNIEnv* env,const std::string& response) {
     result.provider=optString(env,root,"provider");
     result.message=optString(env,root,"message");
     result.art=optString(env,root,"art");
+    result.shuffle=optString(env,root,"shuffle")=="true";
+    result.repeatMode=optString(env,root,"repeatMode");
+    result.queueMode=optString(env,root,"queueMode");
     try{result.elapsed=std::max(0,std::stoi(optString(env,root,"positionMs")));}catch(...){}
     try{result.duration=std::max(0,std::stoi(optString(env,root,"durationMs")));}catch(...){}
     env->DeleteLocalRef(root);
@@ -1503,9 +1538,19 @@ bool registerCover(JNIEnv* env,const std::string& url,const std::string& id){
 
 class AndroidPlayer {
     jobject player_ = nullptr;
+    jobject equalizer_ = nullptr;
+    int environment_ = 0;
 public:
     ~AndroidPlayer() = default;
     void release(JNIEnv* env) {
+        if(equalizer_){
+            jclass effect=env->GetObjectClass(equalizer_);
+            auto releaseFx=env->GetMethodID(effect,"release","()V");
+            if(releaseFx)env->CallVoidMethod(equalizer_,releaseFx);
+            clearException(env,"Equalizer release");env->DeleteLocalRef(effect);
+            env->DeleteGlobalRef(equalizer_);equalizer_=nullptr;
+        }
+        environment_=0;
         if (!player_) return;
         jclass cls = env->GetObjectClass(player_);
         jmethodID release = env->GetMethodID(cls, "release", "()V");
@@ -1582,6 +1627,36 @@ public:
         if (fn) env->CallVoidMethod(player_, fn, v, v);
         clearException(env, "volume");
         env->DeleteLocalRef(cls);
+    }
+    void setEnvironment(JNIEnv* env,int environment){
+        environment=std::clamp(environment,0,2);
+        if(environment==environment_&&((environment==0)||equalizer_))return;
+        if(equalizer_){
+            jclass old=env->GetObjectClass(equalizer_);auto releaseFx=env->GetMethodID(old,"release","()V");
+            if(releaseFx)env->CallVoidMethod(equalizer_,releaseFx);clearException(env,"Equalizer reset");
+            env->DeleteLocalRef(old);env->DeleteGlobalRef(equalizer_);equalizer_=nullptr;
+        }
+        environment_=environment;if(!player_||environment==0)return;
+        jclass media=env->GetObjectClass(player_);
+        auto sessionFn=env->GetMethodID(media,"getAudioSessionId","()I");
+        const int session=sessionFn?env->CallIntMethod(player_,sessionFn):0;env->DeleteLocalRef(media);
+        if(session<=0||clearException(env,"MediaPlayer audio session"))return;
+        jclass eq=env->FindClass("android/media/audiofx/Equalizer");
+        auto ctor=eq?env->GetMethodID(eq,"<init>","(II)V"):nullptr;
+        jobject local=ctor?env->NewObject(eq,0,session):nullptr;
+        if(!local||clearException(env,"Equalizer create")){if(eq)env->DeleteLocalRef(eq);return;}
+        equalizer_=env->NewGlobalRef(local);env->DeleteLocalRef(local);
+        auto enable=env->GetMethodID(eq,"setEnabled","(Z)I");
+        auto count=env->GetMethodID(eq,"getNumberOfBands","()S");
+        auto set=env->GetMethodID(eq,"setBandLevel","(SS)V");
+        const short bands=count?env->CallShortMethod(equalizer_,count):0;
+        for(short band=0;set&&band<bands;++band){
+            short level=environment==2?(band<std::max<short>(1,bands/3)?180:-1500):
+                (band<std::max<short>(1,bands/3)?130:-180);
+            env->CallVoidMethod(equalizer_,set,band,level);
+        }
+        if(enable)env->CallIntMethod(equalizer_,enable,JNI_TRUE);
+        clearException(env,"Equalizer configure");env->DeleteLocalRef(eq);
     }
     int duration(JNIEnv* env) {
         if(!player_) return 0;
@@ -1791,19 +1866,29 @@ std::string clockText(int ms) {
     int n=std::max(0,ms/1000);
     return std::to_string(n/60)+":"+(n%60<10?"0":"")+std::to_string(n%60);
 }
+std::string keyName(int code){
+    if(code>=29&&code<=54)return std::string(1,char('A'+code-29));
+    if(code>=131&&code<=142)return "F"+std::to_string(code-130);
+    if(code==62)return "SPACE";
+    if(code==66)return "ENTER";
+    if(code==67)return "BACKSPACE";
+    if(code==19)return "UP";if(code==20)return "DOWN";
+    if(code==21)return "LEFT";if(code==22)return "RIGHT";
+    return "KEY "+std::to_string(code);
+}
 struct Rect {
     float x{},y{},w{},h{};
     bool contains(float a,float b)const{return a>=x&&b>=y&&a<=x+w&&b<=y+h;}
 };
 struct UI {
     float w{},h{},s{};
-    Rect mini,outer,left,lyrics,right,close,settings,pair,library,addSong,searchBox,searchGo,prev,play,next,stop,seek,pagePrev,pageNext;
+    Rect mini,outer,left,lyrics,right,close,settings,pair,library,addSong,searchBox,searchGo,repeat,shuffle,prev,play,next,stop,seek,pagePrev,pageNext;
     Rect tabSearch,tabQueue,tabLyrics,queueNow,queueSaved,savedInput,savedCreate;
     std::vector<Rect> rows;
     bool ok()const{return w>0&&h>0;}
 };
 struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
-constexpr std::array<SettingRow,25> quickSettings{{
+constexpr std::array<SettingRow,28> quickSettings{{
     {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
     {"lyricTrailFollow","Follow player and rise",0,0,1,true},
     {"romanizeLyrics","Romanized subtitles",0,0,1,true},
@@ -1829,9 +1914,12 @@ constexpr std::array<SettingRow,25> quickSettings{{
     {"hudX","Compact HUD horizontal (%)",3,0,100,false},
     {"hudY","Compact HUD vertical (%)",3,0,100,false},
     {"lyricBeats","3D Lyrics Beats (Bridge audio)",4,0,1,true},
+    {"cinematicAfk","Cinematic AFK View [26.66 Only]",4,0,1,true},
+    {"cinematicDelay","AFK delay (seconds)",4,10,60,false},
+    {"immersiveSound","Immersive Sound [Experimental]",4,0,1,true},
 }};
 inline Rect settingsTab(const UI& l,int page){
-    const float u=l.s,gap=5*u,w=(l.outer.w-48*u-4*gap)/5.f;
+    const float u=l.s,gap=4*u,w=(l.outer.w-48*u-5*gap)/6.f;
     return {l.outer.x+24*u+float(page)*(w+gap),l.outer.y+58*u,w,34*u};
 }
 inline Rect settingsRow(const UI& l,int index){
@@ -1889,6 +1977,8 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15) {
     p.prev={mid-87*u,bottom,45*u,44*u};
     p.play={mid-33*u,bottom,66*u,44*u};
     p.next={mid+42*u,bottom,45*u,44*u};
+    p.repeat={mid-132*u,bottom+5*u,34*u,34*u};
+    p.shuffle={mid+98*u,bottom+5*u,34*u,34*u};
     p.seek={p.left.x+18*u,bottom-41*u,p.left.w-36*u,15*u};
     const float rowStart=p.right.y+118*u;
     const float rowBottom=p.right.y+p.right.h-40*u;
@@ -1936,6 +2026,7 @@ class LeviMusic {
     std::vector<Track> results_;
     std::vector<Track> searchCache_;
     std::vector<Track> queueTracks_;
+    std::vector<Track> playlistOrder_;
     bool standaloneQueueSelection_=false;
     bool standalonePlaylistQueue_=false;
     int rightTab_=0; // 0 Search, 1 Playlist / Up Next, 2 Lyrics
@@ -1952,9 +2043,17 @@ class LeviMusic {
 #endif
     std::string coverUrl_,coverImageId_;
     int coverCount_=0;
+    std::map<std::string,std::string> coverImages_;
     int selected_=-1,page_=0,volume_=75,elapsed_=0,total_=0;
+    int repeatMode_=1; // 0 off, 1 all, 2 one; playlists loop by default.
+    bool shuffle_=false,bridgePlaylistQueue_=false;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
     bool settingsOpen_=false;int settingsPage_=0;
+    std::atomic<bool> cinematicAfk_{false},immersiveSound_{false};
+    std::atomic<int> cinematicDelay_{15};
+    std::array<int,4> keybinds_{{139,140,138,137}}; // F8 open, F9 next, F7 previous, F6 play/pause.
+    int bindingAction_=-1;
+    std::set<int> pressedKeys_;
     std::set<int> menuPointers_;
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
@@ -2016,7 +2115,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.3 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.4 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2081,6 +2180,9 @@ public:
             }).registerModule();
         if(!ok){restoringSettings_=false;return false;}
         for(const auto& [key,value]:savedSettings_)setConfig(key,value);
+        lm_cinematic::request(cinematicAfk_,cinematicDelay_);
+        lm_immersive::request(immersiveSound_);
+        lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
         restoringSettings_=false;
         static std::once_flag registered;
         std::call_once(registered,[](){
@@ -2098,14 +2200,17 @@ public:
     }
     bool disable(){
         enabled_=false;
+        lm_cinematic::shutdown();
+        lm_immersive::request(false);
         {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();
-            menuPointers_.clear();++lyricSerial_;}
+            menuPointers_.clear();pressedKeys_.clear();bindingAction_=-1;++lyricSerial_;}
         cv_.notify_all();lyricCv_.notify_all();
         if(drawWorker_.joinable())drawWorker_.join();
         if(worker_.joinable())worker_.join();
         if(lyricWorker_.joinable())lyricWorker_.join();
         lm_world3d::shutdown();
-        pl::modmenu::submitDrawCommands(MODULE,std::span<const pl::modmenu::DrawCommand>{});
+        {std::lock_guard paintLock(paintMu_);
+            pl::modmenu::submitDrawCommands(MODULE,std::span<const pl::modmenu::DrawCommand>{});}
         pl::modmenu::unregisterModule(MODULE);
         return true;
     }
@@ -2253,7 +2358,18 @@ private:
             cv_.notify_all();
         } else if(k=="worldLyrics3D") {
             worldLyrics3D_=v=="true"||v=="1";
-            lm_world3d::request(worldLyrics3D_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+        } else if(k=="cinematicAfk") {
+            cinematicAfk_=v=="true"||v=="1";
+            lm_cinematic::request(cinematicAfk_,cinematicDelay_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+        } else if(k=="cinematicDelay") {
+            try{cinematicDelay_=std::clamp(std::stoi(std::string(v)),10,60);}catch(...){}
+            lm_cinematic::request(cinematicAfk_,cinematicDelay_);
+        } else if(k=="immersiveSound") {
+            immersiveSound_=v=="true"||v=="1";
+            lm_immersive::request(immersiveSound_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
         } else if(k=="worldTextScript") {
             try{worldTextScript_=std::clamp(std::stoi(std::string(v)),0,1);}catch(...){}
         } else if(k=="worldFont") {
@@ -2313,6 +2429,9 @@ private:
             try{panelTop_=std::clamp(std::stoi(std::string(v)),12,32);}catch(...){}
         } else if(k=="animation") {
             animation_ = v=="1"||v=="true";
+        } else if(k=="keyOpen"||k=="keyNext"||k=="keyPrevious"||k=="keyPlay") {
+            const int index=k=="keyOpen"?0:k=="keyNext"?1:k=="keyPrevious"?2:3;
+            try{keybinds_[static_cast<size_t>(index)]=std::clamp(std::stoi(std::string(v)),1,288);}catch(...){}
         } else {
             std::lock_guard lock(mu_);
 #if defined(LEVI_STANDALONE)
@@ -2356,11 +2475,28 @@ private:
         }
         paint();
     }
+    void loadTrackCovers(JNIEnv* env,std::vector<Track>& songs){
+        size_t loaded=0;
+        for(auto& song:songs){
+            if(song.art.rfind("https://",0)!=0||song.art.size()>2048)continue;
+            if(auto it=coverImages_.find(song.art);it!=coverImages_.end()){
+                song.imageId=it->second;continue;
+            }
+            if(coverCount_>=120||loaded>=12)break;
+            const std::string id="levimusic.row."+std::to_string(++coverCount_);
+            if(registerCover(env,song.art,id)){
+                coverImages_[song.art]=id;song.imageId=id;++loaded;
+            }
+        }
+    }
     int quickValue(const SettingRow& row){
         const std::string_view k=row.key;
         if(k=="worldLyrics3D")return worldLyrics3D_;
         if(k=="lyricTrailFollow")return lm_world3d::lyricTrailFollow;
         if(k=="lyricBeats")return lm_world3d::experimentalBeats;
+        if(k=="cinematicAfk")return cinematicAfk_;
+        if(k=="cinematicDelay")return cinematicDelay_;
+        if(k=="immersiveSound")return immersiveSound_;
         if(k=="romanizeLyrics")return romanizeLyrics_;
         if(k=="animation")return animation_;
         if(k=="hudLyrics")return hudLyrics_;
@@ -2387,6 +2523,7 @@ private:
     }
     bool touch(const pl::input::TouchEvent& e){
         if(!enabled_)return false;
+        lm_cinematic::noteActivity();
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
         if(!l.ok())return false;
         bool opened,hud,settingsOpen;int settingsPage;
@@ -2417,17 +2554,22 @@ private:
         }
         if(settingsOpen){
             if(l.close.contains(e.x,e.y)||!l.outer.contains(e.x,e.y)){
-                std::lock_guard lock(mu_);settingsOpen_=false;
+                std::lock_guard lock(mu_);settingsOpen_=false;bindingAction_=-1;
             }else if(settingsAdvanced(l).contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);settingsOpen_=false;open_=false;
                     panelToggled_=std::chrono::steady_clock::now();}
                 pl::modmenu::requestOpenMenu();
             }else{
                 bool tab=false;
-                for(int page=0;page<5;++page)if(settingsTab(l,page).contains(e.x,e.y)){
-                    std::lock_guard lock(mu_);settingsPage_=page;tab=true;break;
+                for(int page=0;page<6;++page)if(settingsTab(l,page).contains(e.x,e.y)){
+                    std::lock_guard lock(mu_);settingsPage_=page;bindingAction_=-1;tab=true;break;
                 }
                 if(!tab){
+                    if(settingsPage==5){
+                        for(int i=0;i<4;++i)if(settingsRow(l,i).contains(e.x,e.y)){
+                            std::lock_guard lock(mu_);bindingAction_=i;break;
+                        }
+                    }
                     int index=0;
                     for(const auto& row:quickSettings){
                         if(row.page!=settingsPage)continue;
@@ -2481,6 +2623,8 @@ private:
         }else if(l.prev.contains(e.x,e.y))addJob(Action::Previous);
         else if(l.play.contains(e.x,e.y))addJob(Action::PlayPause);
         else if(l.next.contains(e.x,e.y))addJob(Action::Next);
+        else if(l.repeat.contains(e.x,e.y))addJob(Action::RepeatCycle);
+        else if(l.shuffle.contains(e.x,e.y))addJob(Action::ShuffleToggle);
         else if(l.seek.contains(e.x,e.y)){
             int duration;
             {std::lock_guard lock(mu_);duration=total_;}
@@ -2591,6 +2735,7 @@ private:
     }
     bool input(const pl::input::TextInputEvent& e){
         if(!enabled_)return false;
+        lm_cinematic::noteActivity();
         bool editing=false,submit=false;std::string query;
         {
             std::lock_guard lock(mu_);
@@ -2598,7 +2743,7 @@ private:
             if(editing){
                 for(char ch:e.text){
                     if(ch=='\n'||ch=='\r'){submit=true;break;}
-                    if(query_.size()<160)query_+=ch;
+                    if(query_.size()<2048)query_+=ch;
                 }
                 if(submit)typing_=false;
                 query=query_;
@@ -2616,6 +2761,23 @@ private:
     }
     bool key(const pl::input::KeyEvent& e){
         if(!enabled_)return false;
+        lm_cinematic::noteActivity();
+        int bind=-1;
+        {
+            std::lock_guard lock(mu_);
+            bind=bindingAction_;
+            if(!e.isKeyDown){
+                const bool was=pressedKeys_.erase(e.keyCode)>0;
+                return was||bind>=0;
+            }
+        }
+        if(bind>=0){
+            {std::lock_guard lock(mu_);if(!pressedKeys_.insert(e.keyCode).second)return true;}
+            static constexpr const char* keys[]={"keyOpen","keyNext","keyPrevious","keyPlay"};
+            {std::lock_guard lock(mu_);bindingAction_=-1;}
+            setConfig(keys[bind],std::to_string(e.keyCode));
+            return true;
+        }
         bool editing=false,submit=false;std::string query;
         {
             std::lock_guard lock(mu_);
@@ -2636,7 +2798,20 @@ private:
             addJob(mode==1?(old.empty()?Action::PlaylistCreate:Action::PlaylistRename):Action::Search,
                 old.empty()?query:old+"\n"+query);
         }paint();}
-        return editing;
+        if(editing)return true;
+        int action=-1;
+        {std::lock_guard lock(mu_);
+            for(int i=0;i<4;++i)if(keybinds_[static_cast<size_t>(i)]==e.keyCode){action=i;break;}}
+        if(action>=0){std::lock_guard lock(mu_);if(!pressedKeys_.insert(e.keyCode).second)return true;}
+        if(action==0){
+            {std::lock_guard lock(mu_);open_=!open_;settingsOpen_=false;typing_=false;
+                panelToggled_=std::chrono::steady_clock::now();}
+            pl::input::hideKeyboard();paint();return true;
+        }
+        if(action==1){addJob(Action::Next);return true;}
+        if(action==2){addJob(Action::Previous);return true;}
+        if(action==3){addJob(Action::PlayPause);return true;}
+        return false;
     }
     void paint(){
         std::lock_guard paintLock(paintMu_);
@@ -2649,8 +2824,9 @@ private:
         std::string activePlaylist;
         std::vector<Lyric> timedLyrics;
         float lyricAge=100.f;
-        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage;
-        bool open,showHud,playing,typing,settingsOpen;
+        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage,repeatMode,bindingAction;
+        bool open,showHud,playing,typing,settingsOpen,shuffle,bridgePlaylist,playlistQueue;
+        std::array<int,4> keybinds{};
         float panelAge=1.f;
         {
             std::lock_guard lock(mu_);
@@ -2664,6 +2840,9 @@ private:
             current=selected_;page=page_;
             elapsed=elapsed_;total=total_;volume=volume_;
             open=open_;showHud=hud_;playing=playing_;typing=typing_;
+            repeatMode=repeatMode_;shuffle=shuffle_;bridgePlaylist=bridgePlaylistQueue_;
+            playlistQueue=standalonePlaylistQueue_;
+            keybinds=keybinds_;bindingAction=bindingAction_;
             if(useBridge_ && playing_) {
                 auto age=std::chrono::duration_cast<std::chrono::milliseconds>(
                     std::chrono::steady_clock::now()-bridgePositionStamp_).count();
@@ -2676,6 +2855,7 @@ private:
                     static_cast<int64_t>(elapsed)+std::clamp<int64_t>(age,0,30000)));
             }
         }
+        lm_cinematic::setPlaying(playing);
         std::vector<pl::modmenu::DrawCommand> out;
         out.reserve(110);
         const float u=l.s;
@@ -2793,8 +2973,8 @@ private:
             text(l.outer.x+34*u,l.outer.y+52*u,"Changes are saved automatically",9.2f*u,C_DIM,48);
             box(l.close,0xFF41444CU,8.f);
             icon("x",l.close.x+6*u,l.close.y+6*u,18*u);
-            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD","EXPERIMENTAL"};
-            for(int n=0;n<5;++n){
+            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD","EXPERIMENTAL","KEYBINDS"};
+            for(int n=0;n<6;++n){
                 Rect tab=settingsTab(l,n);const bool active=n==settingsPage;
                 box(tab,active?0xFF415661U:0xFF292D34U,8.f);
                 text(tab.x+11*u,tab.y+22*u,tabs[n],10.3f*u,
@@ -2821,6 +3001,19 @@ private:
                     text(row.x+row.w-71*u,row.y+row.h*.63f,"-",14*u,C_TEXT,2);
                     text(row.x+row.w-31*u,row.y+row.h*.63f,"+",14*u,C_TEXT,2);
                     text(left,row.y+row.h*.36f,std::to_string(value),9.8f*u,C_DIM,8);
+                }
+            }
+            if(settingsPage==5){
+                static constexpr const char* labels[]={"Open Music Player","Next Song","Previous Song","Pause / Resume Song"};
+                for(int i=0;i<4;++i){
+                    const Rect row=settingsRow(l,i);
+                    box(row,i%2?0xFF252930U:0xFF292D35U,9.f);
+                    text(row.x+14*u,row.y+row.h*.60f,labels[i],11.5f*u,C_TEXT,40);
+                    const bool waiting=bindingAction==i;
+                    const std::string shown=waiting?"PRESS A KEY":keyName(keybinds[static_cast<size_t>(i)]);
+                    box({row.x+row.w-145*u,row.y+6*u,132*u,row.h-12*u},
+                        waiting?0xFF47747DU:0xFF3B4149U,8.f);
+                    text(row.x+row.w-132*u,row.y+row.h*.60f,shown,10.4f*u,C_TEXT,19);
                 }
             }
             const Rect advanced=settingsAdvanced(l);
@@ -2945,7 +3138,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.3 STABLE",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.4 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3014,6 +3207,12 @@ private:
         icon(playing?"pause":"play",l.play.x+(l.play.w-23*u)*.5f,l.play.y+10*u,23*u);
         box(l.next,0xFF294052U,10.f);
         icon("skip-forward",l.next.x+12*u,l.next.y+12*u,22*u);
+        box(l.repeat,repeatMode?0xFF49616CU:0xFF2B3138U,9.f);
+        icon("repeat-2",l.repeat.x+8*u,l.repeat.y+8*u,18*u);
+        if(repeatMode==2)text(l.repeat.x+24*u,l.repeat.y+12*u,"1",7.5f*u,C_TEXT,2);
+        const bool canShuffle=bridgePlaylist||playlistQueue;
+        box(l.shuffle,shuffle?0xFF49616CU:(canShuffle?0xFF2B3138U:0xFF20242AU),9.f);
+        icon("shuffle",l.shuffle.x+8*u,l.shuffle.y+8*u,18*u);
         icon("volume-2",l.left.x+16*u,l.left.y+l.left.h-14*u,12*u);
         text(l.left.x+34*u,l.left.y+l.left.h-4*u,
              streamingBridge?("AUTOPLAY NEXT • BRIDGE"):
@@ -3058,8 +3257,17 @@ private:
                 const float suffixWidth=addControl?125*u:(isRadio&&n>0)||isSaved?45*u:12*u;
                 const size_t maxChars=static_cast<size_t>(
                     std::max(13.f,(row.w-16*u-suffixWidth)/(7.1f*u)));
-                text(row.x+10*u,row.y+std::min(row.h-3*u,19*u),
-                     prefix+songs[n].title,11.7f*u,C_TEXT,maxChars);
+                float labelX=row.x+10*u;
+                if(!songs[n].imageId.empty()){
+                    pl::modmenu::DrawCommand art;
+                    art.type=pl::modmenu::DrawCommandType::Image;art.imageId=songs[n].imageId;
+                    art.x=row.x+7*u;art.y=row.y+4*u;art.w=30*u;art.h=30*u;art.color=0xFFFFFFFFU;
+                    out.push_back(std::move(art));labelX=row.x+44*u;
+                }else{disc(row.x+22*u,row.y+row.h*.5f,11*u,0xFF3B4048U);labelX=row.x+40*u;}
+                text(labelX,row.y+std::min(row.h-5*u,15*u),
+                     prefix+songs[n].title,10.9f*u,C_TEXT,maxChars);
+                text(labelX,row.y+std::min(row.h-3*u,30*u),
+                     songs[n].artist.empty()?"Unknown artist":songs[n].artist,8.8f*u,C_DIM,maxChars);
                 if(isRadio && n>0){
                     icon("x",row.x+row.w-28*u,row.y+5*u,18*u);
                 }else if(isSaved){
@@ -3120,7 +3328,7 @@ private:
         }else if(rightTab==0){
             box(l.searchBox,0xFF282B30U,8.f);
             text(l.searchBox.x+10*u,l.searchBox.y+22*u,
-                 query.empty()?"Search songs and artists...":
+                 query.empty()?"Search title, song URL, or public playlist URL...":
                     ((typing?"_ ":"")+query),
                  11.9f*u,typing?C_TEXT:C_DIM,63);
             box(l.searchGo,0xFF50555EU,8.f);
@@ -3262,11 +3470,9 @@ private:
             }
 #if defined(LEVI_STANDALONE)
             update(tr.title,tr.artist,offline?"Playing local file":"Aurelis Symphony streaming");
-            if(!tr.art.empty()&&coverCount_<80){
-                auto imageId="levimusic.cover."+std::to_string(++coverCount_);
-                bool loaded=registerCover(env,tr.art,imageId);
-                std::lock_guard lock(mu_);
-                coverImageId_=loaded?imageId:"";coverUrl_=tr.art;
+            if(!tr.art.empty()){
+                std::vector<Track> one{tr};loadTrackCovers(env,one);
+                std::lock_guard lock(mu_);coverImageId_=one.front().imageId;coverUrl_=tr.art;
             }
 #else
             update(tr.title,tr.artist,"Streaming online (Audius)");
@@ -3312,6 +3518,7 @@ private:
         auto lastQueue=std::chrono::steady_clock::now()-std::chrono::seconds(3);
         auto lastBeat=std::chrono::steady_clock::now()-std::chrono::seconds(3);
         bool beatSent=false;
+        int lastImmersive=-1;
         std::string previousId,previousTitle,previousArtist,previousProvider,previousArt;
         bool lastBridgeConnected=false;
         while(true){
@@ -3328,7 +3535,10 @@ private:
             }
             // Hook preparation is separate from playback and never scans the
             // entire game library during a music command.
-            lm_world3d::request(worldLyrics3D_);
+            lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_);
+            const int desiredEnvironment=immersiveSound_?
+                static_cast<int>(lm_immersive::current()):0;
+            if(!useBridge_)player.setEnvironment(env,desiredEnvironment);
             if(lyricsRebuild_.exchange(false)){
 #if defined(LEVI_STANDALONE)
                 if(!useBridge_){
@@ -3367,6 +3577,12 @@ private:
             if(useBridge_) {
                 std::string key;
                 {std::lock_guard lock(mu_);key=bridgeKey_;}
+                if(!key.empty()&&desiredEnvironment!=lastImmersive){
+                    const auto value=lm_immersive::name(
+                        static_cast<lm_immersive::Environment>(desiredEnvironment));
+                    if(!bridgeGet("/v1/immersive?environment="+encode(env,value),key).empty())
+                        lastImmersive=desiredEnvironment;
+                }
                 if(std::chrono::steady_clock::now()-lastAutoBridge>std::chrono::seconds(8)){
                     lastAutoBridge=std::chrono::steady_clock::now();
                     const std::string found=automaticBridgeToken(env);
@@ -3450,6 +3666,7 @@ private:
                             if(key.empty())break;
                             auto reply=bridgeGet("/v1/playlist/tracks?name="+encode(env,job.query),key);
                             auto songs=parseBridgeSearch(env,reply);
+                            loadTrackCovers(env,songs);
                             {std::lock_guard lock(mu_);results_=std::move(songs);
                                 libraryMode_=2;activePlaylist_=job.query;
                                 page_=0;selected_=-1;
@@ -3554,6 +3771,7 @@ private:
                             if(accepted){
                                 auto songs=parseBridgeSearch(env,bridgeGet(
                                     "/v1/playlist/tracks?name="+encode(env,name),key));
+                                loadTrackCovers(env,songs);
                                 std::lock_guard lock(mu_);
                                 results_=std::move(songs);
                                 page_=std::min(page_,std::max(0,int((results_.size()+4)/5)-1));
@@ -3566,6 +3784,7 @@ private:
                             const auto payload=bridgeGet("/v1/queue",key);
                             if(!payload.empty()){
                                 auto songs=parseBridgeSearch(env,payload);
+                                loadTrackCovers(env,songs);
                                 std::lock_guard lock(mu_);
                                 queueTracks_=std::move(songs);
                             }
@@ -3588,6 +3807,7 @@ private:
                                 info_=message.empty()?"Unable to edit Up Next":message;
                             }
                             auto updated=parseBridgeSearch(env,bridgeGet("/v1/queue",key));
+                            loadTrackCovers(env,updated);
                             {std::lock_guard lock(mu_);queueTracks_=std::move(updated);}
                             lastQueue=std::chrono::steady_clock::now();
                             break;
@@ -3600,16 +3820,24 @@ private:
                         }
                         case Action::Next: action="next";break;
                         case Action::Previous: action="previous";break;
+                        case Action::RepeatCycle: action="repeat_cycle";break;
+                        case Action::ShuffleToggle: {
+                            bool allowed;{std::lock_guard lock(mu_);allowed=bridgePlaylistQueue_;}
+                            if(!allowed){update("Shuffle needs a playlist","Now Playing",
+                                "Start a saved playlist before enabling shuffle");break;}
+                            action="shuffle_toggle";break;
+                        }
                         case Action::Seek: action="seek&position="+job.query;break;
                         case Action::Search: {
                             if(job.query.empty()){
                                 std::lock_guard lock(mu_);
                                 results_.clear();selected_=-1;page_=0;
                             } else if(!key.empty()){
-                                std::string query=job.query.substr(0,70);
+                                std::string query=job.query.substr(0,job.query.rfind("https://",0)==0?512:160);
                                 update("Searching",job.query,"Searching via LeviMusic companion...");
                                 std::string reply=bridgeGet("/v1/search?query="+encode(env,query),key);
                                 auto found=parseBridgeSearch(env,reply);
+                                loadTrackCovers(env,found);
                                 bool foundAny=!found.empty();
                                 if(!foundAny){
                                     if(reply.empty())update("Search unavailable",job.query,"Bridge offline / request timed out");
@@ -3716,14 +3944,16 @@ private:
                             artist_=state.artist.empty()?state.provider:state.artist;
                             info_=state.provider+" • Music session connected";
                             playing_=state.playing;elapsed_=state.elapsed;total_=state.duration;
+                            repeatMode_=state.repeatMode=="one"?2:state.repeatMode=="off"?0:1;
+                            shuffle_=state.shuffle;bridgePlaylistQueue_=state.queueMode=="playlist";
                             bridgePositionStamp_=std::chrono::steady_clock::now();
                         }
                         if(state.art!=previousArt || changed){
                             previousArt=state.art;
                             bool good=false;std::string imageId;
-                            if(!state.art.empty() && coverCount_<80){
-                                imageId="levimusic.cover."+std::to_string(++coverCount_);
-                                good=registerCover(env,state.art,imageId);
+                            if(!state.art.empty()){
+                                Track cover;cover.art=state.art;std::vector<Track> one{cover};
+                                loadTrackCovers(env,one);imageId=one.front().imageId;good=!imageId.empty();
                             }
                             {
                                 std::lock_guard lock(mu_);
@@ -3759,10 +3989,18 @@ private:
                         update("Searching",job.query,"Checking local music and Aurelis Symphony...");
                         std::string server;
                         {std::lock_guard lock(mu_);server=chruBase_;}
-                        auto found=offlineTracks(self_.getConfigDir()/"music",job.query);
-                        if(job.query!="offline"){
-                            auto online=searchAurelis(env,server,job.query);
-                            found.insert(found.end(),online.begin(),online.end());
+                        std::vector<Track> found;
+                        if(youtubeUrl(job.query)&&job.query.find("list=")!=std::string::npos){
+                            found=importYoutubePlaylist(env,job.query).tracks;
+                        }else if(youtubeUrl(job.query)){
+                            auto direct=resolveYoutubeTrack(env,job.query);
+                            if(!direct.id.empty())found.push_back(std::move(direct));
+                        }else{
+                            found=offlineTracks(self_.getConfigDir()/"music",job.query);
+                            if(job.query!="offline"){
+                                auto online=searchAurelis(env,server,job.query);
+                                found.insert(found.end(),online.begin(),online.end());
+                            }
                         }
 #else
                         update("Searching",job.query,"Contacting Audius...");
@@ -3772,6 +4010,7 @@ private:
                         if(found.empty())
                             found=searchAudiusFrom(env,job.query,"https://discoveryprovider.audius.co/v1",key);
 #endif
+                        loadTrackCovers(env,found);
                         {
                             std::lock_guard lock(mu_);
                             results_=std::move(found);
@@ -3791,7 +4030,7 @@ private:
                     }
                     case Action::Select:{
 #if defined(LEVI_STANDALONE)
-                        {std::lock_guard lock(mu_);standalonePlaylistQueue_=false;}
+                        {std::lock_guard lock(mu_);standalonePlaylistQueue_=false;shuffle_=false;playlistOrder_.clear();}
 #endif
                         playSelected();break;
                     }
@@ -3851,6 +4090,36 @@ private:
                             player.toggle(env);{std::lock_guard lock(mu_);playing_=true;}
                         }else playSelected();
                         break;
+                    case Action::RepeatCycle:{
+                        std::lock_guard lock(mu_);repeatMode_=repeatMode_==1?2:repeatMode_==2?0:1;
+                        break;
+                    }
+                    case Action::ShuffleToggle:{
+                        bool okay=false;
+                        {
+                            std::lock_guard lock(mu_);
+                            if(standalonePlaylistQueue_&&!playlistOrder_.empty()&&selected_>=0&&selected_<int(results_.size())){
+                                shuffle_=!shuffle_;
+                                Track current=results_[static_cast<size_t>(selected_)];
+                                results_=playlistOrder_;
+                                if(shuffle_){
+                                    std::erase_if(results_,[&](const Track& item){return item.id==current.id;});
+                                    std::mt19937 rng(static_cast<uint32_t>(std::chrono::steady_clock::now().time_since_epoch().count()));
+                                    std::shuffle(results_.begin(),results_.end(),rng);
+                                    results_.insert(results_.begin(),current);
+                                }
+                                selected_=shuffle_?0:int(std::find_if(results_.begin(),results_.end(),
+                                    [&](const Track& item){return item.id==current.id;})-results_.begin());
+                                queueTracks_.clear();const int n=static_cast<int>(results_.size());
+                                for(int i=0;i<n&&i<40;++i)queueTracks_.push_back(
+                                    results_[static_cast<size_t>((selected_+i)%n)]);
+                                okay=true;
+                            }
+                        }
+                        if(!okay)update("Shuffle needs a playlist","Now Playing",
+                            "Start a saved playlist before enabling shuffle");
+                        break;
+                    }
                     case Action::Previous:
                     case Action::Next:{
                         {
@@ -3989,13 +4258,15 @@ private:
                     case Action::PlaylistOpen:{
                         if(job.query=="Offline"){
                             auto songs=offlineTracks(self_.getConfigDir()/"music");
+                            loadTrackCovers(env,songs);
                             std::lock_guard lock(mu_);results_=std::move(songs);
                             activePlaylist_="Offline";libraryMode_=2;page_=0;selected_=-1;
                             break;
                         }
                         auto it=localPlaylists_.find(job.query);
                         if(it==localPlaylists_.end())break;
-                        {std::lock_guard lock(mu_);results_=it->second;activePlaylist_=job.query;
+                        auto songs=it->second;loadTrackCovers(env,songs);
+                        {std::lock_guard lock(mu_);results_=std::move(songs);activePlaylist_=job.query;
                             libraryMode_=2;page_=0;selected_=-1;}
                         break;
                     }
@@ -4042,9 +4313,11 @@ private:
                         std::vector<Track> songs;
                         if(name=="Offline")songs=offlineTracks(self_.getConfigDir()/"music");
                         else if(auto it=localPlaylists_.find(name);it!=localPlaylists_.end())songs=it->second;
+                        loadTrackCovers(env,songs);
                         if(index<0||index>=int(songs.size()))break;
                         {std::lock_guard lock(mu_);results_=std::move(songs);selected_=index;
                             standaloneQueueSelection_=false;standalonePlaylistQueue_=true;
+                            playlistOrder_=results_;shuffle_=false;
                             queueTracks_.clear();
                             const int n=static_cast<int>(results_.size());
                             for(int i=0;i<n&&i<40;++i)
@@ -4103,10 +4376,12 @@ private:
             int pos=player.position(env),dur=player.duration(env);
 #if defined(LEVI_STANDALONE)
             if(!playing&&standaloneWasPlaying&&dur>0&&pos>=dur-1500){
-                bool hasNext;
+                bool hasNext,repeatOne;
                 {std::lock_guard lock(mu_);
-                    hasNext=standalonePlaylistQueue_||queueTracks_.size()>1;}
-                if(hasNext)addJob(Action::Next);
+                    hasNext=standalonePlaylistQueue_||queueTracks_.size()>1;
+                    repeatOne=repeatMode_==2;}
+                if(repeatOne)playSelected();
+                else if(hasNext)addJob(Action::Next);
             }
             standaloneWasPlaying=playing;
 #endif

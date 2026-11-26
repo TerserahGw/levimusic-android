@@ -1,17 +1,18 @@
 {
   "schema_version": 1,
   "id": "levimusic",
-  "version": "1.6.0",
+  "version": "1.6.4",
   "minecraft_versions": [
     "1.26.52",
     "1.26.60",
-    "1.26.62.1"
+    "1.26.62.1",
+    "1.26.66.1"
   ],
   "info": {
     "name": "LeviMusic - Aurelis Online",
     "author": "Liliyana Rea de Aurelis",
     "summary": "Client-side music player with synchronized 2D and 3D world lyrics for LeviLauncher Android. Full mode requires the Bridge APK.",
-    "description": "LeviMusic adds music search, playback, an editable Up Next queue, user playlists, word-synchronized lyrics, romanization, and client-only 3D floating lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. Full mode uses the matching LeviMusic Bridge APK. Standalone connects to the hosted Aurelis Symphony API and does not require an APK or user-run server, but it does need internet access. Native 3D world lyrics require a matching Minecraft ARM64 Build ID; the 1.26.66.1 exact binary profile is included but its runtime behavior is not yet verified. v1.6.0 adds public YouTube playlist URL import, local offline audio with LRC, and playlist rename/delete.",
+    "description": "LeviMusic adds music search, playback, Repeat, playlist Shuffle, an editable Up Next queue, user playlists, word-synchronized lyrics, romanization, and client-only 3D floating lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. Full mode uses the matching LeviMusic Bridge APK. Standalone connects to the hosted Aurelis Symphony API and does not require an APK or user-run server, but it does need internet access. Native 3D world lyrics require a matching Minecraft ARM64 Build ID. v1.6.4 adds direct song and public-playlist URL input, richer track rows, configurable keyboard controls, and reliable playlist looping.",
     "homepage_url": "https://github.com/TerserahGw/levimusic-android",
     "tags": [
       "Music",
@@ -25,9 +26,9 @@
       "*.levipack"
     ],
     "labels": {
-      "LeviMusic-1.6.0-arm64-v8a.levipack": "Full mod — requires Bridge APK",
-      "LeviMusic-Standalone-1.6.0-arm64-v8a.levipack": "Standalone — hosted Aurelis plus manual offline files"
+      "LeviMusic-1.6.4-arm64-v8a.levipack": "Full mod — requires Bridge APK",
+      "LeviMusic-Standalone-1.6.4-arm64-v8a.levipack": "Standalone — hosted Aurelis plus manual offline files"
     }
   },
-  "changelog": "v1.6.0 stable: Public YouTube playlist import, Full Bridge offline downloads and LRC, Standalone folder-based offline audio and LRC, playlist rename and delete."
+  "changelog": "v1.6.4 stable: Repeat and playlist Shuffle, direct song and public-playlist URL input, cover and artist rows, HUD disable fix, reliable playlist looping, and configurable keyboard controls."
 }

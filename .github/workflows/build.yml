@@ -2,7 +2,7 @@ name: Build & Release LeviMusic Android ARM64
 
 on:
   push:
-    branches: [main, 'work/levimusic-1.6.3']
+    branches: [main, 'work/levimusic-1.6.4']
   workflow_dispatch:
 
 permissions:
@@ -243,14 +243,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.6.3-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.6.4-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.6.3-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.6.4-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -303,7 +303,24 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version == "1.6.3":
+          if version == "1.6.4":
+              notes = "\n".join([
+                  "# LeviMusic - Aurelis Online v1.6.4 stable",
+                  "",
+                  "Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64. The 3D world renderer includes exact profiles for Minecraft 1.26.52, 1.26.60, 1.26.62.1, and 1.26.66.1.",
+                  "",
+                  "## Changes since v1.6.3",
+                  "- Added Repeat and playlist-only Shuffle controls to Now Playing in Full and Standalone modes.",
+                  "- Song URLs and public playlist URLs can now be entered directly in the mod. Imported public-playlist tracks can be added to a saved playlist.",
+                  "- Added cover art and artist names to Search, Up Next, and playlist track rows.",
+                  "- Fixed the music HUD remaining visible or touchable after LeviMusic is disabled from LeviLauncher Mod Menu.",
+                  "- Saved playlists now wrap from their final track back to the first track.",
+                  "- Added a configurable Keybinds tab for opening the player, Previous, Next, and Play/Pause.",
+                  "",
+                  "Choose one LeviPack variant. Full mode requires the matching Bridge APK; Standalone uses Aurelis for online playback and downloads.",
+                  "",
+              ])
+          elif version == "1.6.3":
               notes = "\n".join([
                   "# LeviMusic - Aurelis Online v1.6.3 stable",
                   "",

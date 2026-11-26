@@ -3,6 +3,8 @@
 // itself derived from BedrockTools by RadiantByte. GPL-3.0-only.
 #include "WorldLyricsBindings.hpp"
 #include "WordTiming.hpp"
+#include "CinematicAFK.hpp"
+#include "ImmersiveEnvironment.hpp"
 #include <pl/memory/Hook.hpp>
 #include <pl/memory/Signature.hpp>
 #include <android/log.h>
@@ -276,7 +278,7 @@ inline void publish(std::string_view value,int start=0,int end=0,int position=0,
 }
 inline void tickHook(void* player){
     if(originalTick)originalTick(player);
-    if(!enabled.load(std::memory_order_relaxed)||!profile||!valid(player))return;
+    if(!profile||!valid(player))return;
     auto* rotation=read<void*>(player,profile->rotation);
     if(!valid(rotation))return;
     const float pitch=read<float>(rotation,0),yaw=read<float>(rotation,4);
@@ -288,7 +290,12 @@ inline void tickHook(void* player){
     Vec3 position=read<Vec3>(stateVector,0);
     if(!std::isfinite(position.x)||!std::isfinite(position.y)||!std::isfinite(position.z)
        ||magnitude2(position)>1.e14f)return;
-    Pose next{pitch,std::remainder(yaw,360.f),reinterpret_cast<uintptr_t>(player),
+    const float normalizedYaw=std::remainder(yaw,360.f);
+    lm_cinematic::observePlayer(position.x,position.y,position.z,pitch,normalizedYaw,
+        read<uintptr_t>(player,profile->level));
+    lm_immersive::observePlayer(player,position.x,position.y,position.z);
+    if(!enabled.load(std::memory_order_relaxed))return;
+    Pose next{pitch,normalizedYaw,reinterpret_cast<uintptr_t>(player),
               read<uintptr_t>(player,profile->level),nowMs(),position};
     std::unique_lock lock(poseMutex,std::try_to_lock);
     if(lock)pose=next;
@@ -569,7 +576,8 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     auto* tess=read<void*>(ctx,profile->tessellator);
     auto* colors=read<float*>(ctx,0x30);
     if(!valid(rp)||!valid(tess)||!valid(colors))return;
-    const Vec3 cam=read<Vec3>(rp,profile->camera);
+    Vec3 cam=read<Vec3>(rp,profile->camera);
+    lm_cinematic::effectiveCamera(cam.x,cam.y,cam.z);
     if(!std::isfinite(cam.x)||!std::isfinite(cam.y)||!std::isfinite(cam.z)
        ||magnitude2(cam-view.position)>1024.f)return;
     resolveMaterial(now);
@@ -935,6 +943,8 @@ inline void prepare(){
         __android_log_print(ANDROID_LOG_WARN,"LeviMusicWorld3D","libminecraftpe.so not loaded; renderer cannot bind");
         state=State::Unsupported;return;
     }
+    lm_immersive::prepare();
+    lm_cinematic::discover(image.base,image.selected&&image.selected->name=="1.26.66.1");
     std::array<uintptr_t,BindingCount> addresses{};
     auto exact=[&](const Profile& candidate){
         for(size_t i=0;i<addresses.size();++i){
@@ -1038,11 +1048,14 @@ inline void request(bool value){
 }
 inline void shutdown(){
     request(false);publish("");
+    lm_cinematic::shutdown();
+    lm_immersive::request(false);
     std::lock_guard lock(lifecycle);
     if(installer.joinable())installer.join();
 }
 inline void unload(){
     shutdown();
+    lm_cinematic::unload();
     if(renderHooked)pl::memory::unhook(renderTarget,reinterpret_cast<void*>(&renderHook));
     if(tickHooked)pl::memory::unhook(tickTarget,reinterpret_cast<void*>(&tickHook));
     installed=false;
