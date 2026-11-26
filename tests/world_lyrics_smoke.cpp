@@ -54,9 +54,13 @@ int main(){
     for(size_t i=0;i<20;++i)note[16+i]=uint8_t(hex(id[i*2])*16+hex(id[i*2+1]));
     assert(matchesBuildId(note,id));
     note[17]^=1;assert(!matchesBuildId(note,id));
-    // The cinematic post-process must pass the matrix stack, not the camera
-    // owner, to both native matrix helpers.
-    alignas(8) std::array<char,64> cameraOwner{},cameraStack{};
+    // The cinematic post-process must update both the matrix stack and the
+    // final SetupCamera owner transform, while CameraDeps receives the stack.
+    alignas(8) std::array<char,0xf40> cameraOwner{};
+    alignas(8) std::array<char,64> cameraStack{};
+    const float identity[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    std::memcpy(cameraMatrix,identity,sizeof(identity));
+    std::memcpy(cameraOwner.data()+0xeb8,identity,sizeof(identity));
     lm_cinematic::original=cameraOriginal;
     lm_cinematic::matrixTopDirty=cameraTop;
     lm_cinematic::cameraDeps=cameraDependency;
@@ -65,7 +69,10 @@ int main(){
     lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
     lm_cinematic::observePlayer(0,64,0,0,0,1);
     lm_cinematic::setupHook(cameraOwner.data(),cameraStack.data(),0);
+    auto* finalCamera=reinterpret_cast<float*>(cameraOwner.data()+0xeb8);
     assert(cameraDependencyReceiver==cameraStack.data());
+    assert(std::abs(cameraMatrix[14])>.01f&&std::abs(finalCamera[14])>.01f);
+    assert(lm_cinematic::active());
     lm_cinematic::shutdown();
     // Exact-build environment callbacks drive both underwater and enclosure
     // classification without reading private Block string layouts.

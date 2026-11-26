@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "levimusic",
-  "version": "1.6.5",
+  "version": "1.6.6",
   "minecraft_versions": [
     "1.26.52",
     "1.26.60",
@@ -12,7 +12,7 @@
     "name": "LeviMusic - Aurelis Online",
     "author": "Liliyana Rea de Aurelis",
     "summary": "Client-side music player with synchronized 2D and 3D world lyrics for LeviLauncher Android. Full mode requires the Bridge APK.",
-    "description": "LeviMusic adds music search, playback, Repeat, playlist Shuffle, an editable Up Next queue, user playlists, word-synchronized lyrics, romanization, and client-only 3D floating lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. Full mode uses the matching LeviMusic Bridge APK. Standalone connects to the hosted Aurelis Symphony API and does not require an APK or user-run server, but it does need internet access. Native 3D world lyrics require a matching Minecraft ARM64 Build ID. v1.6.5 improves native stability and Standard Bridge environmental audio on Minecraft 1.26.66.1.",
+    "description": "LeviMusic adds music search, playback, Repeat, playlist Shuffle, an editable Up Next queue, user playlists, word-synchronized lyrics, romanization, and client-only 3D floating lyrics to Minecraft Bedrock on LeviLauncher Android ARM64. Full mode uses the matching LeviMusic Bridge APK. Standalone connects to the hosted Aurelis Symphony API and does not require an APK or user-run server, but it does need internet access. Native 3D world lyrics require a matching Minecraft ARM64 Build ID. v1.6.6 improves environmental sound in Standard and Standalone with stronger underwater filtering, wider room/cave detection, and tuned echo.",
     "homepage_url": "https://github.com/TerserahGw/levimusic-android",
     "tags": [
       "Music",
@@ -26,9 +26,9 @@
       "*.levipack"
     ],
     "labels": {
-      "LeviMusic-1.6.5-arm64-v8a.levipack": "Full mod — requires Bridge APK",
-      "LeviMusic-Standalone-1.6.5-arm64-v8a.levipack": "Standalone — hosted Aurelis plus manual offline files"
+      "LeviMusic-1.6.6-arm64-v8a.levipack": "Full mod — requires Bridge APK",
+      "LeviMusic-Standalone-1.6.6-arm64-v8a.levipack": "Standalone — hosted Aurelis plus manual offline files"
     }
   },
-  "changelog": "v1.6.5 stable: native stability and Standard Bridge environmental audio fixes for Minecraft 1.26.66.1."
+  "changelog": "v1.6.6 stable: improved cave/interior echo and underwater filtering in Standard and Standalone."
 }

@@ -1539,17 +1539,33 @@ bool registerCover(JNIEnv* env,const std::string& url,const std::string& id){
 class AndroidPlayer {
     jobject player_ = nullptr;
     jobject equalizer_ = nullptr;
+    jobject reverb_ = nullptr;
     int environment_ = 0;
+    void releaseEffect(JNIEnv* env,jobject& effect,const char* label){
+        if(!effect)return;
+        jclass cls=env->GetObjectClass(effect);
+        auto releaseFx=env->GetMethodID(cls,"release","()V");
+        if(releaseFx)env->CallVoidMethod(effect,releaseFx);
+        clearException(env,label);env->DeleteLocalRef(cls);
+        env->DeleteGlobalRef(effect);effect=nullptr;
+    }
+    void releaseEnvironmentEffects(JNIEnv* env){
+        if(player_){
+            jclass media=env->GetObjectClass(player_);
+            auto attach=env->GetMethodID(media,"attachAuxEffect","(I)V");
+            auto send=env->GetMethodID(media,"setAuxEffectSendLevel","(F)V");
+            if(attach)env->CallVoidMethod(player_,attach,0);
+            if(send)env->CallVoidMethod(player_,send,0.f);
+            clearException(env,"MediaPlayer clear environment effect");
+            env->DeleteLocalRef(media);
+        }
+        releaseEffect(env,equalizer_,"Equalizer release");
+        releaseEffect(env,reverb_,"EnvironmentalReverb release");
+    }
 public:
     ~AndroidPlayer() = default;
     void release(JNIEnv* env) {
-        if(equalizer_){
-            jclass effect=env->GetObjectClass(equalizer_);
-            auto releaseFx=env->GetMethodID(effect,"release","()V");
-            if(releaseFx)env->CallVoidMethod(equalizer_,releaseFx);
-            clearException(env,"Equalizer release");env->DeleteLocalRef(effect);
-            env->DeleteGlobalRef(equalizer_);equalizer_=nullptr;
-        }
+        releaseEnvironmentEffects(env);
         environment_=0;
         if (!player_) return;
         jclass cls = env->GetObjectClass(player_);
@@ -1630,33 +1646,89 @@ public:
     }
     void setEnvironment(JNIEnv* env,int environment){
         environment=std::clamp(environment,0,2);
-        if(environment==environment_&&((environment==0)||equalizer_))return;
-        if(equalizer_){
-            jclass old=env->GetObjectClass(equalizer_);auto releaseFx=env->GetMethodID(old,"release","()V");
-            if(releaseFx)env->CallVoidMethod(equalizer_,releaseFx);clearException(env,"Equalizer reset");
-            env->DeleteLocalRef(old);env->DeleteGlobalRef(equalizer_);equalizer_=nullptr;
-        }
+        if(environment==environment_&&
+           (environment==0||(equalizer_&&reverb_)))return;
+        releaseEnvironmentEffects(env);
         environment_=environment;if(!player_||environment==0)return;
         jclass media=env->GetObjectClass(player_);
         auto sessionFn=env->GetMethodID(media,"getAudioSessionId","()I");
-        const int session=sessionFn?env->CallIntMethod(player_,sessionFn):0;env->DeleteLocalRef(media);
-        if(session<=0||clearException(env,"MediaPlayer audio session"))return;
-        jclass eq=env->FindClass("android/media/audiofx/Equalizer");
-        auto ctor=eq?env->GetMethodID(eq,"<init>","(II)V"):nullptr;
-        jobject local=ctor?env->NewObject(eq,0,session):nullptr;
-        if(!local||clearException(env,"Equalizer create")){if(eq)env->DeleteLocalRef(eq);return;}
-        equalizer_=env->NewGlobalRef(local);env->DeleteLocalRef(local);
-        auto enable=env->GetMethodID(eq,"setEnabled","(Z)I");
-        auto count=env->GetMethodID(eq,"getNumberOfBands","()S");
-        auto set=env->GetMethodID(eq,"setBandLevel","(SS)V");
-        const short bands=count?env->CallShortMethod(equalizer_,count):0;
-        for(short band=0;set&&band<bands;++band){
-            short level=environment==2?(band<std::max<short>(1,bands/3)?180:-1500):
-                (band<std::max<short>(1,bands/3)?130:-180);
-            env->CallVoidMethod(equalizer_,set,band,level);
+        auto attach=env->GetMethodID(media,"attachAuxEffect","(I)V");
+        auto send=env->GetMethodID(media,"setAuxEffectSendLevel","(F)V");
+        const int session=sessionFn?env->CallIntMethod(player_,sessionFn):0;
+        if(session<=0||clearException(env,"MediaPlayer audio session")){
+            env->DeleteLocalRef(media);return;
         }
-        if(enable)env->CallIntMethod(equalizer_,enable,JNI_TRUE);
-        clearException(env,"Equalizer configure");env->DeleteLocalRef(eq);
+
+        jclass eq=env->FindClass("android/media/audiofx/Equalizer");
+        auto eqCtor=eq?env->GetMethodID(eq,"<init>","(II)V"):nullptr;
+        jobject localEq=eqCtor?env->NewObject(eq,0,session):nullptr;
+        if(localEq&&!clearException(env,"Equalizer create")){
+            equalizer_=env->NewGlobalRef(localEq);
+            auto enable=env->GetMethodID(eq,"setEnabled","(Z)I");
+            auto count=env->GetMethodID(eq,"getNumberOfBands","()S");
+            auto rangeFn=env->GetMethodID(eq,"getBandLevelRange","()[S");
+            auto center=env->GetMethodID(eq,"getCenterFreq","(S)I");
+            auto set=env->GetMethodID(eq,"setBandLevel","(SS)V");
+            const short bands=count?env->CallShortMethod(equalizer_,count):0;
+            short limits[2]{-1500,1500};
+            auto range=rangeFn?static_cast<jshortArray>(env->CallObjectMethod(equalizer_,rangeFn)):nullptr;
+            if(range&&env->GetArrayLength(range)>=2)env->GetShortArrayRegion(range,0,2,limits);
+            if(range)env->DeleteLocalRef(range);
+            for(short band=0;set&&band<bands;++band){
+                const int hz=center?env->CallIntMethod(equalizer_,center,band)/1000:band*1000;
+                int requested=0;
+                if(environment==2){
+                    if(hz<250)requested=600;
+                    else if(hz<800)requested=250;
+                    else if(hz<2000)requested=-350;
+                    else if(hz<4000)requested=-1250;
+                    else requested=-2300;
+                }else requested=hz<250?220:hz<1000?100:hz>6000?-280:0;
+                const short level=static_cast<short>(std::clamp(requested,
+                    static_cast<int>(limits[0]),static_cast<int>(limits[1])));
+                env->CallVoidMethod(equalizer_,set,band,level);
+            }
+            if(enable)env->CallIntMethod(equalizer_,enable,JNI_TRUE);
+        }
+        if(localEq)env->DeleteLocalRef(localEq);
+        if(eq)env->DeleteLocalRef(eq);
+        clearException(env,"Equalizer configure");
+
+        jclass rv=env->FindClass("android/media/audiofx/EnvironmentalReverb");
+        auto rvCtor=rv?env->GetMethodID(rv,"<init>","(II)V"):nullptr;
+        jobject localRv=rvCtor?env->NewObject(rv,0,0):nullptr;
+        if(localRv&&!clearException(env,"EnvironmentalReverb create")){
+            reverb_=env->NewGlobalRef(localRv);
+            auto setShort=[&](const char* name,short value){
+                auto method=env->GetMethodID(rv,name,"(S)V");
+                if(method)env->CallVoidMethod(reverb_,method,value);
+            };
+            auto setInt=[&](const char* name,int value){
+                auto method=env->GetMethodID(rv,name,"(I)V");
+                if(method)env->CallVoidMethod(reverb_,method,value);
+            };
+            const bool underwater=environment==2;
+            setShort("setRoomLevel",underwater?-2200:-450);
+            setShort("setRoomHFLevel",underwater?-6500:-1100);
+            setInt("setDecayTime",underwater?650:2800);
+            setShort("setDecayHFRatio",underwater?250:850);
+            setShort("setReflectionsLevel",underwater?-2400:-180);
+            setInt("setReflectionsDelay",underwater?12:58);
+            setShort("setReverbLevel",underwater?-1800:350);
+            setInt("setReverbDelay",underwater?18:72);
+            setShort("setDiffusion",underwater?650:900);
+            setShort("setDensity",underwater?700:1000);
+            auto enable=env->GetMethodID(rv,"setEnabled","(Z)I");
+            auto getId=env->GetMethodID(rv,"getId","()I");
+            if(enable)env->CallIntMethod(reverb_,enable,JNI_TRUE);
+            const int id=getId?env->CallIntMethod(reverb_,getId):0;
+            if(id>0&&attach)env->CallVoidMethod(player_,attach,id);
+            if(id>0&&send)env->CallVoidMethod(player_,send,underwater?.16f:1.f);
+        }
+        if(localRv)env->DeleteLocalRef(localRv);
+        if(rv)env->DeleteLocalRef(rv);
+        clearException(env,"EnvironmentalReverb configure");
+        env->DeleteLocalRef(media);
     }
     int duration(JNIEnv* env) {
         if(!player_) return 0;
@@ -2115,7 +2187,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.5 loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.6 loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -3138,7 +3210,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.5 STABLE",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.6 STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);

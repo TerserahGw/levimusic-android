@@ -22,7 +22,7 @@ struct Pose { float x=0,y=0,z=0,pitch=0,yaw=0;uintptr_t world=0;int64_t sampled=
 
 inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{false};
 inline std::atomic<int> idleDelay{15};
-inline std::atomic<int64_t> lastActivity{0},enteredAt{0};
+inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;
 inline Pose pose{};
@@ -99,20 +99,29 @@ inline void setupHook(void* owner,void* stack,float partial){
     if(original)original(owner,stack,partial);
     Pose current;float strength=0,angle=0;
     if(!shouldRun(current,strength,angle)||!matrixTopDirty||!cameraDeps||!plausible(stack))return;
-    float* matrix=matrixTopDirty(stack);
-    if(!saneMatrix(matrix))return;
-    std::array<float,16> originalMatrix{};
-    std::memcpy(originalMatrix.data(),matrix,sizeof(originalMatrix));
+    float* stackMatrix=matrixTopDirty(stack);
+    auto* cameraMatrix=plausible(owner)?
+        reinterpret_cast<float*>(static_cast<uint8_t*>(owner)+0xEB8):nullptr;
+    // SetupCamera keeps a second final camera transform in its owner. Updating
+    // only the stack matrix makes world lyrics orbit while the visible camera
+    // remains unchanged.
+    if(!saneMatrix(stackMatrix)||!saneMatrix(cameraMatrix))return;
+    std::array<float,16> originalStack{},originalCamera{};
+    std::memcpy(originalStack.data(),stackMatrix,sizeof(originalStack));
+    std::memcpy(originalCamera.data(),cameraMatrix,sizeof(originalCamera));
     const float shot=std::sin(angle*.43f);
-    applyOrbit(matrix,angle,-.12f+shot*.08f,5.4f+shot*.9f,strength);
-    if(!saneMatrix(matrix)){
-        std::memcpy(matrix,originalMatrix.data(),sizeof(originalMatrix));
+    const float pitch=-.12f+shot*.08f;
+    const float distance=5.4f+shot*.9f;
+    applyOrbit(stackMatrix,angle,pitch,distance,strength);
+    applyOrbit(cameraMatrix,angle,pitch,distance,strength);
+    if(!saneMatrix(stackMatrix)||!saneMatrix(cameraMatrix)){
+        std::memcpy(stackMatrix,originalStack.data(),sizeof(originalStack));
+        std::memcpy(cameraMatrix,originalCamera.data(),sizeof(originalCamera));
+        cameraAppliedAt=0;
         return;
     }
-    // Both audited helpers receive the matrix-stack argument (x1). Passing the
-    // camera owner here made CameraDeps interpret an unrelated object as a
-    // matrix stack and was the activation-time crash in 1.6.4.
     cameraDeps(stack);
+    cameraAppliedAt=nowMs();
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=false;return;}
@@ -144,7 +153,9 @@ inline void request(bool value,int delay=15){
     if(value&&!hooked&&imageBase)prepare(imageBase,exactBuild);
     if(!value)blend=0.f;
 }
-inline bool active(){return enabled&&supported&&blend.load()>.01f;}
+inline bool active(){
+    return enabled&&supported&&blend.load()>.01f&&nowMs()-cameraAppliedAt.load()<350;
+}
 inline bool effectiveCamera(float& x,float& y,float& z){
     if(!active())return false;
     Pose current;{std::lock_guard lock(poseMutex);current=pose;}
@@ -159,6 +170,6 @@ inline const char* status(){
     if(!supported)return "UNAVAILABLE";
     return active()?"ACTIVE":"WAITING";
 }
-inline void shutdown(){enabled=false;playing=false;blend=0.f;enteredAt=0;}
+inline void shutdown(){enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;}
 inline void unload(){shutdown();if(hooked&&target)pl::memory::unhook(target,reinterpret_cast<void*>(&setupHook));hooked=false;supported=false;}
 } // namespace lm_cinematic

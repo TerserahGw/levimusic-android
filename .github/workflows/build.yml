@@ -2,7 +2,7 @@ name: Build & Release LeviMusic Android ARM64
 
 on:
   push:
-    branches: [main, 'work/levimusic-1.6.5']
+    branches: [main, 'work/levimusic-1.6.6']
   workflow_dispatch:
 
 permissions:
@@ -243,14 +243,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          source_file="build/LeviMusic-1.6.5-arm64-v8a.levipack"
+          source_file="build/LeviMusic-1.6.6-arm64-v8a.levipack"
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           if [[ "$source_file" != "$release_file" ]]; then
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_src="build/LeviMusic-Standalone-1.6.5-arm64-v8a.levipack"
+          standalone_src="build/LeviMusic-Standalone-1.6.6-arm64-v8a.levipack"
           standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
           if [[ "$standalone_src" != "$standalone_release" ]]; then
             mv "$standalone_src" "$standalone_release"
@@ -303,7 +303,21 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version == "1.6.5":
+          if version == "1.6.6":
+              notes = "\n".join([
+                  "# LeviMusic - Aurelis Online v1.6.6 stable",
+                  "",
+                  "Client-side music for Minecraft Bedrock through LeviLauncher Android ARM64.",
+                  "",
+                  "## Environmental audio improvements",
+                  "- Standard and Standalone now use a tunable environmental reverb path instead of relying on equalizer changes alone.",
+                  "- Expanded room and cave detection to cover wider enclosed spaces.",
+                  "- Underwater playback preserves bass while applying stronger high-frequency damping.",
+                  "",
+                  "Standard mode requires the matching v1.6.6 Bridge APK.",
+                  "",
+              ])
+          elif version == "1.6.5":
               notes = "\n".join([
                   "# LeviMusic - Aurelis Online v1.6.5 stable",
                   "",

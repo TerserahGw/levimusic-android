@@ -74,16 +74,21 @@ inline void observePlayer(void* player,float x,float y,float z){
     const BlockPos head{int(std::floor(x)),int(std::floor(y+1.55f)),int(std::floor(z))};
     auto* source=reinterpret_cast<void*>(region);
     bool roof=false;
-    constexpr int roofOffsets[5][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1}};
-    for(int height=1;height<=5&&!roof;++height)
-        for(const auto& d:roofOffsets)
-            if(solidAt(source,{head.x+d[0],head.y+height,head.z+d[1]})){roof=true;break;}
+    constexpr int roofOffsets[9][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
+        {2,0},{-2,0},{0,2},{0,-2}};
+    int roofHits=0;
+    for(const auto& d:roofOffsets){
+        bool hit=false;
+        for(int height=1;height<=12&&!hit;++height)
+            hit=solidAt(source,{head.x+d[0],head.y+height,head.z+d[1]});
+        if(hit)++roofHits;
+    }
     int enclosedDirections=0;
     constexpr int directions[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
     for(const auto& d:directions){
         bool blocked=false;
-        for(int radius=1;radius<=4&&!blocked;++radius){
-            for(int height:{0,2}){
+        for(int radius=1;radius<=12&&!blocked;++radius){
+            for(int height:{-1,0,2,4}){
                 if(solidAt(source,{head.x+d[0]*radius,head.y+height,head.z+d[1]*radius})){
                     blocked=true;break;
                 }
@@ -91,8 +96,9 @@ inline void observePlayer(void* player,float x,float y,float z){
         }
         if(blocked)++enclosedDirections;
     }
-    // Also covers enclosed buildings, matching the intended environmental echo.
-    environment=((roof&&enclosedDirections>=3)||enclosedDirections>=6)?
+    // A roof plus two reflected directions is enough for rooms and broad caves;
+    // a highly enclosed ravine also qualifies without a directly overhead roof.
+    environment=((roofHits>=2&&enclosedDirections>=2)||enclosedDirections>=6)?
         int(Environment::Cave):int(Environment::Open);
 }
 inline void request(bool value){enabled=value;if(!value)environment=0;}

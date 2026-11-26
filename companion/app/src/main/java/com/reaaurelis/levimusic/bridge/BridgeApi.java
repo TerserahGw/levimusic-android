@@ -213,7 +213,7 @@ public final class BridgeApi {
                 json=new JSONObject().put("accepted",true).put("environment",
                     "underwater".equals(environment)?"underwater":"cave".equals(environment)?"cave":"open");
             }
-            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.5").put("api",4);
+            else if(path.equals("/v1/health"))json=new JSONObject().put("ok",true).put("version","1.6.6").put("api",4);
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
                 String id=player==null?"":player.optString("id");

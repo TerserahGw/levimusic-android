@@ -10,7 +10,7 @@ import android.content.Intent;
 import android.media.AudioManager;
 import android.media.audiofx.Visualizer;
 import android.media.audiofx.Equalizer;
-import android.media.audiofx.PresetReverb;
+import android.media.audiofx.EnvironmentalReverb;
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.net.Uri;
@@ -70,7 +70,7 @@ public final class PlayerService extends MediaSessionService {
     private volatile String repeatMode="all";
     private volatile String immersiveEnvironment="open";
     private Equalizer immersiveEq;
-    private PresetReverb immersiveReverb;
+    private EnvironmentalReverb immersiveReverb;
     private int immersiveSession=-1;
     private String appliedImmersiveEnvironment="open";
     private int navigationGeneration=0;
@@ -94,6 +94,35 @@ public final class PlayerService extends MediaSessionService {
     private static short clampBandLevel(int value,short[] range){
         return (short)Math.max(range[0],Math.min(range[1],value));
     }
+    private void configureEnvironmentReverb(boolean underwater){
+        if(immersiveReverb==null||player==null)return;
+        if(underwater){
+            immersiveReverb.setRoomLevel((short)-2200);
+            immersiveReverb.setRoomHFLevel((short)-6500);
+            immersiveReverb.setDecayTime(650);
+            immersiveReverb.setDecayHFRatio((short)250);
+            immersiveReverb.setReflectionsLevel((short)-2400);
+            immersiveReverb.setReflectionsDelay(12);
+            immersiveReverb.setReverbLevel((short)-1800);
+            immersiveReverb.setReverbDelay(18);
+            immersiveReverb.setDiffusion((short)650);
+            immersiveReverb.setDensity((short)700);
+            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.16f));
+        }else{
+            immersiveReverb.setRoomLevel((short)-450);
+            immersiveReverb.setRoomHFLevel((short)-1100);
+            immersiveReverb.setDecayTime(2800);
+            immersiveReverb.setDecayHFRatio((short)850);
+            immersiveReverb.setReflectionsLevel((short)-180);
+            immersiveReverb.setReflectionsDelay(58);
+            immersiveReverb.setReverbLevel((short)350);
+            immersiveReverb.setReverbDelay(72);
+            immersiveReverb.setDiffusion((short)900);
+            immersiveReverb.setDensity((short)1000);
+            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),1f));
+        }
+        immersiveReverb.setEnabled(true);
+    }
     private void applyImmersiveSound(){
         if(player==null)return;
         if("open".equals(immersiveEnvironment)){releaseImmersiveSound();return;}
@@ -102,27 +131,30 @@ public final class PlayerService extends MediaSessionService {
             releaseImmersiveSound();
             try{
                 immersiveEq=new Equalizer(0,session);immersiveEq.setEnabled(true);
-                immersiveReverb=new PresetReverb(0,0);
-                immersiveReverb.setEnabled(true);
+                immersiveReverb=new EnvironmentalReverb(0,0);
                 immersiveSession=session;
             }catch(RuntimeException error){releaseImmersiveSound();Log.w(TAG,"Immersive audio unavailable",error);return;}
         }
         boolean changed=!immersiveEnvironment.equals(appliedImmersiveEnvironment);
-        if(immersiveReverb!=null&&changed)try{
-            boolean underwater="underwater".equals(immersiveEnvironment);
-            immersiveReverb.setPreset(underwater?PresetReverb.PRESET_SMALLROOM:PresetReverb.PRESET_LARGEHALL);
-            immersiveReverb.setEnabled(true);
-            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),underwater?.12f:.86f));
-        }catch(RuntimeException error){Log.w(TAG,"Immersive reverb update failed",error);}
+        boolean underwater="underwater".equals(immersiveEnvironment);
+        if(changed)try{configureEnvironmentReverb(underwater);}
+        catch(RuntimeException error){Log.w(TAG,"Immersive reverb update failed",error);}
         if(immersiveEq!=null)try{
             short bands=immersiveEq.getNumberOfBands();
             short[] range=immersiveEq.getBandLevelRange();
             for(short band=0;band<bands;band++){
-                short level=0;
-                if("underwater".equals(immersiveEnvironment))
-                    level=clampBandLevel(band<Math.max(1,bands/3)?260:-1450,range);
-                else level=clampBandLevel(band<Math.max(1,bands/3)?180:-260,range);
-                immersiveEq.setBandLevel(band,level);
+                int hz=immersiveEq.getCenterFreq(band)/1000;
+                int requested;
+                if(underwater){
+                    if(hz<250)requested=600;
+                    else if(hz<800)requested=250;
+                    else if(hz<2000)requested=-350;
+                    else if(hz<4000)requested=-1250;
+                    else requested=-2300;
+                }else{
+                    requested=hz<250?220:hz<1000?100:hz>6000?-280:0;
+                }
+                immersiveEq.setBandLevel(band,clampBandLevel(requested,range));
             }
             immersiveEq.setEnabled(true);
             appliedImmersiveEnvironment=immersiveEnvironment;
