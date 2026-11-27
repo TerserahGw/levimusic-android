@@ -61,7 +61,7 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
         ByteBuffer output=replaceOutputBuffer(bytes);
         if(delay.length==0){while(input.remaining()>=2)output.putShort(input.getShort());output.flip();return;}
         int mode=environment;
-        float target=mode==1?.98f:mode==2?.36f:0f;
+        float target=mode==1?.62f:mode==2?.36f:0f;
         int ringFrames=delay.length/channels;
         int samples=bytes/2;
         for(int i=0;i<samples;i++){
@@ -87,14 +87,13 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
                     if(opposite>=channels)opposite=ch;
                     float cross=delayed(d2,opposite);
                     float far=delayed(d5,opposite);
-                    float reflections=early*.62f+middle*.47f+late*.36f+
-                                      tail*.27f+cross*.24f+far*.16f;
-                    // Strong, clearly audible early reflections followed by a
-                    // lower feedback tail. This remains in PCM and therefore
-                    // does not depend on a vendor AudioEffect implementation.
-                    out=dry*(1f-.38f*wet)+reflections*.78f*wet;
-                    float feedback=dry+reflections*.47f*wet;
-                    delay[writeFrame*channels+ch]=Math.max(-1.35f,Math.min(1.35f,feedback));
+                    float reflections=early*.25f+middle*.18f+late*.13f+
+                                      tail*.10f+cross*.07f+far*.04f;
+                    // Keep enough dry headroom and a damped tail. The previous
+                    // coefficients repeatedly clipped PCM, making caves raspy.
+                    out=dry*(1f-.18f*wet)+reflections*.58f*wet;
+                    float feedback=dry*.86f+(late*.16f+tail*.12f+far*.07f)*wet;
+                    delay[writeFrame*channels+ch]=Math.max(-.98f,Math.min(.98f,feedback));
                 }
             }else{
                 out=dry;

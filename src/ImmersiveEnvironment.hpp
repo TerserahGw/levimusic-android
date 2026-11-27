@@ -21,7 +21,7 @@ using GetRegionFn=void*(*)(void*);
 
 inline std::atomic<bool> enabled{false},supported{false},clientHooked{false};
 inline std::atomic<int> environment{0};
-inline std::atomic<int64_t> lastSample{0},lastWorldProbe{0},lastCaveEvidence{0};
+inline std::atomic<int64_t> lastSample{0},lastWorldProbe{0},lastCaveEvidence{0},lastUnderwaterEvidence{0};
 inline std::atomic<int> loggedEnvironment{-1},loggedProbeState{-1};
 inline std::atomic<bool> probeUnderwater{false};
 inline std::atomic<int> probePlayerX{0},probePlayerY{0},probePlayerZ{0};
@@ -29,7 +29,6 @@ inline std::atomic<int64_t> probePlayerSample{0};
 inline IsInWaterFn isInWater=nullptr;
 inline IsSolidFn isSolid=nullptr;
 inline ClientUpdateFn originalClientUpdate=nullptr;
-inline GetRegionFn getRegion=nullptr;
 inline void* clientTarget=nullptr;
 inline uintptr_t imageBase=0;
 
@@ -50,6 +49,16 @@ inline void publish(Environment value,int roofHits=0,int wallHits=0){
 }
 inline bool solidAt(void* source,const BlockPos& pos){
     return isSolid&&isSolid(source,pos);
+}
+inline void* clientRegion(void* client){
+    if(!plausible(reinterpret_cast<uintptr_t>(client)))return nullptr;
+    auto** vtable=*reinterpret_cast<void***>(client);
+    if(!plausible(reinterpret_cast<uintptr_t>(vtable)))return nullptr;
+    // BedrockTools' current Android 1.26.6X layout exposes
+    // ClientInstance::getRegion at virtual slot 30.
+    auto fn=reinterpret_cast<GetRegionFn>(vtable[30]);
+    if(!plausible(reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(fn)),1))return nullptr;
+    return fn(client);
 }
 inline void sampleEnclosure(void* source,const BlockPos& head,int64_t now){
     constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
@@ -92,8 +101,7 @@ inline void sampleClient(void* client){
     int64_t previous=lastWorldProbe.load(std::memory_order_relaxed);
     if(now-previous<650||!lastWorldProbe.compare_exchange_strong(
         previous,now,std::memory_order_relaxed))return;
-    if(!getRegion){loggedProbeState=0;return;}
-    void* source=getRegion(client);
+    void* source=clientRegion(client);
     if(!plausible(reinterpret_cast<uintptr_t>(source))){loggedProbeState=0;return;}
     const BlockPos head{probePlayerX.load(),probePlayerY.load(),probePlayerZ.load()};
     if(loggedProbeState.exchange(1)!=1)__android_log_print(ANDROID_LOG_INFO,
@@ -105,35 +113,29 @@ inline void clientUpdateHook(void* client,uint32_t renderTick,uint32_t simTick){
     sampleClient(client);
 }
 inline void prepare(uintptr_t base,bool exact26661){
-    supported=false;isInWater=nullptr;isSolid=nullptr;getRegion=nullptr;imageBase=base;
+    supported=false;isInWater=nullptr;isSolid=nullptr;imageBase=base;
     if(!base||!exact26661)return;
     constexpr uintptr_t waterRva=0xFD8DB60;
     constexpr uintptr_t solidRva=0x10374160;
     constexpr uintptr_t clientUpdateRva=0x9B7B418;
-    constexpr uintptr_t getRegionRva=0x9B7F71C;
     constexpr uint8_t waterSignature[]{0x00,0x20,0x00,0x91,0x0c,0xce,0x10,0x14};
     constexpr uint8_t solidSignature[]{0x09,0x00,0x40,0xf9,0x23,0x08,0x40,0xb9,
         0x28,0x08,0x40,0x29,0x24,0xdd,0x40,0xf9,0xe1,0x03,0x08,0x2a,0x80,0x00,0x1f,0xd6};
     constexpr uint8_t clientSignature[]{0xe8,0x0f,0x19,0xfc,0xfd,0x7b,0x01,0xa9,
         0xfc,0x6f,0x02,0xa9,0xfa,0x67,0x03,0xa9,0xf8,0x5f,0x04,0xa9,0xf6,0x57,0x05,0xa9,
         0xf4,0x4f,0x06,0xa9,0xfd,0x43,0x00,0x91,0xff,0x03,0x13,0xd1,0x59,0xd0,0x3b,0xd5};
-    constexpr uint8_t regionSignature[]{0xff,0x43,0x01,0xd1,0xfd,0x7b,0x03,0xa9,
-        0xf3,0x23,0x00,0xf9,0xfd,0xc3,0x00,0x91,0x53,0xd0,0x3b,0xd5,0xe8,0x03,0x00,0xaa};
     const auto* water=reinterpret_cast<const uint8_t*>(base+waterRva);
     const auto* solid=reinterpret_cast<const uint8_t*>(base+solidRva);
     const auto* client=reinterpret_cast<const uint8_t*>(base+clientUpdateRva);
-    const auto* region=reinterpret_cast<const uint8_t*>(base+getRegionRva);
     if(std::memcmp(water,waterSignature,sizeof(waterSignature))||
        std::memcmp(solid,solidSignature,sizeof(solidSignature))||
-       std::memcmp(client,clientSignature,sizeof(clientSignature))||
-       std::memcmp(region,regionSignature,sizeof(regionSignature))){
+       std::memcmp(client,clientSignature,sizeof(clientSignature))){
         __android_log_print(ANDROID_LOG_WARN,"LeviMusicImmersive",
             "environment access signature mismatch");
         return;
     }
     isInWater=reinterpret_cast<IsInWaterFn>(base+waterRva);
     isSolid=reinterpret_cast<IsSolidFn>(base+solidRva);
-    getRegion=reinterpret_cast<GetRegionFn>(base+getRegionRva);
     clientTarget=reinterpret_cast<void*>(base+clientUpdateRva);
     if(!clientHooked.load()){
         if(pl::memory::hook(clientTarget,reinterpret_cast<void*>(&clientUpdateHook),
@@ -159,9 +161,10 @@ inline void observePlayer(void* player,float x,float y,float z){
        previous,now,std::memory_order_relaxed))return;
     if(!player||!supported||!isInWater||!isSolid){publish(Environment::Open);return;}
     if(isInWater(player)){
-        probeUnderwater=true;publish(Environment::Underwater);return;
+        lastUnderwaterEvidence=now;probeUnderwater=true;publish(Environment::Underwater);return;
     }
     probeUnderwater=false;
+    if(now-lastUnderwaterEvidence.load()<1500){publish(Environment::Underwater);return;}
     if(now-lastWorldProbe.load()>2200){
         if(loggedProbeState.exchange(0)!=0)__android_log_print(ANDROID_LOG_WARN,
             "LeviMusicImmersive","waiting for local ClientInstance region");
@@ -171,7 +174,7 @@ inline void observePlayer(void* player,float x,float y,float z){
 inline void request(bool value){
     enabled=value;
     if(!value){
-        environment=0;lastSample=0;lastWorldProbe=0;lastCaveEvidence=0;
+        environment=0;lastSample=0;lastWorldProbe=0;lastCaveEvidence=0;lastUnderwaterEvidence=0;
         loggedEnvironment=-1;probeUnderwater=false;probePlayerSample=0;
         loggedProbeState=-1;
     }
@@ -185,6 +188,6 @@ inline void unload(){
     if(clientHooked&&clientTarget)
         pl::memory::unhook(clientTarget,reinterpret_cast<void*>(&clientUpdateHook));
     clientHooked=false;clientTarget=nullptr;originalClientUpdate=nullptr;
-    isSolid=nullptr;isInWater=nullptr;getRegion=nullptr;supported=false;
+    isSolid=nullptr;isInWater=nullptr;supported=false;
 }
 } // namespace lm_immersive

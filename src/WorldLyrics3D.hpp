@@ -947,7 +947,7 @@ inline void prepare(){
         state=State::Unsupported;return;
     }
     const bool exact26661=image.selected&&image.selected->name=="1.26.66.1";
-#if !defined(LEVI_STANDALONE)
+#if !defined(LEVI_STANDALONE) || defined(LEVI_UNIFIED)
     lm_immersive::prepare(image.base,exact26661);
 #endif
     lm_cinematic::discover(image.base,exact26661);

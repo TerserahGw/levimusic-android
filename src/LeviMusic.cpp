@@ -2032,7 +2032,7 @@ struct UI {
     bool ok()const{return w>0&&h>0;}
 };
 struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
-constexpr std::array<SettingRow,30> quickSettings{{
+constexpr std::array<SettingRow,31> quickSettings{{
     {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
     {"lyricTrailFollow","Follow player and rise",0,0,1,true},
     {"romanizeLyrics","Romanized subtitles",0,0,1,true},
@@ -2057,6 +2057,7 @@ constexpr std::array<SettingRow,30> quickSettings{{
     {"hudSize","Compact HUD size (%)",3,55,125,false},
     {"hudX","Compact HUD horizontal (%)",3,0,100,false},
     {"hudY","Compact HUD vertical (%)",3,0,100,false},
+    {"hudTheme","HUD: Classic / Minimal / Glass / Vinyl / Lyrics / Bar",3,0,5,false},
     {"lyricBeats","3D Lyrics Beats (Bridge audio)",4,0,1,true},
     {"cinematicAfk","Cinematic AFK View [WIP - 26.66 Only]",4,0,1,true},
     {"cinematicDelay","AFK delay (seconds)",4,10,60,false},
@@ -2066,7 +2067,7 @@ constexpr std::array<SettingRow,30> quickSettings{{
 }};
 inline Rect settingsSidebar(const UI& l){
     const float u=l.s;
-    return {l.outer.x+20*u,l.outer.y+64*u,std::min(158*u,l.outer.w*.25f),l.outer.h-112*u};
+    return {l.outer.x+20*u,l.outer.y+82*u,std::min(158*u,l.outer.w*.25f),l.outer.h-130*u};
 }
 inline Rect settingsCategoryRow(const UI& l,int index){
     const float u=l.s;const Rect side=settingsSidebar(l);
@@ -2138,7 +2139,7 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
     p.repeat={mid-132*u,bottom+5*u,34*u,34*u};
     p.shuffle={mid+98*u,bottom+5*u,34*u,34*u};
     p.seek={p.left.x+18*u,bottom-41*u,p.left.w-36*u,15*u};
-    const float rowStart=p.right.y+104*u;
+    const float rowStart=p.right.y+116*u;
     const float rowBottom=p.right.y+p.right.h-40*u;
     const int rowCount=compact?7:5;
     const float rowStep=std::max(19*u,(rowBottom-rowStart)/float(rowCount));
@@ -2208,8 +2209,8 @@ class LeviMusic {
     bool shuffle_=false,bridgePlaylistQueue_=false;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
     bool settingsOpen_=false;int settingsPage_=0,settingsScroll_=0;
-    std::atomic<bool> cinematicAfk_{false},immersiveSound_{false},compactUi_{false};
-    std::atomic<int> cinematicDelay_{15},immersiveMode_{0};
+    std::atomic<bool> cinematicAfk_{false},immersiveSound_{false},compactUi_{true};
+    std::atomic<int> cinematicDelay_{15},immersiveMode_{0},hudTheme_{0};
     // Open, Search, Next, Previous, Play/Pause, Stop, Repeat, Shuffle,
     // Volume+, Volume-, Lyrics and HUD.
     std::array<int,12> keybinds_{{139,136,140,138,137,141,135,134,133,132,131,142}};
@@ -2288,7 +2289,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.0 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.0 unified stable loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2341,9 +2342,10 @@ public:
             .config("hudSize","HUD Size (%)",pl::modmenu::ConfigType::SliderInt,remembered("hudSize","84"),"55","125")
             .config("hudX","HUD Horizontal Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudX","3"),"0","100")
             .config("hudY","HUD Vertical Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudY","93"),"0","100")
+            .config("hudTheme","HUD Theme (0 Classic / 1 Minimal / 2 Glass / 3 Vinyl / 4 Lyrics / 5 Bar)",pl::modmenu::ConfigType::SliderInt,remembered("hudTheme","0"),"0","5")
             .config("panelTop","Menu Distance from Top (%)",pl::modmenu::ConfigType::SliderInt,remembered("panelTop","15"),"12","32")
             .config("animation","Subtle Animations",pl::modmenu::ConfigType::Toggle,remembered("animation","true"))
-            .config("compactUi","Compact UI [WIP]",pl::modmenu::ConfigType::Toggle,remembered("compactUi","false"))
+            .config("compactUi","Compact UI [WIP]",pl::modmenu::ConfigType::Toggle,remembered("compactUi","true"))
             .config("cinematicAfk","Cinematic AFK View [WIP - 26.66 Only]",pl::modmenu::ConfigType::Toggle,remembered("cinematicAfk","false"))
             .config("cinematicDelay","Cinematic AFK Delay",pl::modmenu::ConfigType::SliderInt,remembered("cinematicDelay","15"),"10","60")
             .config("immersiveSound","Immersive Sound [WIP - Bridge]",pl::modmenu::ConfigType::Toggle,remembered("immersiveSound","false"))
@@ -2615,6 +2617,8 @@ private:
             try{hudX_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
         } else if(k=="hudY") {
             try{hudY_=std::clamp(std::stoi(std::string(v)),0,100);}catch(...){}
+        } else if(k=="hudTheme") {
+            try{hudTheme_=std::clamp(std::stoi(std::string(v)),0,5);}catch(...){}
         } else if(k=="panelTop") {
             try{panelTop_=std::clamp(std::stoi(std::string(v)),12,32);}catch(...){}
         } else if(k=="animation") {
@@ -2717,6 +2721,7 @@ private:
         if(k=="hudSize")return hudSize_;
         if(k=="hudX")return hudX_;
         if(k=="hudY")return hudY_;
+        if(k=="hudTheme")return hudTheme_;
         return row.low;
     }
     bool touch(const pl::input::TouchEvent& e){
@@ -3312,32 +3317,53 @@ private:
         }
         if(!panelVisible) {
             if(showHud){
-                box({l.mini.x+2*u,l.mini.y+4*u,l.mini.w,l.mini.h},0x70000000U,15*miniScale);
-                box(l.mini,0xF11D2026U,15*miniScale);
-                box({l.mini.x,l.mini.y,l.mini.w,1.1f*u},0x66FFFFFFU,2.f);
+                const int theme=hudTheme_.load();
+                const bool minimal=theme==1,glass=theme==2,vinyl=theme==3;
+                const bool lyricHud=theme==4,barHud=theme==5;
+                Rect hudRect=l.mini;
+                if(barHud){hudRect.y+=10*u*miniScale;hudRect.h-=20*u*miniScale;}
+                if(!minimal)box({hudRect.x+2*u,hudRect.y+4*u,hudRect.w,hudRect.h},
+                    theme==2?0x48000000U:0x70000000U,barHud?9.f:15*miniScale);
+                if(!minimal)box(hudRect,glass?0xB5283038U:vinyl?0xF1151518U:
+                    lyricHud?0xF1231D2DU:barHud?0xEA171A20U:0xF11D2026U,
+                    barHud?9.f:15*miniScale);
+                if(glass)box({hudRect.x,hudRect.y,hudRect.w,1.2f*u},0xAAE4F9FFU,2.f);
+                else if(!minimal)box({hudRect.x,hudRect.y,hudRect.w,1.1f*u},0x66FFFFFFU,2.f);
                 const float sz=17*u*miniScale;
-                if(!coverImage.empty()) {
+                if(!coverImage.empty()&&!vinyl&&!lyricHud) {
                     pl::modmenu::DrawCommand c;
                     c.type=pl::modmenu::DrawCommandType::Image;c.imageId=coverImage;
-                    c.x=l.mini.x+8*u*miniScale;c.y=l.mini.y+8*u*miniScale;
-                    c.w=34*u*miniScale;c.h=34*u*miniScale;c.color=0xFFFFFFFFU;
+                    c.x=hudRect.x+8*u*miniScale;c.y=hudRect.y+(hudRect.h-34*u*miniScale)/2;
+                    c.w=34*u*miniScale;c.h=34*u*miniScale;c.color=glass?0xE8FFFFFFU:0xFFFFFFFFU;
                     out.push_back(std::move(c));
                 } else {
-                    disc(l.mini.x+24*u*miniScale,l.mini.y+l.mini.h*.50f,sz,0xFF37393DU);
-                    icon("disc-3",l.mini.x+13*u*miniScale,l.mini.y+(l.mini.h-23*u*miniScale)/2,23*u*miniScale);
+                    const float dx=hudRect.x+(vinyl?27:24)*u*miniScale;
+                    disc(dx,hudRect.y+hudRect.h*.50f,vinyl?20*u*miniScale:sz,
+                         vinyl?0xFF08090BU:0xFF37393DU);
+                    if(vinyl)disc(dx,hudRect.y+hudRect.h*.50f,5*u*miniScale,0xFF9EDCE7U);
+                    else icon("disc-3",hudRect.x+13*u*miniScale,
+                              hudRect.y+(hudRect.h-23*u*miniScale)/2,23*u*miniScale);
                 }
-                float x=l.mini.x+48*u*miniScale;
+                float x=hudRect.x+(vinyl?55:48)*u*miniScale;
                 float fs=std::max(10.f,12.5f*u*miniScale);
-                text(x,l.mini.y+l.mini.h*.40f,animation_?marqueeTitle(title,25,tick):title,fs,C_TEXT,125);
-                text(x,l.mini.y+l.mini.h*.72f, artist,fs*.77f,C_DIM,37);
-                equalizer(l.mini.x+l.mini.w-19*u*miniScale,l.mini.y+l.mini.h*.24f,
-                          13*u*miniScale,l.mini.h*.47f);
+                if(lyricHud){
+                    text(x,hudRect.y+hudRect.h*.30f,animation_?marqueeTitle(title,27,tick):title,
+                         fs*.72f,C_DIM,90);
+                    text(x,hudRect.y+hudRect.h*.69f,lyric.empty()?"Waiting for lyrics...":lyric,
+                         fs*.94f,C_TEXT,80);
+                }else{
+                    text(x,hudRect.y+hudRect.h*(barHud?.62f:.40f),
+                         animation_?marqueeTitle(title,25,tick):title,barHud?fs*.88f:fs,C_TEXT,125);
+                    if(!barHud)text(x,hudRect.y+hudRect.h*.72f,artist,fs*.77f,C_DIM,37);
+                }
+                if(!minimal&&!lyricHud)equalizer(hudRect.x+hudRect.w-19*u*miniScale,
+                    hudRect.y+hudRect.h*.24f,13*u*miniScale,hudRect.h*.47f);
                 if(total>0){
                     float ratio=std::clamp(float(elapsed)/total,0.f,1.f);
-                    box({l.mini.x+10*u*miniScale,l.mini.y+l.mini.h-5*u*miniScale,
-                         l.mini.w-20*u*miniScale,1.8f*u*miniScale},0xFF2A4056U,1.f);
-                    box({l.mini.x+10*u*miniScale,l.mini.y+l.mini.h-5*u*miniScale,
-                         (l.mini.w-20*u*miniScale)*ratio,1.8f*u*miniScale},C_MINT,1.f);
+                    box({hudRect.x+10*u*miniScale,hudRect.y+hudRect.h-5*u*miniScale,
+                         hudRect.w-20*u*miniScale,1.8f*u*miniScale},0xFF2A4056U,1.f);
+                    box({hudRect.x+10*u*miniScale,hudRect.y+hudRect.h-5*u*miniScale,
+                         (hudRect.w-20*u*miniScale)*ratio,1.8f*u*miniScale},C_MINT,1.f);
                 }
             }
             // No background: white text + black multi-pass outline.

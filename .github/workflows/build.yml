@@ -61,9 +61,9 @@ jobs:
           [[ "$channel" == stable || "$channel" == beta ]] || { echo "Invalid release channel"; exit 1; }
           existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$' | sort -V | tail -n 1 || true)"
           previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
-          if [[ "$channel" == stable && "$(cat VERSION)" == 1.6.0 ]]; then
-            # Rebuild the requested v1.6.0 tag after its first published assets.
-            version=1.6.0
+          if [[ "$channel" == stable && ( "$(cat VERSION)" == 1.6.0 || "$(cat VERSION)" == 1.7.0 ) ]]; then
+            # Rebuild a requested stable tag and replace its published assets.
+            version="$(cat VERSION)"
             already_released=true
           elif [[ -n "$existing" ]]; then
             version="${existing#v}"
