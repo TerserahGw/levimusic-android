@@ -1,7 +1,8 @@
 #pragma once
 
-// Experimental Minecraft 1.26.66.1-only cinematic camera. CameraComponent is
-// updated after the game's local-player camera system has produced its frame.
+// Experimental Minecraft 1.26.66.1-only cinematic camera. The audited camera
+// ECS position/orientation passes are intercepted after they have populated the
+// real CameraComponent used by the renderer.
 #include <pl/memory/Hook.hpp>
 #include <algorithm>
 #include <android/log.h>
@@ -14,7 +15,8 @@
 #include <string_view>
 
 namespace lm_cinematic {
-using UpdatePlayerFromCameraFn=void(*)(void*,void*,void*);
+using CameraSystemFn=void(*)(void*);
+using CameraAdjustFn=void(*)(void*,const void*,const void*);
 struct Pose {
     float x=0,y=0,z=0,pitch=0,yaw=0;
     uintptr_t player=0,world=0;
@@ -31,10 +33,16 @@ inline std::atomic<uint64_t> cameraHookCalls{0},cameraApplyCalls{0},cameraReject
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;
 inline Pose pose{};
-inline UpdatePlayerFromCameraFn original=nullptr;
-inline void* target=nullptr;
+inline CameraSystemFn originalPositionSystem=nullptr;
+inline CameraSystemFn originalOrientationSystem=nullptr;
+inline CameraAdjustFn originalAdjust=nullptr;
+inline void* positionSystemTarget=nullptr;
+inline void* orientationSystemTarget=nullptr;
+inline void* adjustTarget=nullptr;
 inline uintptr_t imageBase=0;
 inline bool exactBuild=false;
+inline thread_local int positionSystemDepth=0;
+inline thread_local void* frameCameraComponent=nullptr;
 
 inline int64_t nowMs(){
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -135,21 +143,20 @@ inline bool buildCamera(const Pose& current,float strength,float& x,float& y,flo
     orientation=lookQuaternion(yaw,pitch);
     return sane(orientation);
 }
-inline void cameraHook(void* camera,void* component,void* player){
-    if(original)original(camera,component,player);
+inline bool applyCamera(void* camera){
     cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
     Pose current;float strength=0.f;
-    if(!shouldRun(current,strength)||reinterpret_cast<uintptr_t>(player)!=current.player)return;
-    if(!plausible(camera,alignof(float))){cameraRejectCalls.fetch_add(1);return;}
+    if(!shouldRun(current,strength))return false;
+    if(!plausible(camera,alignof(float))){cameraRejectCalls.fetch_add(1);return false;}
     // CameraComponent on the supported 1.26.6X layout stores orientation at
     // +0x28 and position immediately after it at +0x38.
     auto* bytes=static_cast<uint8_t*>(camera);
     Quaternion originalOrientation{};
     std::memcpy(&originalOrientation,bytes+0x28,sizeof(originalOrientation));
-    if(!sane(originalOrientation)){cameraRejectCalls.fetch_add(1);return;}
+    if(!sane(originalOrientation)){cameraRejectCalls.fetch_add(1);return false;}
     float x=0,y=0,z=0;Quaternion desired{};
     if(!buildCamera(current,strength,x,y,z,desired)){
-        cameraRejectCalls.fetch_add(1);return;
+        cameraRejectCalls.fetch_add(1);return false;
     }
     const float eased=strength*strength*(3.f-2.f*strength);
     const Quaternion mixed=blendQuaternion(originalOrientation,desired,eased);
@@ -160,25 +167,70 @@ inline void cameraHook(void* camera,void* component,void* player){
     const auto count=cameraApplyCalls.fetch_add(1,std::memory_order_relaxed)+1;
     if(count==1)__android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
         "CameraComponent orbit active");
+    return true;
+}
+inline void adjustHook(void* camera,const void* adjusted,const void* delta){
+    if(originalAdjust)originalAdjust(camera,adjusted,delta);
+    if(positionSystemDepth<=0)return;
+    frameCameraComponent=camera;
+    applyCamera(camera);
+}
+inline void positionSystemHook(void* system){
+    frameCameraComponent=nullptr;
+    ++positionSystemDepth;
+    if(originalPositionSystem)originalPositionSystem(system);
+    --positionSystemDepth;
+}
+inline void orientationSystemHook(void* system){
+    if(originalOrientationSystem)originalOrientationSystem(system);
+    // CameraSetPositionSystem's second view writes the orientation after the
+    // adjusted-position pass. Reapply once more so it reaches the renderer.
+    if(frameCameraComponent)applyCamera(frameCameraComponent);
+    frameCameraComponent=nullptr;
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=hooked.load();return;}
-    constexpr auto updateRva=uintptr_t(0x8A42900);
-    constexpr std::string_view signature=
-        "? ? ? D1 ? ? ? FD ? ? ? A9 ? ? ? F9 ? ? ? A9 ? ? ? A9 ? ? ? 91 54 D0 3B D5 ? ? ? 52";
-    auto* entry=reinterpret_cast<uint8_t*>(base+updateRva);
-    if(!matches(entry,signature)){
+    constexpr auto positionSystemRva=uintptr_t(0x11E65888);
+    constexpr auto orientationSystemRva=uintptr_t(0x11E65C24);
+    constexpr auto adjustRva=uintptr_t(0x11E9A1F8);
+    constexpr std::string_view positionSignature=
+        "FF C3 02 D1 E8 23 00 FD FD 7B 05 A9 FC 6F 06 A9 FA 67 07 A9 F8 5F 08 A9";
+    constexpr std::string_view orientationSignature=
+        "FF C3 02 D1 FD 7B 05 A9 FC 6F 06 A9 FA 67 07 A9 F8 5F 08 A9 F6 57 09 A9";
+    constexpr std::string_view adjustSignature=
+        "FF 43 01 D1 FD 7B 03 A9 F3 23 00 F9 FD C3 00 91 53 D0 3B D5 00 A0 00 91";
+    auto* positionEntry=reinterpret_cast<uint8_t*>(base+positionSystemRva);
+    auto* orientationEntry=reinterpret_cast<uint8_t*>(base+orientationSystemRva);
+    auto* adjustEntry=reinterpret_cast<uint8_t*>(base+adjustRva);
+    if(!matches(positionEntry,positionSignature)||
+       !matches(orientationEntry,orientationSignature)||
+       !matches(adjustEntry,adjustSignature)){
         supported=false;
         __android_log_print(ANDROID_LOG_WARN,"LeviMusicCinematic",
-            "UpdatePlayerFromCamera signature mismatch");
+            "CameraSetPositionSystem signature mismatch");
         return;
     }
-    target=entry;
-    if(pl::memory::hook(target,reinterpret_cast<void*>(&cameraHook),
-        reinterpret_cast<void**>(&original))!=0||!original){supported=false;return;}
+    positionSystemTarget=positionEntry;
+    orientationSystemTarget=orientationEntry;
+    adjustTarget=adjustEntry;
+    if(pl::memory::hook(positionSystemTarget,reinterpret_cast<void*>(&positionSystemHook),
+        reinterpret_cast<void**>(&originalPositionSystem))!=0||!originalPositionSystem){
+        supported=false;return;
+    }
+    if(pl::memory::hook(adjustTarget,reinterpret_cast<void*>(&adjustHook),
+        reinterpret_cast<void**>(&originalAdjust))!=0||!originalAdjust){
+        pl::memory::unhook(positionSystemTarget,reinterpret_cast<void*>(&positionSystemHook));
+        originalPositionSystem=nullptr;supported=false;return;
+    }
+    if(pl::memory::hook(orientationSystemTarget,reinterpret_cast<void*>(&orientationSystemHook),
+        reinterpret_cast<void**>(&originalOrientationSystem))!=0||!originalOrientationSystem){
+        pl::memory::unhook(adjustTarget,reinterpret_cast<void*>(&adjustHook));
+        pl::memory::unhook(positionSystemTarget,reinterpret_cast<void*>(&positionSystemHook));
+        originalAdjust=nullptr;originalPositionSystem=nullptr;supported=false;return;
+    }
     hooked=true;supported=true;noteActivity();
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "UpdatePlayerFromCamera hook ready");
+        "CameraSetPositionSystem orbit hooks ready");
 }
 inline void discover(uintptr_t base,bool exact26661){
     imageBase=base;exactBuild=exact26661;
@@ -227,7 +279,13 @@ inline void shutdown(){
 }
 inline void unload(){
     shutdown();
-    if(hooked&&target)pl::memory::unhook(target,reinterpret_cast<void*>(&cameraHook));
-    hooked=false;supported=false;original=nullptr;target=nullptr;
+    if(hooked&&orientationSystemTarget)
+        pl::memory::unhook(orientationSystemTarget,reinterpret_cast<void*>(&orientationSystemHook));
+    if(hooked&&adjustTarget)pl::memory::unhook(adjustTarget,reinterpret_cast<void*>(&adjustHook));
+    if(hooked&&positionSystemTarget)
+        pl::memory::unhook(positionSystemTarget,reinterpret_cast<void*>(&positionSystemHook));
+    hooked=false;supported=false;
+    originalPositionSystem=nullptr;originalOrientationSystem=nullptr;originalAdjust=nullptr;
+    positionSystemTarget=nullptr;orientationSystemTarget=nullptr;adjustTarget=nullptr;
 }
 } // namespace lm_cinematic

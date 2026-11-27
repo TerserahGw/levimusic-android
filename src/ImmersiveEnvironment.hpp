@@ -16,7 +16,7 @@ enum class Environment : int { Open=0, Cave=1, Underwater=2 };
 struct BlockPos { int x=0,y=0,z=0; };
 using IsInWaterFn=bool(*)(void*);
 using IsSolidFn=bool(*)(void*,const BlockPos&);
-using ClientUpdateFn=void*(*)(void*,bool);
+using ClientUpdateFn=void(*)(void*,uint32_t,uint32_t);
 using GetRegionFn=void*(*)(void*);
 
 inline std::atomic<bool> enabled{false},supported{false},clientHooked{false};
@@ -29,6 +29,7 @@ inline std::atomic<int64_t> probePlayerSample{0};
 inline IsInWaterFn isInWater=nullptr;
 inline IsSolidFn isSolid=nullptr;
 inline ClientUpdateFn originalClientUpdate=nullptr;
+inline GetRegionFn getRegion=nullptr;
 inline void* clientTarget=nullptr;
 inline uintptr_t imageBase=0;
 
@@ -56,7 +57,7 @@ inline void sampleEnclosure(void* source,const BlockPos& head,int64_t now){
     int roofHits=0;
     for(const auto& d:roofOffsets){
         bool hit=false;
-        for(int height=2;height<=20&&!hit;++height)
+        for(int height=1;height<=20&&!hit;++height)
             hit=solidAt(source,{head.x+d[0],head.y+height,head.z+d[1]});
         if(hit)++roofHits;
     }
@@ -65,7 +66,7 @@ inline void sampleEnclosure(void* source,const BlockPos& head,int64_t now){
         {1,1},{1,-1},{-1,1},{-1,-1}};
     for(const auto& d:directions){
         bool blocked=false;
-        for(int radius=2;radius<=20&&!blocked;++radius){
+        for(int radius=1;radius<=20&&!blocked;++radius){
             for(int height:{-1,0,1,2}){
                 if(solidAt(source,{head.x+d[0]*radius,head.y+height,
                                   head.z+d[1]*radius})){
@@ -75,8 +76,10 @@ inline void sampleEnclosure(void* source,const BlockPos& head,int64_t now){
         }
         if(blocked)++enclosedDirections;
     }
-    const bool cave=roofHits>=2||(roofHits>=1&&enclosedDirections>=2)||
-                    enclosedDirections>=6;
+    // A roof plus two obstructed directions is already a room/cave. A dense
+    // horizontal enclosure is also accepted even when the ceiling is tall.
+    const bool cave=(roofHits>=1&&enclosedDirections>=2)||
+                    roofHits>=4||enclosedDirections>=5;
     if(cave){lastCaveEvidence=now;publish(Environment::Cave,roofHits,enclosedDirections);}
     else publish(now-lastCaveEvidence.load()<3500?Environment::Cave:Environment::Open,
                  roofHits,enclosedDirections);
@@ -89,13 +92,7 @@ inline void sampleClient(void* client){
     int64_t previous=lastWorldProbe.load(std::memory_order_relaxed);
     if(now-previous<650||!lastWorldProbe.compare_exchange_strong(
         previous,now,std::memory_order_relaxed))return;
-    uintptr_t vtable=0;
-    std::memcpy(&vtable,client,sizeof(vtable));
-    if(!plausible(vtable)){loggedProbeState=0;return;}
-    uintptr_t method=0;
-    std::memcpy(&method,reinterpret_cast<const void*>(vtable+30*sizeof(void*)),sizeof(method));
-    if(!plausible(method,1)){loggedProbeState=0;return;}
-    auto getRegion=reinterpret_cast<GetRegionFn>(method);
+    if(!getRegion){loggedProbeState=0;return;}
     void* source=getRegion(client);
     if(!plausible(reinterpret_cast<uintptr_t>(source))){loggedProbeState=0;return;}
     const BlockPos head{probePlayerX.load(),probePlayerY.load(),probePlayerZ.load()};
@@ -103,35 +100,40 @@ inline void sampleClient(void* client){
         "LeviMusicImmersive","local BlockSource acquired from ClientInstance");
     sampleEnclosure(source,head,now);
 }
-inline void* clientUpdateHook(void* client,bool value){
-    void* result=originalClientUpdate?originalClientUpdate(client,value):nullptr;
+inline void clientUpdateHook(void* client,uint32_t renderTick,uint32_t simTick){
+    if(originalClientUpdate)originalClientUpdate(client,renderTick,simTick);
     sampleClient(client);
-    return result;
 }
 inline void prepare(uintptr_t base,bool exact26661){
-    supported=false;isInWater=nullptr;isSolid=nullptr;imageBase=base;
+    supported=false;isInWater=nullptr;isSolid=nullptr;getRegion=nullptr;imageBase=base;
     if(!base||!exact26661)return;
     constexpr uintptr_t waterRva=0xFD8DB60;
     constexpr uintptr_t solidRva=0x10374160;
     constexpr uintptr_t clientUpdateRva=0x9B7B418;
+    constexpr uintptr_t getRegionRva=0x9B7F71C;
     constexpr uint8_t waterSignature[]{0x00,0x20,0x00,0x91,0x0c,0xce,0x10,0x14};
     constexpr uint8_t solidSignature[]{0x09,0x00,0x40,0xf9,0x23,0x08,0x40,0xb9,
         0x28,0x08,0x40,0x29,0x24,0xdd,0x40,0xf9,0xe1,0x03,0x08,0x2a,0x80,0x00,0x1f,0xd6};
     constexpr uint8_t clientSignature[]{0xe8,0x0f,0x19,0xfc,0xfd,0x7b,0x01,0xa9,
         0xfc,0x6f,0x02,0xa9,0xfa,0x67,0x03,0xa9,0xf8,0x5f,0x04,0xa9,0xf6,0x57,0x05,0xa9,
         0xf4,0x4f,0x06,0xa9,0xfd,0x43,0x00,0x91,0xff,0x03,0x13,0xd1,0x59,0xd0,0x3b,0xd5};
+    constexpr uint8_t regionSignature[]{0xff,0x43,0x01,0xd1,0xfd,0x7b,0x03,0xa9,
+        0xf3,0x23,0x00,0xf9,0xfd,0xc3,0x00,0x91,0x53,0xd0,0x3b,0xd5,0xe8,0x03,0x00,0xaa};
     const auto* water=reinterpret_cast<const uint8_t*>(base+waterRva);
     const auto* solid=reinterpret_cast<const uint8_t*>(base+solidRva);
     const auto* client=reinterpret_cast<const uint8_t*>(base+clientUpdateRva);
+    const auto* region=reinterpret_cast<const uint8_t*>(base+getRegionRva);
     if(std::memcmp(water,waterSignature,sizeof(waterSignature))||
        std::memcmp(solid,solidSignature,sizeof(solidSignature))||
-       std::memcmp(client,clientSignature,sizeof(clientSignature))){
+       std::memcmp(client,clientSignature,sizeof(clientSignature))||
+       std::memcmp(region,regionSignature,sizeof(regionSignature))){
         __android_log_print(ANDROID_LOG_WARN,"LeviMusicImmersive",
             "environment access signature mismatch");
         return;
     }
     isInWater=reinterpret_cast<IsInWaterFn>(base+waterRva);
     isSolid=reinterpret_cast<IsSolidFn>(base+solidRva);
+    getRegion=reinterpret_cast<GetRegionFn>(base+getRegionRva);
     clientTarget=reinterpret_cast<void*>(base+clientUpdateRva);
     if(!clientHooked.load()){
         if(pl::memory::hook(clientTarget,reinterpret_cast<void*>(&clientUpdateHook),
@@ -183,6 +185,6 @@ inline void unload(){
     if(clientHooked&&clientTarget)
         pl::memory::unhook(clientTarget,reinterpret_cast<void*>(&clientUpdateHook));
     clientHooked=false;clientTarget=nullptr;originalClientUpdate=nullptr;
-    isSolid=nullptr;isInWater=nullptr;supported=false;
+    isSolid=nullptr;isInWater=nullptr;getRegion=nullptr;supported=false;
 }
 } // namespace lm_immersive

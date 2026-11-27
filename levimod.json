@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "levimusic",
-  "version": "1.6.14",
+  "version": "1.6.15",
   "minecraft_versions": [
     "1.26.52",
     "1.26.60",
@@ -26,8 +26,8 @@
       "*.levipack"
     ],
     "labels": {
-      "LeviMusic-1.6.14-arm64-v8a.levipack": "Standard beta",
-      "LeviMusic-Standalone-1.6.14-arm64-v8a.levipack": "Standalone beta"
+      "LeviMusic-1.6.15-arm64-v8a.levipack": "Standard beta",
+      "LeviMusic-Standalone-1.6.15-arm64-v8a.levipack": "Standalone beta"
     }
   },
   "changelog": ""

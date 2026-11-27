@@ -7,7 +7,6 @@ float shader[4]{.2f,.3f,.4f,.5f};
 int environmentFixture=0;
 void* regionFixture=nullptr;
 void original(void*,void*,void*){++originals;}
-void cameraOriginal(void*,void*,void*){}
 void* fixtureRegion(void*){return regionFixture;}
 bool fixtureWater(void*){return environmentFixture==2;}
 bool fixtureSolid(void*,const lm_immersive::BlockPos& position){
@@ -56,12 +55,11 @@ int main(){
     alignas(8) std::array<char,0x80> cameraComponent{},cameraPlayer{};
     const lm_cinematic::Quaternion identityQuaternion{0,0,0,1};
     std::memcpy(cameraComponent.data()+0x28,&identityQuaternion,sizeof(identityQuaternion));
-    lm_cinematic::original=cameraOriginal;
     lm_cinematic::enabled=true;lm_cinematic::supported=true;lm_cinematic::playing=true;
     lm_cinematic::idleDelay=10;lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
     lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
     lm_cinematic::observePlayer(cameraPlayer.data(),0,64,0,0,0,1);
-    lm_cinematic::cameraHook(cameraComponent.data(),nullptr,cameraPlayer.data());
+    assert(lm_cinematic::applyCamera(cameraComponent.data()));
     float cameraPosition[3]{};
     std::memcpy(cameraPosition,cameraComponent.data()+0x38,sizeof(cameraPosition));
     assert(std::isfinite(cameraPosition[0])&&std::isfinite(cameraPosition[1])&&
@@ -70,15 +68,12 @@ int main(){
     assert(lm_cinematic::active());
     lm_cinematic::shutdown();
 
-    // A fake ClientInstance vtable exposes getRegion at slot 30, matching the
-    // exact-build path used by the game-thread enclosure sampler.
+    // A fake ClientInstance exposes the audited getRegion path used by the
+    // game-thread enclosure sampler.
     alignas(8) std::array<char,0x300> actorFixture{},sourceFixture{},clientFixture{};
-    std::array<void*,31> clientVtable{};
-    clientVtable[30]=reinterpret_cast<void*>(&fixtureRegion);
-    auto* clientTable=clientVtable.data();
-    std::memcpy(clientFixture.data(),&clientTable,sizeof(clientTable));
     regionFixture=sourceFixture.data();
-    lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;lm_immersive::isSolid=fixtureSolid;
+    lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;
+    lm_immersive::isSolid=fixtureSolid;lm_immersive::getRegion=fixtureRegion;
     lm_immersive::request(true);
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     environmentFixture=1;
