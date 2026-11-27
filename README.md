@@ -6,6 +6,7 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 **Current stable build:** v1.7.0 (27 November 2026)
+**Current beta build:** v1.7.1-Beta1 (28 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -40,7 +41,13 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Install the single `LeviMusic-1.7.0-arm64-v8a.levipack`. The optional companion is now named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta1-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+
+## Testing in v1.7.1-Beta1
+
+- Cinematic AFK now injects its orbit into `MatrixTopDirty` while `SetupCamera` is actively consuming the live camera matrix.
+- Removed the unverified manual `CameraDeps` ABI call and post-`SetupCamera` matrix write.
+- Added separate SetupCamera, matrix-access, apply and reject counters for device logs.
 
 ## New in v1.7.0 Stable
 

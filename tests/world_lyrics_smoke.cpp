@@ -6,8 +6,10 @@ float maxChroma=0.f;
 float shader[4]{.2f,.3f,.4f,.5f};
 int environmentFixture=0;
 void* regionFixture=nullptr;
+float* cinematicMatrixFixture=nullptr;
 void original(void*,void*,void*){++originals;}
 void* fixtureRegion(void*){return regionFixture;}
+float* fixtureMatrixTop(void*){return cinematicMatrixFixture;}
 bool fixtureWater(void*){return environmentFixture==2;}
 bool fixtureSolid(void*,const lm_immersive::BlockPos& position){
     return environmentFixture==1&&(position.y>=67||std::abs(position.x)>=2||std::abs(position.z)>=2);
@@ -57,6 +59,21 @@ int main(){
     lm_cinematic::applyOrbit(cameraMatrix,.4f,6.f,2.f,-.1f);
     assert(lm_cinematic::saneMatrix(cameraMatrix));
     assert(cameraMatrix[13]<64.f&&cameraMatrix[14]<-1.f);
+    // The real override happens inside MatrixTopDirty while SetupCamera is
+    // still consuming the matrix, never after SetupCamera has returned.
+    float liveMatrix[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,64,0,1};
+    cinematicMatrixFixture=liveMatrix;
+    lm_cinematic::originalMatrixTopDirty=fixtureMatrixTop;
+    lm_cinematic::enabled=true;lm_cinematic::supported=true;
+    lm_cinematic::idleDelay=10;lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
+    lm_cinematic::observePlayer(cameraMatrix,0,64,0,0,0,1);
+    lm_cinematic::setupDepth=1;lm_cinematic::appliedThisSetup=false;
+    assert(lm_cinematic::matrixTopDirtyHook(cameraMatrix)==liveMatrix);
+    assert(lm_cinematic::appliedThisSetup&&lm_cinematic::cameraApplyCalls==1);
+    const float once=liveMatrix[14];
+    lm_cinematic::matrixTopDirtyHook(cameraMatrix);
+    assert(liveMatrix[14]==once&&lm_cinematic::cameraApplyCalls==1);
+    lm_cinematic::setupDepth=0;lm_cinematic::shutdown();
 
     // A fake ClientInstance exposes the audited getRegion path used by the
     // game-thread enclosure sampler.

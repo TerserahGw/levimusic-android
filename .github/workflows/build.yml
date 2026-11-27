@@ -59,15 +59,14 @@ jobs:
           git fetch --force --tags origin
           channel="$(tr -d '\r\n ' < RELEASE_CHANNEL)"
           [[ "$channel" == stable || "$channel" == beta ]] || { echo "Invalid release channel"; exit 1; }
-          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta)?$' | sort -V | tail -n 1 || true)"
+          existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta|-Beta[0-9]+)?$' | sort -V | tail -n 1 || true)"
           previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
           if [[ "$channel" == stable && ( "$(cat VERSION)" == 1.6.0 || "$(cat VERSION)" == 1.7.0 ) ]]; then
             # Rebuild a requested stable tag and replace its published assets.
             version="$(cat VERSION)"
             already_released=true
           elif [[ -n "$existing" ]]; then
-            version="${existing#v}"
-            version="${version%-beta}"
+            version="$(tr -d '\r\n ' < VERSION)"
             already_released=true
           else
             minimum="$(tr -d '\r\n ' < VERSION)"
@@ -83,13 +82,21 @@ jobs:
           fi
           {
             echo "version=$version"
-            if [[ "$channel" == stable ]]; then echo "tag=v$version"
-            else echo "tag=v$version-beta"; fi
+            if [[ "$channel" == stable ]]; then
+              display_version="$version"
+              echo "tag=v$version"
+            else
+              iteration="$(tr -d '\r\n ' < BETA_ITERATION)"
+              [[ "$iteration" =~ ^[1-9][0-9]*$ ]] || { echo "Invalid BETA_ITERATION: $iteration"; exit 1; }
+              display_version="$version-Beta$iteration"
+              echo "tag=v$display_version"
+            fi
+            echo "display_version=$display_version"
             echo "channel=$channel"
             echo "previous_tag=$previous"
             echo "already_released=$already_released"
           } >> "$GITHUB_OUTPUT"
-          echo "Version: v$version; previous: ${previous:-none}; already released: $already_released"
+          echo "Version: v$display_version; previous: ${previous:-none}; already released: $already_released"
 
       - name: Verify world renderer behavior on host
         run: |
@@ -100,6 +107,7 @@ jobs:
       - name: Set Android versionCode and versionName
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          DISPLAY_VERSION: ${{ steps.version.outputs.display_version }}
         shell: bash
         run: |
           IFS='.' read -r major minor patch <<< "$VERSION"
@@ -109,8 +117,8 @@ jobs:
           if [[ "$major" == 1 && "$minor" == 6 && "$patch" -ge 1 ]]; then code=$((code+1)); fi
           [[ "$code" -gt 112 ]] || { echo 'Android versionCode must increase'; exit 1; }
           echo "LEVIMUSIC_ANDROID_VERSION_CODE=$code" >> "$GITHUB_ENV"
-          echo "LEVIMUSIC_ANDROID_VERSION_NAME=$VERSION" >> "$GITHUB_ENV"
-          echo "APK versionName=$VERSION versionCode=$code"
+          echo "LEVIMUSIC_ANDROID_VERSION_NAME=$DISPLAY_VERSION" >> "$GITHUB_ENV"
+          echo "APK versionName=$DISPLAY_VERSION versionCode=$code"
       - name: Set package manifest version
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -229,7 +237,7 @@ jobs:
       - name: Prepare and verify companion APK
         shell: bash
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.version.outputs.display_version }}
         run: |
           set -euo pipefail
           if [[ "${{ steps.signing.outputs.enabled }}" == 'true' ]]; then
@@ -253,7 +261,8 @@ jobs:
       - name: Name and verify the installable package
         id: package
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ steps.version.outputs.display_version }}
+          MANIFEST_VERSION: ${{ steps.version.outputs.version }}
         shell: bash
         run: |
           set -euo pipefail
@@ -268,13 +277,13 @@ jobs:
             mv "$source_file" "$release_file"
           fi
           unzip -t "$release_file"
-          unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
+          unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["MANIFEST_VERSION"], data'
           echo "file=$release_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact for every successful build
         uses: actions/upload-artifact@v4
         with:
-          name: LeviMusic-${{ steps.version.outputs.version }}-arm64-v8a
+          name: LeviMusic-${{ steps.version.outputs.display_version }}-arm64-v8a
           path: ${{ steps.package.outputs.file }}
           if-no-files-found: error
 
@@ -312,7 +321,7 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version in {"1.6.14", "1.6.15", "1.7.0"}:
+          if version in {"1.6.14", "1.6.15", "1.7.0", "1.7.1"}:
               notes = ""
           elif version == "1.6.13":
               notes = Path("release-notes/v1.6.13.md").read_text(encoding="utf-8")
@@ -472,10 +481,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
+          DISPLAY_VERSION: ${{ steps.version.outputs.display_version }}
           TAG: ${{ steps.version.outputs.tag }}
           PACKAGE: ${{ steps.package.outputs.file }}
           CHANNEL: ${{ steps.version.outputs.channel }}
-          APK: build/LeviMusic-Bridge-${{ steps.version.outputs.version }}.apk
+          APK: build/LeviMusic-Bridge-${{ steps.version.outputs.display_version }}.apk
         shell: bash
         run: |
           set -euo pipefail
@@ -498,7 +508,7 @@ jobs:
             gh release create "$TAG" "$PACKAGE" "$APK" \
               --target "$GITHUB_SHA" \
               "${release_flags[@]}" \
-              --title "LeviMusic - Aurelis Online v$VERSION" \
+              --title "LeviMusic - Aurelis Online v$DISPLAY_VERSION" \
               --notes-file release-notes.md
             echo "Published release $TAG with $PACKAGE."
           fi

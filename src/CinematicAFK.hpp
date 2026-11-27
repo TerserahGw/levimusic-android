@@ -16,18 +16,20 @@
 namespace lm_cinematic {
 using SetupCameraFn=void(*)(void*,void*,float);
 using MatrixTopDirtyFn=float*(*)(void*);
-using CameraDepsFn=void(*)(void*);
 struct Pose {float x=0,y=0,z=0,pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t sampled=0;};
 struct Shot {float yaw=0,distance=0,vertical=0,pitch=0;};
 inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{false};
 inline std::atomic<int> idleDelay{15};
 inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0},cameraHookAt{0},lastDiagnostic{0};
-inline std::atomic<uint64_t> cameraHookCalls{0},cameraApplyCalls{0},cameraRejectCalls{0};
+inline std::atomic<uint64_t> cameraHookCalls{0},matrixHookCalls{0},cameraApplyCalls{0},cameraRejectCalls{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;inline Pose pose{};
-inline SetupCameraFn original=nullptr;inline MatrixTopDirtyFn matrixTopDirty=nullptr;
-inline CameraDepsFn cameraDeps=nullptr;inline void* target=nullptr;
+inline SetupCameraFn originalSetup=nullptr;
+inline MatrixTopDirtyFn originalMatrixTopDirty=nullptr;
+inline void* setupTarget=nullptr;inline void* matrixTarget=nullptr;
 inline uintptr_t imageBase=0;inline bool exactBuild=false;
+inline thread_local int setupDepth=0;
+inline thread_local bool appliedThisSetup=false;
 
 inline int64_t nowMs(){return std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count();}
@@ -87,30 +89,54 @@ inline bool shouldRun(Pose& out,float& strength){
     int64_t entered=enteredAt.load();if(!entered){entered=now;enteredAt=entered;}
     strength=std::clamp(float(now-entered)/1500.f,0.f,1.f);blend=strength;return true;
 }
-inline void setupHook(void* owner,void* stack,float partial){
-    if(original)original(owner,stack,partial);
-    cameraHookAt=nowMs();cameraHookCalls.fetch_add(1);
-    Pose current;float strength=0;if(!shouldRun(current,strength))return;
-    float* matrix=matrixTopDirty&&plausible(stack)?matrixTopDirty(stack):nullptr;
-    if(!saneMatrix(matrix)){cameraRejectCalls.fetch_add(1);return;}
+inline float* matrixTopDirtyHook(void* stack){
+    float* matrix=originalMatrixTopDirty?originalMatrixTopDirty(stack):nullptr;
+    matrixHookCalls.fetch_add(1,std::memory_order_relaxed);
+    if(setupDepth<=0||appliedThisSetup)return matrix;
+    Pose current;float strength=0;if(!shouldRun(current,strength))return matrix;
+    if(!saneMatrix(matrix)){cameraRejectCalls.fetch_add(1);return matrix;}
     float backup[16];std::memcpy(backup,matrix,sizeof(backup));const auto shot=shotAt(nowMs()-enteredAt.load(),strength);
     applyOrbit(matrix,shot.yaw,shot.distance,shot.vertical,shot.pitch);
-    if(!saneMatrix(matrix)){std::memcpy(matrix,backup,sizeof(backup));cameraRejectCalls.fetch_add(1);return;}
-    if(cameraDeps&&plausible(stack))cameraDeps(stack);
+    if(!saneMatrix(matrix)){
+        std::memcpy(matrix,backup,sizeof(backup));cameraRejectCalls.fetch_add(1);return matrix;
+    }
+    appliedThisSetup=true;
     cameraAppliedAt=nowMs();
     if(cameraApplyCalls.fetch_add(1)==0)__android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "orbit applied to final SetupCamera matrix");
+        "orbit injected while SetupCamera consumes MatrixTopDirty");
+    return matrix;
+}
+inline void setupHook(void* owner,void* stack,float partial){
+    cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
+    const bool outer=setupDepth==0;
+    if(outer)appliedThisSetup=false;
+    ++setupDepth;
+    if(originalSetup)originalSetup(owner,stack,partial);
+    --setupDepth;
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=hooked.load();return;}
-    constexpr uintptr_t setupRva=0xB7CFDC8,topRva=0x11A1A218,depsRva=0x11A1CBCC;
-    constexpr std::string_view signature="FF 03 04 D1 EE 3B 00 FD ED 33 08 6D EB 2B 09 6D E9 23 0A 6D FD 7B 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9 FD C3 02 91 59 D0 3B D5 F3 03 00 AA E0 03 01 AA 28 17 40 F9 F7 03 01 AA";
-    auto* entry=reinterpret_cast<uint8_t*>(base+setupRva);
-    if(!matches(entry,signature)){__android_log_print(ANDROID_LOG_WARN,"LeviMusicCinematic",
-        "1.26.66.1 SetupCamera signature mismatch");return;}
-    matrixTopDirty=reinterpret_cast<MatrixTopDirtyFn>(base+topRva);cameraDeps=reinterpret_cast<CameraDepsFn>(base+depsRva);target=entry;
-    if(pl::memory::hook(target,reinterpret_cast<void*>(&setupHook),reinterpret_cast<void**>(&original))!=0||!original)return;
-    hooked=true;supported=true;noteActivity();__android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic","final SetupCamera orbit hook ready");
+    constexpr uintptr_t setupRva=0xB7CFDC8,topRva=0x11A1A218;
+    constexpr std::string_view setupSignature="FF 03 04 D1 EE 3B 00 FD ED 33 08 6D EB 2B 09 6D E9 23 0A 6D FD 7B 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9 FD C3 02 91 59 D0 3B D5 F3 03 00 AA E0 03 01 AA 28 17 40 F9 F7 03 01 AA";
+    constexpr std::string_view matrixSignature=
+        "0A ?? 42 A9 E8 03 00 AA 0B 04 40 F9 29 01 0A 8B";
+    auto* setupEntry=reinterpret_cast<uint8_t*>(base+setupRva);
+    auto* matrixEntry=reinterpret_cast<uint8_t*>(base+topRva);
+    if(!matches(setupEntry,setupSignature)||!matches(matrixEntry,matrixSignature)){
+        __android_log_print(ANDROID_LOG_WARN,"LeviMusicCinematic",
+            "1.26.66.1 SetupCamera/MatrixTopDirty signature mismatch");return;
+    }
+    setupTarget=setupEntry;matrixTarget=matrixEntry;
+    if(pl::memory::hook(matrixTarget,reinterpret_cast<void*>(&matrixTopDirtyHook),
+       reinterpret_cast<void**>(&originalMatrixTopDirty))!=0||!originalMatrixTopDirty)return;
+    if(pl::memory::hook(setupTarget,reinterpret_cast<void*>(&setupHook),
+       reinterpret_cast<void**>(&originalSetup))!=0||!originalSetup){
+        pl::memory::unhook(matrixTarget,reinterpret_cast<void*>(&matrixTopDirtyHook));
+        originalMatrixTopDirty=nullptr;return;
+    }
+    hooked=true;supported=true;noteActivity();
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
+        "SetupCamera + in-flight MatrixTopDirty hooks ready");
 }
 inline void discover(uintptr_t base,bool exact26661){imageBase=base;exactBuild=exact26661;if(enabled&&!hooked)prepare(imageBase,exactBuild);}
 inline void request(bool value,int delay=15){
@@ -125,9 +151,10 @@ inline void diagnose(){
     if(now-previous<5000||!lastDiagnostic.compare_exchange_strong(previous,now))return;
     Pose current;{std::lock_guard lock(poseMutex);current=pose;}const auto hookAt=cameraHookAt.load(),appliedAt=cameraAppliedAt.load();
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "state supported=%d poseAge=%lld idleAge=%lld hookCalls=%llu hookAge=%lld applyCalls=%llu rejects=%llu applyAge=%lld blend=%.2f",
+        "state supported=%d poseAge=%lld idleAge=%lld setupCalls=%llu matrixCalls=%llu hookAge=%lld applyCalls=%llu rejects=%llu applyAge=%lld blend=%.2f",
         int(supported.load()),static_cast<long long>(current.sampled?now-current.sampled:-1),static_cast<long long>(now-lastActivity.load()),
-        static_cast<unsigned long long>(cameraHookCalls.load()),static_cast<long long>(hookAt?now-hookAt:-1),
+        static_cast<unsigned long long>(cameraHookCalls.load()),
+        static_cast<unsigned long long>(matrixHookCalls.load()),static_cast<long long>(hookAt?now-hookAt:-1),
         static_cast<unsigned long long>(cameraApplyCalls.load()),static_cast<unsigned long long>(cameraRejectCalls.load()),
         static_cast<long long>(appliedAt?now-appliedAt:-1),double(blend.load()));
 }
@@ -140,7 +167,12 @@ inline bool effectiveCamera(float& x,float& y,float& z){
 }
 inline const char* status(){if(!enabled)return "OFF";if(!supported)return "UNAVAILABLE";return active()?"ACTIVE":"WAITING";}
 inline void shutdown(){enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;cameraHookAt=0;
-    cameraHookCalls=0;cameraApplyCalls=0;cameraRejectCalls=0;lastDiagnostic=0;}
-inline void unload(){shutdown();if(hooked&&target)pl::memory::unhook(target,reinterpret_cast<void*>(&setupHook));
-    hooked=false;supported=false;original=nullptr;target=nullptr;}
+    cameraHookCalls=0;matrixHookCalls=0;cameraApplyCalls=0;cameraRejectCalls=0;lastDiagnostic=0;}
+inline void unload(){
+    shutdown();
+    if(hooked&&setupTarget)pl::memory::unhook(setupTarget,reinterpret_cast<void*>(&setupHook));
+    if(hooked&&matrixTarget)pl::memory::unhook(matrixTarget,reinterpret_cast<void*>(&matrixTopDirtyHook));
+    hooked=false;supported=false;originalSetup=nullptr;originalMatrixTopDirty=nullptr;
+    setupTarget=nullptr;matrixTarget=nullptr;
+}
 } // namespace lm_cinematic
