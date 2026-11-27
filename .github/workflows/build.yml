@@ -24,8 +24,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release edit v1.5.0 --notes-file release-notes/v1.5.0.md
 
+  cleanup-recent-betas:
+    if: contains(github.event.head_commit.message, '[cleanup-recent-betas]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Remove superseded diagnostic beta releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for tag in v1.6.12-beta v1.6.13-beta; do
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release delete "$tag" --yes
+            fi
+          done
+
   build-and-release:
-    if: ${{ !contains(github.event.head_commit.message, '[sync-english-notes]') }}
+    if: ${{ !contains(github.event.head_commit.message, '[sync-english-notes]') && !contains(github.event.head_commit.message, '[cleanup-recent-betas]') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code and version tags
