@@ -175,15 +175,19 @@ inline void dumpCameraProbe(void* owner,void* view,const Pose& current,float str
 }
 #endif
 inline void setupHook(void* owner,void* stack,float partial){
+#if defined(LEVI_DIAGNOSTIC_PROBE)
+    Pose current;float strength=0,angle=0;
+    const bool probing=shouldRun(current,strength,angle);
+    if(probing)dumpCameraProbe(owner,stack,current,strength);
+    if(original)original(owner,stack,partial);
+    cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
+    if(probing)matrixRejectCalls.fetch_add(1,std::memory_order_relaxed);
+    return;
+#else
     if(original)original(owner,stack,partial);
     cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
     Pose current;float strength=0,angle=0;
     if(!shouldRun(current,strength,angle))return;
-#if defined(LEVI_DIAGNOSTIC_PROBE)
-    dumpCameraProbe(owner,stack,current,strength);
-    matrixRejectCalls.fetch_add(1,std::memory_order_relaxed);
-    return;
-#endif
     float* stackMatrix=matrixTopDirty&&plausible(stack)?matrixTopDirty(stack):nullptr;
     // Target 1.26.66.1 writes its final camera matrix from owner+0xEB0 through
     // owner+0xF2C. The reference mod used +0xEB8 because its older class layout
@@ -226,6 +230,7 @@ inline void setupHook(void* owner,void* stack,float partial){
     if(count==1)
         __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
             "orbit applied to live camera matrix");
+#endif
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=false;return;}

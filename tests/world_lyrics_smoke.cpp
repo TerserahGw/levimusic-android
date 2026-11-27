@@ -98,14 +98,12 @@ int main(){
     lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;lm_immersive::isSolid=fixtureSolid;
     lm_immersive::originalSolid=fixtureSolid;
     lm_immersive::request(true);
-    // A distant callback is ignored. A near callback performs the whole probe
-    // synchronously while Minecraft still owns the receiver; no pointer is
-    // retained for the next player tick.
+    // Even a distant renderer query provides a live BlockSource for this
+    // dimension. The enclosure probe uses the player's coordinates while the
+    // callback still owns the receiver; no pointer crosses threads or ticks.
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
-    lm_immersive::solidHook(sourceFixture.data(),{400,70,400});
-    assert(lm_immersive::lastWorldProbe.load()==0);
     environmentFixture=1;
-    lm_immersive::solidHook(sourceFixture.data(),{2,65,2});
+    lm_immersive::solidHook(sourceFixture.data(),{400,70,400});
     assert(lm_immersive::lastWorldProbe.load()>0);
     assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     environmentFixture=2;lm_immersive::lastSample=0;

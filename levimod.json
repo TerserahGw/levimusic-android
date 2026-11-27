@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "levimusic",
-  "version": "1.6.12",
+  "version": "1.6.13",
   "minecraft_versions": [
     "1.26.52",
     "1.26.60",
@@ -12,7 +12,7 @@
     "name": "LeviMusic - Aurelis Online",
     "author": "Liliyana Rea de Aurelis",
     "summary": "Client-side music player with synchronized 2D and 3D world lyrics for LeviLauncher Android. Full mode requires the Bridge APK.",
-    "description": "Temporary v1.6.12 beta diagnostic build for Minecraft 1.26.66.1 native compatibility analysis. Use v1.6.11 for normal play.",
+    "description": "Temporary v1.6.13 beta diagnostic build for Minecraft 1.26.66.1 native compatibility analysis. Use v1.6.11 for normal play.",
     "homepage_url": "https://github.com/TerserahGw/levimusic-android",
     "tags": [
       "Music",
@@ -26,9 +26,9 @@
       "*.levipack"
     ],
     "labels": {
-      "LeviMusic-1.6.12-arm64-v8a.levipack": "Standard diagnostic probe — testing only",
-      "LeviMusic-Standalone-1.6.12-arm64-v8a.levipack": "Standalone compatibility build"
+      "LeviMusic-1.6.13-arm64-v8a.levipack": "Standard diagnostic probe — testing only",
+      "LeviMusic-Standalone-1.6.13-arm64-v8a.levipack": "Standalone compatibility build"
     }
   },
-  "changelog": "v1.6.12 beta: temporary native ECS and world-receiver instrumentation for controlled device testing."
+  "changelog": "v1.6.13 beta: captures transient ECS data before the native tick and samples room acoustics on the live BlockSource thread."
 }

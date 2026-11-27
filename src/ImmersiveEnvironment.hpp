@@ -126,7 +126,7 @@ inline bool solidHook(void* source,const BlockPos& pos){
     }
 #endif
     if(enabled.load(std::memory_order_relaxed)&&playerAge>=0&&playerAge<2200&&
-       !probeUnderwater.load(std::memory_order_relaxed)&&dx<=64&&dy<=64&&dz<=64&&
+       !probeUnderwater.load(std::memory_order_relaxed)&&
        plausible(reinterpret_cast<uintptr_t>(source))){
         int64_t previous=lastWorldProbe.load(std::memory_order_relaxed);
         if((now-previous>=600)&&lastWorldProbe.compare_exchange_strong(
@@ -134,9 +134,7 @@ inline bool solidHook(void* source,const BlockPos& pos){
             if(loggedProbeState.exchange(1)!=1)
                 __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
                     "sampling live BlockSource inside callback distance=%d",dx+dy+dz);
-#if !defined(LEVI_DIAGNOSTIC_PROBE)
             sampleEnclosure(source,head,now);
-#endif
         }
     }
     return result;
