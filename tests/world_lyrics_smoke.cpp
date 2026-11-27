@@ -98,32 +98,27 @@ int main(){
     lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;lm_immersive::isSolid=fixtureSolid;
     lm_immersive::originalSolid=fixtureSolid;
     lm_immersive::request(true);
-    // Rendering may query distant chunks after the nearby world query. Only a
-    // receiver observed near the current player may become the probe source.
+    // A distant callback is ignored. A near callback performs the whole probe
+    // synchronously while Minecraft still owns the receiver; no pointer is
+    // retained for the next player tick.
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     lm_immersive::solidHook(sourceFixture.data(),{400,70,400});
-    for(const auto& candidate:lm_immersive::sourceCandidates)
-        assert(candidate.sampled.load()==0);
+    assert(lm_immersive::lastWorldProbe.load()==0);
+    environmentFixture=1;
     lm_immersive::solidHook(sourceFixture.data(),{2,65,2});
-    bool capturedNearSource=false;
-    for(const auto& candidate:lm_immersive::sourceCandidates)
-        capturedNearSource|=candidate.source.load()==reinterpret_cast<uintptr_t>(sourceFixture.data());
-    assert(capturedNearSource);
-    auto& source=lm_immersive::sourceCandidates[0];
-    source.source=reinterpret_cast<uintptr_t>(sourceFixture.data());
-    source.x=0;source.y=65;source.z=0;source.sampled=lm_immersive::nowMs();
+    assert(lm_immersive::lastWorldProbe.load()>0);
+    assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     environmentFixture=2;lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Underwater);
-    environmentFixture=1;lm_immersive::lastSample=0;
-    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
-    assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     environmentFixture=0;lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    lm_immersive::lastWorldProbe=0;
+    lm_immersive::solidHook(sourceFixture.data(),{2,65,2});
     assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     lm_immersive::lastCaveEvidence=lm_immersive::nowMs()-7000;
-    lm_immersive::lastSample=0;
-    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    lm_immersive::lastWorldProbe=0;
+    lm_immersive::solidHook(sourceFixture.data(),{2,65,2});
     assert(lm_immersive::current()==lm_immersive::Environment::Open);
     lm_immersive::request(false);
     // The actual detour submits local world glyphs once, restores game color,

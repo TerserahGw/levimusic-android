@@ -21,23 +21,18 @@ inline std::atomic<bool> enabled{false};
 inline std::atomic<bool> supported{false};
 inline std::atomic<int> environment{0};
 inline std::atomic<int64_t> lastSample{0};
+inline std::atomic<int64_t> lastWorldProbe{0};
 inline std::atomic<int64_t> lastCaveEvidence{0};
 inline std::atomic<int> loggedEnvironment{-1};
+inline std::atomic<bool> probeUnderwater{false};
 inline IsInWaterFn isInWater=nullptr;
 inline IsSolidFn isSolid=nullptr;
 inline IsSolidFn originalSolid=nullptr;
 inline void* solidTarget=nullptr;
 inline std::atomic<bool> solidHooked{false};
-struct SourceCandidate {
-    std::atomic<uintptr_t> source{0};
-    std::atomic<int> x{0},y{0},z{0};
-    std::atomic<int64_t> sampled{0};
-};
-inline std::array<SourceCandidate,8> sourceCandidates{};
-inline std::atomic<uint32_t> sourceSerial{0};
 inline std::atomic<int> probePlayerX{0},probePlayerY{0},probePlayerZ{0};
 inline std::atomic<int64_t> probePlayerSample{0};
-inline std::atomic<int> loggedSourceState{-1};
+inline std::atomic<int> loggedProbeState{-1};
 
 inline int64_t nowMs(){
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -46,26 +41,76 @@ inline int64_t nowMs(){
 inline bool plausible(uintptr_t value,size_t alignment=alignof(void*)){
     return value>0x10000 && value<0x0001000000000000ULL && value%alignment==0;
 }
-template<class T> inline T read(uintptr_t base,size_t offset){
-    T value{};std::memcpy(&value,reinterpret_cast<const void*>(base+offset),sizeof(value));return value;
+inline void publish(Environment value,int roofHits=0,int wallHits=0){
+    const int next=int(value);
+    environment=next;
+    const int previous=loggedEnvironment.exchange(next);
+    if(previous!=next)
+        __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
+            "environment=%s roof=%d walls=%d",
+            value==Environment::Underwater?"underwater":value==Environment::Cave?"cave":"open",
+            roofHits,wallHits);
+}
+inline bool solidAtLive(void* source,const BlockPos& pos){
+    return originalSolid&&originalSolid(source,pos);
+}
+inline void sampleEnclosure(void* source,const BlockPos& head,int64_t now){
+    constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
+        {2,0},{-2,0},{0,2},{0,-2},{3,0},{-3,0},{0,3},{0,-3}};
+    int roofHits=0;
+    for(const auto& d:roofOffsets){
+        bool hit=false;
+        for(int height=1;height<=20&&!hit;++height)
+            hit=solidAtLive(source,{head.x+d[0],head.y+height,head.z+d[1]});
+        if(hit)++roofHits;
+    }
+    int enclosedDirections=0;
+    constexpr int directions[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
+    for(const auto& d:directions){
+        bool blocked=false;
+        for(int radius=1;radius<=14&&!blocked;++radius){
+            for(int height:{0,1,2,3}){
+                if(solidAtLive(source,{head.x+d[0]*radius,head.y+height,head.z+d[1]*radius})){
+                    blocked=true;break;
+                }
+            }
+        }
+        if(blocked)++enclosedDirections;
+    }
+    const bool cave=roofHits>=3||(roofHits>=1&&enclosedDirections>=1)||
+                    enclosedDirections>=5;
+    if(cave){
+        lastCaveEvidence=now;
+        publish(Environment::Cave,roofHits,enclosedDirections);
+        return;
+    }
+    publish(now-lastCaveEvidence.load()<6000?Environment::Cave:Environment::Open,
+            roofHits,enclosedDirections);
 }
 inline bool solidHook(void* source,const BlockPos& pos){
     const bool result=originalSolid&&originalSolid(source,pos);
-    // Do not guess BlockSource from Actor/Dimension offsets. Capture receivers
-    // that Minecraft itself passes to this exact virtual-dispatch wrapper.
+    // A BlockSource receiver is only guaranteed to stay alive for the current
+    // Minecraft callback. Probe while the callback owns it; never retain this
+    // pointer for a later player tick.
     const int64_t now=nowMs();
     const int64_t playerAge=now-probePlayerSample.load(std::memory_order_acquire);
-    const int dx=std::abs(pos.x-probePlayerX.load(std::memory_order_relaxed));
-    const int dy=std::abs(pos.y-probePlayerY.load(std::memory_order_relaxed));
-    const int dz=std::abs(pos.z-probePlayerZ.load(std::memory_order_relaxed));
+    const BlockPos head{probePlayerX.load(std::memory_order_relaxed),
+        probePlayerY.load(std::memory_order_relaxed),
+        probePlayerZ.load(std::memory_order_relaxed)};
+    const int dx=std::abs(pos.x-head.x);
+    const int dy=std::abs(pos.y-head.y);
+    const int dz=std::abs(pos.z-head.z);
     if(enabled.load(std::memory_order_relaxed)&&playerAge>=0&&playerAge<2200&&
-       dx<=64&&dy<=64&&dz<=64&&plausible(reinterpret_cast<uintptr_t>(source))){
-        auto& slot=sourceCandidates[sourceSerial.fetch_add(1,std::memory_order_relaxed)%sourceCandidates.size()];
-        slot.source.store(reinterpret_cast<uintptr_t>(source),std::memory_order_relaxed);
-        slot.x.store(pos.x,std::memory_order_relaxed);
-        slot.y.store(pos.y,std::memory_order_relaxed);
-        slot.z.store(pos.z,std::memory_order_relaxed);
-        slot.sampled.store(now,std::memory_order_release);
+       !probeUnderwater.load(std::memory_order_relaxed)&&dx<=64&&dy<=64&&dz<=64&&
+       plausible(reinterpret_cast<uintptr_t>(source))){
+        int64_t previous=lastWorldProbe.load(std::memory_order_relaxed);
+        if((now-previous>=600)&&lastWorldProbe.compare_exchange_strong(
+            previous,now,std::memory_order_relaxed)){
+            if(loggedProbeState.exchange(1)!=1)
+                __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
+                    "sampling live BlockSource inside callback distance=%d",dx+dy+dz);
+            sampleEnclosure(source,head,now);
+        }
     }
     return result;
 }
@@ -100,19 +145,6 @@ inline void prepare(uintptr_t base,bool exact26661){
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
         "environment queries and BlockSource capture ready for Minecraft 1.26.66.1");
 }
-inline bool solidAt(void* region,const BlockPos& pos){
-    return isSolid&&isSolid(region,pos);
-}
-inline void publish(Environment value,int roofHits=0,int wallHits=0){
-    const int next=int(value);
-    environment=next;
-    const int previous=loggedEnvironment.exchange(next);
-    if(previous!=next)
-        __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
-            "environment=%s roof=%d walls=%d",
-            value==Environment::Underwater?"underwater":value==Environment::Cave?"cave":"open",
-            roofHits,wallHits);
-}
 inline void observePlayer(void* player,float x,float y,float z){
     if(!enabled.load(std::memory_order_relaxed)){publish(Environment::Open);return;}
     const int64_t now=nowMs();
@@ -124,78 +156,31 @@ inline void observePlayer(void* player,float x,float y,float z){
     int64_t previous=lastSample.load(std::memory_order_relaxed);
     if(now-previous<600||!lastSample.compare_exchange_strong(
         previous,now,std::memory_order_relaxed))return;
-    if(!player||!supported||!isInWater||!isSolid){publish(Environment::Open);return;}
+    if(!player||!supported||!isInWater||!originalSolid){publish(Environment::Open);return;}
     // This exact-build wrapper asks the Actor ECS for its in-water flag. The
     // previous implementation guessed a Block name layout and therefore never
     // returned "water" on 1.26.66.1.
-    if(isInWater(player)){publish(Environment::Underwater);return;}
-    uintptr_t bestSource=0;int bestDistance=INT32_MAX;int64_t bestAge=INT64_MAX;
-    for(auto& candidate:sourceCandidates){
-        const int64_t sampled=candidate.sampled.load(std::memory_order_acquire);
-        const int64_t age=now-sampled;
-        if(sampled<=0||age<0||age>2200)continue;
-        const int dx=std::abs(candidate.x.load(std::memory_order_relaxed)-head.x);
-        const int dy=std::abs(candidate.y.load(std::memory_order_relaxed)-head.y);
-        const int dz=std::abs(candidate.z.load(std::memory_order_relaxed)-head.z);
-        const int distance=dx+dy+dz;
-        if(dx<=96&&dy<=96&&dz<=96&&(distance<bestDistance||
-           (distance==bestDistance&&age<bestAge))){
-            bestSource=candidate.source.load(std::memory_order_relaxed);
-            bestDistance=distance;bestAge=age;
-        }
-    }
-    if(!plausible(bestSource)){
-        if(loggedSourceState.exchange(0)!=0)
-            __android_log_print(ANDROID_LOG_WARN,"LeviMusicImmersive",
-                "no recent BlockSource query near player");
-        publish(Environment::Open);
+    if(isInWater(player)){
+        probeUnderwater=true;
+        publish(Environment::Underwater);
         return;
     }
-    if(loggedSourceState.exchange(1)!=1)
-        __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
-            "live BlockSource selected distance=%d age=%lld",bestDistance,
-            static_cast<long long>(bestAge));
-    auto* source=reinterpret_cast<void*>(bestSource);
-    constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
-        {2,0},{-2,0},{0,2},{0,-2},{3,0},{-3,0},{0,3},{0,-3}};
-    int roofHits=0;
-    for(const auto& d:roofOffsets){
-        bool hit=false;
-        for(int height=1;height<=20&&!hit;++height)
-            hit=solidAt(source,{head.x+d[0],head.y+height,head.z+d[1]});
-        if(hit)++roofHits;
+    probeUnderwater=false;
+    // The block callback normally supplies a live receiver within the next
+    // frame. Fail open only when no safe in-callback probe has run recently.
+    if(now-lastWorldProbe.load()>2200){
+        if(loggedProbeState.exchange(0)!=0)
+            __android_log_print(ANDROID_LOG_WARN,"LeviMusicImmersive",
+                "no live near-player BlockSource callback");
+        publish(now-lastCaveEvidence.load()<6000?Environment::Cave:Environment::Open);
     }
-    int enclosedDirections=0;
-    constexpr int directions[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
-    for(const auto& d:directions){
-        bool blocked=false;
-        for(int radius=1;radius<=14&&!blocked;++radius){
-            for(int height:{0,1,2,3}){
-                if(solidAt(source,{head.x+d[0]*radius,head.y+height,head.z+d[1]*radius})){
-                    blocked=true;break;
-                }
-            }
-        }
-        if(blocked)++enclosedDirections;
-    }
-    // A low/wide ceiling is the strongest room signal. One ceiling ray plus a
-    // nearby wall also covers irregular caves; many side walls cover tunnels
-    // where the exact vertical ray briefly lands in an opening.
-    const bool cave=roofHits>=3||(roofHits>=1&&enclosedDirections>=1)||
-                    enclosedDirections>=5;
-    if(cave){lastCaveEvidence=now;publish(Environment::Cave,roofHits,enclosedDirections);return;}
-    // Block queries can briefly miss at chunk boundaries and while moving.
-    // Holding the last enclosed result prevents the Bridge from destroying and
-    // rebuilding the reverb chain several times per second.
-    publish(now-lastCaveEvidence.load()<6000?Environment::Cave:Environment::Open,
-            roofHits,enclosedDirections);
 }
 inline void request(bool value){
     enabled=value;
     if(!value){
-        environment=0;lastCaveEvidence=0;loggedEnvironment=-1;
-        probePlayerSample=0;loggedSourceState=-1;
-        for(auto& candidate:sourceCandidates){candidate.sampled=0;candidate.source=0;}
+        environment=0;lastSample=0;lastWorldProbe=0;lastCaveEvidence=0;
+        loggedEnvironment=-1;probeUnderwater=false;
+        probePlayerSample=0;loggedProbeState=-1;
     }
 }
 inline Environment current(){return static_cast<Environment>(environment.load());}
