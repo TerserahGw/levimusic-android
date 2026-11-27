@@ -2064,26 +2064,25 @@ constexpr std::array<SettingRow,30> quickSettings{{
     {"immersiveMode","Environment: Auto / Cave / Underwater",4,0,2,false},
     {"compactUi","Compact UI [WIP]",4,0,1,true},
 }};
-inline Rect settingsTab(const UI& l,int page){
-    const float u=l.s,gap=4*u,w=(l.outer.w-48*u-5*gap)/6.f;
-    return {l.outer.x+24*u+float(page)*(w+gap),l.outer.y+58*u,w,34*u};
+inline Rect settingsSidebar(const UI& l){
+    const float u=l.s;
+    return {l.outer.x+20*u,l.outer.y+64*u,std::min(158*u,l.outer.w*.25f),l.outer.h-112*u};
 }
-inline Rect settingsRow(const UI& l,int index){
-    const float u=l.s,step=std::min(48*u,(l.outer.h-157*u)/6.f);
-    return {l.outer.x+24*u,l.outer.y+107*u+float(index)*step,
-            l.outer.w-48*u,step-5*u};
+inline Rect settingsCategoryRow(const UI& l,int index){
+    const float u=l.s;const Rect side=settingsSidebar(l);
+    // All current categories always fit; on shorter surfaces the rows compact
+    // themselves instead of disappearing below the panel.
+    const float step=std::max(27*u,std::min(44*u,(side.h-12*u)/6.f));
+    return {side.x+6*u,side.y+6*u+index*step,side.w-12*u,step-5*u};
 }
-inline Rect settingsKeybindRow(const UI& l,int index){
-    const float u=l.s,gap=7*u,columnW=(l.outer.w-55*u-gap)/2.f;
-    const int column=index/6,row=index%6;
-    const float step=std::min(47*u,(l.outer.h-154*u)/6.f);
-    return {l.outer.x+24*u+column*(columnW+gap),l.outer.y+107*u+row*step,
-            columnW,step-5*u};
+inline Rect settingsContent(const UI& l){
+    const float u=l.s;const Rect side=settingsSidebar(l);
+    return {side.x+side.w+10*u,side.y,l.outer.x+l.outer.w-20*u-(side.x+side.w+10*u),side.h};
 }
-inline Rect compactSettingsRow(const UI& l,int index){
-    const float u=l.s,top=l.outer.y+66*u;
-    const float step=std::max(32*u,(l.outer.h-105*u)/7.f);
-    return {l.outer.x+24*u,top+index*step,l.outer.w-48*u,step-5*u};
+inline Rect settingsContentRow(const UI& l,int index){
+    const float u=l.s;const Rect content=settingsContent(l);
+    const float step=std::max(34*u,(content.h-12*u)/7.f);
+    return {content.x+6*u,content.y+6*u+index*step,content.w-12*u,step-5*u};
 }
 inline Rect settingsAdvanced(const UI& l){
     const float u=l.s;return {l.outer.x+l.outer.w-180*u,
@@ -2104,32 +2103,32 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
         miniW,miniH
     };
     const float topPercent=std::clamp(panelTop,12,32)/100.f;
-    p.outer=compact?Rect{p.w*.075f,p.h*.10f,p.w*.85f,p.h*.86f}:
-                    Rect{p.w*.045f,p.h*topPercent,p.w*.91f,p.h*(.977f-topPercent)};
-    const float contentY=p.outer.y+53*u,contentH=p.outer.h-65*u;
-    const float contentX=p.outer.x+15*u,contentW=p.outer.w-30*u;
-    const float gutter=9*u,playerW=contentW*.375f;
+    p.outer=compact?Rect{p.w*.085f,p.h*.105f,p.w*.83f,p.h*.845f}:
+                    Rect{p.w*.055f,p.h*topPercent,p.w*.89f,p.h*(.967f-topPercent)};
+    const float contentY=p.outer.y+48*u,contentH=p.outer.h-59*u;
+    const float contentX=p.outer.x+13*u,contentW=p.outer.w-26*u;
+    const float gutter=8*u,playerW=contentW*.365f;
     p.left={contentX,contentY,playerW,contentH};
     p.right={contentX+playerW+gutter,contentY,
              contentW-playerW-gutter,contentH};
     // Right-hand three tabs share one content surface, never overlap.
-    const float tabGap=5*u;
-    const float tabW=(p.right.w-24*u-2*tabGap)/3.f;
-    const float tabY=p.right.y+7*u;
-    p.tabSearch={p.right.x+12*u,tabY,tabW,30*u};
-    p.tabQueue={p.tabSearch.x+tabW+tabGap,tabY,tabW,30*u};
-    p.tabLyrics={p.tabQueue.x+tabW+tabGap,tabY,tabW,30*u};
+    const float tabGap=4*u;
+    const float tabW=(p.right.w-20*u-2*tabGap)/3.f;
+    const float tabY=p.right.y+6*u;
+    p.tabSearch={p.right.x+10*u,tabY,tabW,27*u};
+    p.tabQueue={p.tabSearch.x+tabW+tabGap,tabY,tabW,27*u};
+    p.tabLyrics={p.tabQueue.x+tabW+tabGap,tabY,tabW,27*u};
     p.close={p.outer.x+p.outer.w-42*u,p.outer.y+10*u,30*u,30*u};
     p.settings={p.close.x-39*u,p.close.y,30*u,30*u};
     p.pair={p.settings.x-69*u,p.close.y,61*u,30*u};
-    p.library={p.right.x+p.right.w-94*u,p.right.y+48*u,82*u,31*u};
-    p.queueNow={p.right.x+12*u,p.right.y+48*u,81*u,31*u};
-    p.queueSaved={p.library.x,p.right.y+48*u,82*u,31*u};
-    p.addSong={p.right.x+p.right.w-48*u,p.right.y+87*u,35*u,26*u};
-    p.savedInput={p.right.x+12*u,p.right.y+85*u,p.right.w-85*u,31*u};
-    p.savedCreate={p.right.x+p.right.w-60*u,p.right.y+85*u,48*u,31*u};
-    p.searchBox={p.right.x+12*u,p.right.y+49*u,p.right.w-83*u,34*u};
-    p.searchGo={p.right.x+p.right.w-59*u,p.right.y+49*u,47*u,34*u};
+    p.library={p.right.x+p.right.w-91*u,p.right.y+39*u,81*u,28*u};
+    p.queueNow={p.right.x+10*u,p.right.y+39*u,79*u,28*u};
+    p.queueSaved={p.library.x,p.right.y+39*u,81*u,28*u};
+    p.addSong={p.right.x+p.right.w-45*u,p.right.y+73*u,35*u,25*u};
+    p.savedInput={p.right.x+10*u,p.right.y+71*u,p.right.w-82*u,29*u};
+    p.savedCreate={p.right.x+p.right.w-58*u,p.right.y+71*u,48*u,29*u};
+    p.searchBox={p.right.x+10*u,p.right.y+39*u,p.right.w-80*u,30*u};
+    p.searchGo={p.right.x+p.right.w-57*u,p.right.y+39*u,47*u,30*u};
     const float bottom=p.left.y+p.left.h-57*u;
     const float mid=p.left.x+p.left.w*.5f;
     p.stop={-10000.f,-10000.f,0.f,0.f};
@@ -2139,7 +2138,7 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
     p.repeat={mid-132*u,bottom+5*u,34*u,34*u};
     p.shuffle={mid+98*u,bottom+5*u,34*u,34*u};
     p.seek={p.left.x+18*u,bottom-41*u,p.left.w-36*u,15*u};
-    const float rowStart=p.right.y+118*u;
+    const float rowStart=p.right.y+104*u;
     const float rowBottom=p.right.y+p.right.h-40*u;
     const int rowCount=compact?7:5;
     const float rowStep=std::max(19*u,(rowBottom-rowStart)/float(rowCount));
@@ -2736,7 +2735,7 @@ private:
             const bool capture=opened||(hud&&l.mini.contains(e.x,e.y));
             if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);
                 pointerStartY_[e.pointerId]=e.y;
-                pointerStartPage_[e.pointerId]=(compactUi_&&settingsOpen_)?settingsScroll_:page_;
+                pointerStartPage_[e.pointerId]=settingsOpen_?settingsScroll_:page_;
                 pointerDragged_.erase(e.pointerId);}
             return capture;
         }
@@ -2745,14 +2744,20 @@ private:
         if(!captured)return false;
         if(e.action==2){
             bool changed=false;
-            if(compactUi_&&opened){
+            if(opened&&(settingsOpen_||compactUi_)){
                 std::lock_guard lock(mu_);
                 const float start=pointerStartY_.contains(e.pointerId)?pointerStartY_[e.pointerId]:e.y;
                 const int origin=pointerStartPage_.contains(e.pointerId)?pointerStartPage_[e.pointerId]:page_;
                 const float delta=start-e.y;
                 if(std::abs(delta)>8*l.s)pointerDragged_.insert(e.pointerId);
-                const size_t count=settingsOpen_?quickSettings.size()+keybinds_.size():
-                    rightTab_==0?results_.size():rightTab_==1?
+                size_t count=0;
+                if(settingsOpen_){
+                    if(settingsPage_==5)count=keybinds_.size();
+                    else count=static_cast<size_t>(std::count_if(
+                        quickSettings.begin(),quickSettings.end(),[&](const SettingRow& row){
+                            return row.page==settingsPage_;
+                        }));
+                }else count=rightTab_==0?results_.size():rightTab_==1?
                     (libraryMode_==3?queueTracks_.size():libraryMode_==1?playlistNames_.size():results_.size()):0;
                 const int visible=settingsOpen_?7:int(l.rows.size());
                 const int limit=std::max(0,int(count)-visible);
@@ -2785,59 +2790,45 @@ private:
                 {std::lock_guard lock(mu_);settingsOpen_=false;open_=false;
                     panelToggled_=std::chrono::steady_clock::now();}
                 pl::modmenu::requestOpenMenu();
-            }else if(compactUi_){
-                for(int visible=0;visible<7;++visible){
-                    const Rect area=compactSettingsRow(l,visible);
-                    if(!area.contains(e.x,e.y))continue;
-                    const int item=settingsScroll_+visible;
-                    if(item<static_cast<int>(quickSettings.size())){
-                        const auto& row=quickSettings[static_cast<size_t>(item)];
-                        const int old=quickValue(row);int value=old;
-                        if(row.toggle)value=1-old;
-                        else if(e.x>area.x+area.w-36*l.s)value=old+1;
-                        else if(e.x>area.x+area.w-76*l.s)value=old-1;
-                        else if(e.x>area.x+area.w*.52f)
-                            value=row.low+int(std::round((row.high-row.low)*
-                                std::clamp((e.x-(area.x+area.w*.52f))/
-                                           (area.w*.48f-80*l.s),0.f,1.f)));
-                        value=std::clamp(value,row.low,row.high);
-                        if(value!=old)setConfig(row.key,std::to_string(value));
-                    }else{
-                        const int bind=item-static_cast<int>(quickSettings.size());
-                        if(bind>=0&&bind<static_cast<int>(keybinds_.size())){
-                            std::lock_guard lock(mu_);bindingAction_=bind;
-                        }
-                    }
-                    break;
-                }
             }else{
-                bool tab=false;
-                for(int page=0;page<6;++page)if(settingsTab(l,page).contains(e.x,e.y)){
-                    std::lock_guard lock(mu_);settingsPage_=page;bindingAction_=-1;tab=true;break;
+                bool category=false;
+                for(int page=0;page<6;++page)if(settingsCategoryRow(l,page).contains(e.x,e.y)){
+                    std::lock_guard lock(mu_);settingsPage_=page;settingsScroll_=0;
+                    bindingAction_=-1;category=true;break;
                 }
-                if(!tab){
+                if(!category){
                     if(settingsPage==5){
-                        for(int i=0;i<12;++i)if(settingsKeybindRow(l,i).contains(e.x,e.y)){
-                            std::lock_guard lock(mu_);bindingAction_=i;break;
+                        for(int visible=0;visible<7;++visible){
+                            if(!settingsContentRow(l,visible).contains(e.x,e.y))continue;
+                            const int bind=settingsScroll_+visible;
+                            if(bind>=0&&bind<static_cast<int>(keybinds_.size())){
+                                std::lock_guard lock(mu_);bindingAction_=bind;
+                            }
+                            break;
                         }
-                    }
-                    int index=0;
-                    for(const auto& row:quickSettings){
-                        if(row.page!=settingsPage)continue;
-                        const Rect area=settingsRow(l,index++);
-                        if(!area.contains(e.x,e.y))continue;
-                        const int old=quickValue(row);
-                        int value=old;
-                        if(row.toggle)value=1-old;
-                        else if(e.x>area.x+area.w-36*l.s)value=old+1;
-                        else if(e.x>area.x+area.w-76*l.s)value=old-1;
-                        else if(e.x>area.x+area.w*.52f)
-                            value=row.low+int(std::round((row.high-row.low)*
-                                std::clamp((e.x-(area.x+area.w*.52f)) /
-                                           (area.w*.48f-80*l.s),0.f,1.f)));
-                        value=std::clamp(value,row.low,row.high);
-                        if(value!=old)setConfig(row.key,std::to_string(value));
-                        break;
+                    }else{
+                        const int wanted=settingsScroll_;
+                        int categoryIndex=0;
+                        for(const auto& row:quickSettings){
+                            if(row.page!=settingsPage)continue;
+                            if(categoryIndex<wanted){++categoryIndex;continue;}
+                            const int visible=categoryIndex-wanted;
+                            if(visible>=7)break;
+                            const Rect area=settingsContentRow(l,visible);
+                            ++categoryIndex;
+                            if(!area.contains(e.x,e.y))continue;
+                            const int old=quickValue(row);int value=old;
+                            if(row.toggle)value=1-old;
+                            else if(e.x>area.x+area.w-36*l.s)value=old+1;
+                            else if(e.x>area.x+area.w-76*l.s)value=old-1;
+                            else if(e.x>area.x+area.w*.52f)
+                                value=row.low+int(std::round((row.high-row.low)*
+                                    std::clamp((e.x-(area.x+area.w*.52f))/
+                                               (area.w*.48f-80*l.s),0.f,1.f)));
+                            value=std::clamp(value,row.low,row.high);
+                            if(value!=old)setConfig(row.key,std::to_string(value));
+                            break;
+                        }
                     }
                 }
             }
@@ -3245,92 +3236,74 @@ private:
             text(l.outer.x+34*u,l.outer.y+52*u,"Changes are saved automatically",9.2f*u,C_DIM,48);
             box(l.close,0xFF41444CU,8.f);
             icon("x",l.close.x+6*u,l.close.y+6*u,18*u);
-            if(compact){
-                static constexpr const char* keyLabels[]={"Open + Search","Focus Search","Next Song",
+            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD","EXPERIMENTAL","KEYBINDS"};
+            const Rect sidebar=settingsSidebar(l);
+            const Rect content=settingsContent(l);
+            box(sidebar,0xFF20242AU,11.f);
+            box(content,0xFF20242AU,11.f);
+            text(sidebar.x+10*u,sidebar.y-9*u,"CATEGORY",8.8f*u,C_DIM,12);
+            text(content.x+10*u,content.y-9*u,tabs[settingsPage],8.8f*u,C_MINT,22);
+            for(int n=0;n<6;++n){
+                Rect tab=settingsCategoryRow(l,n);const bool active=n==settingsPage;
+                box(tab,active?0xFF415661U:0xFF292D34U,8.f);
+                if(active)box({tab.x,tab.y+5*u,3*u,tab.h-10*u},0xFF9EDCE7U,2.f);
+                text(tab.x+11*u,tab.y+tab.h*.61f,tabs[n],9.8f*u,
+                     active?C_TEXT:C_DIM,20);
+            }
+            static constexpr const char* keyLabels[]={"Open + Search","Focus Search","Next Song",
                     "Previous Song","Pause / Resume","Stop Song","Repeat Mode","Shuffle Playlist",
                     "Volume +5","Volume -5","Toggle Lyrics","Toggle HUD"};
-                text(l.outer.x+l.outer.w-265*u,l.outer.y+35*u,"COMPACT UI [WIP] • SCROLL",9.6f*u,C_MINT,34);
+            int categoryCount=settingsPage==5?static_cast<int>(keybinds.size()):0;
+            if(settingsPage!=5)categoryCount=static_cast<int>(std::count_if(
+                quickSettings.begin(),quickSettings.end(),[&](const SettingRow& item){
+                    return item.page==settingsPage;
+                }));
+            if(settingsPage==5){
                 for(int visible=0;visible<7;++visible){
-                    const int item=settingsScroll+visible;
-                    const Rect row=compactSettingsRow(l,visible);
-                    if(item>=static_cast<int>(quickSettings.size()+keybinds.size()))break;
-                    box(row,item%2?0xFF252930U:0xFF292D35U,9.f);
-                    if(item<static_cast<int>(quickSettings.size())){
-                        const auto& setting=quickSettings[static_cast<size_t>(item)];
-                        const int value=quickValue(setting);
-                        text(row.x+14*u,row.y+row.h*.60f,setting.label,11.1f*u,C_TEXT,48);
-                        if(setting.toggle){
-                            const Rect pill{row.x+row.w-70*u,row.y+6*u,57*u,row.h-12*u};
-                            box(pill,value?0xFF47747DU:0xFF41454EU,11.f);
-                            text(pill.x+13*u,pill.y+pill.h*.70f,value?"ON":"OFF",10.5f*u,C_TEXT,4);
-                        }else{
-                            const float left=row.x+row.w*.52f;
-                            const float barWidth=row.w*.48f-80*u;
-                            box({left,row.y+row.h*.57f,barWidth,3*u},0xFF48515AU,2.f);
-                            box({left,row.y+row.h*.57f,
-                                barWidth*float(value-setting.low)/float(std::max(1,setting.high-setting.low)),3*u},
-                                0xFF9EDCE7U,2.f);
-                            text(row.x+row.w-71*u,row.y+row.h*.63f,"-",14*u,C_TEXT,2);
-                            text(row.x+row.w-31*u,row.y+row.h*.63f,"+",14*u,C_TEXT,2);
-                            text(left,row.y+row.h*.36f,std::to_string(value),9.8f*u,C_DIM,8);
-                        }
-                    }else{
-                        const int bind=item-static_cast<int>(quickSettings.size());
-                        text(row.x+14*u,row.y+row.h*.60f,keyLabels[bind],11*u,C_TEXT,32);
-                        const bool waiting=bindingAction==bind;
-                        const std::string shown=waiting?"PRESS A KEY":keyName(keybinds[static_cast<size_t>(bind)]);
-                        box({row.x+row.w-145*u,row.y+6*u,132*u,row.h-12*u},
-                            waiting?0xFF47747DU:0xFF3B4149U,8.f);
-                        text(row.x+row.w-132*u,row.y+row.h*.60f,shown,10.4f*u,C_TEXT,19);
-                    }
+                    const int bind=settingsScroll+visible;
+                    if(bind>=categoryCount)break;
+                    const Rect row=settingsContentRow(l,visible);
+                    box(row,bind%2?0xFF252930U:0xFF292D35U,9.f);
+                    text(row.x+13*u,row.y+row.h*.60f,keyLabels[bind],10.7f*u,C_TEXT,31);
+                    const bool waiting=bindingAction==bind;
+                    const std::string shown=waiting?"PRESS A KEY":keyName(keybinds[static_cast<size_t>(bind)]);
+                    box({row.x+row.w-139*u,row.y+6*u,126*u,row.h-12*u},
+                        waiting?0xFF47747DU:0xFF3B4149U,8.f);
+                    text(row.x+row.w-128*u,row.y+row.h*.60f,shown,10.1f*u,C_TEXT,18);
                 }
             }else{
-            static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD","EXPERIMENTAL","KEYBINDS"};
-            for(int n=0;n<6;++n){
-                Rect tab=settingsTab(l,n);const bool active=n==settingsPage;
-                box(tab,active?0xFF415661U:0xFF292D34U,8.f);
-                text(tab.x+11*u,tab.y+22*u,tabs[n],10.3f*u,
-                     active?C_TEXT:C_DIM,24);
-            }
-            int index=0;
-            for(const auto& item:quickSettings){
-                if(item.page!=settingsPage)continue;
-                const Rect row=settingsRow(l,index++);
-                box(row,index%2?0xFF292D35U:0xFF252930U,9.f);
-                text(row.x+14*u,row.y+row.h*.60f,item.label,11.5f*u,C_TEXT,45);
-                int value=quickValue(item);
-                if(item.toggle){
-                    const Rect pill{row.x+row.w-70*u,row.y+6*u,57*u,row.h-12*u};
-                    box(pill,value?0xFF47747DU:0xFF41454EU,11.f);
-                    text(pill.x+13*u,pill.y+pill.h*.70f,value?"ON":"OFF",10.5f*u,C_TEXT,4);
-                }else{
-                    const float left=row.x+row.w*.52f;
-                    const float barWidth=row.w*.48f-80*u;
-                    box({left,row.y+row.h*.57f,barWidth,3*u},0xFF48515AU,2.f);
-                    box({left,row.y+row.h*.57f,
-                        barWidth*float(value-item.low)/float(std::max(1,item.high-item.low)),3*u},
-                        0xFF9EDCE7U,2.f);
-                    text(row.x+row.w-71*u,row.y+row.h*.63f,"-",14*u,C_TEXT,2);
-                    text(row.x+row.w-31*u,row.y+row.h*.63f,"+",14*u,C_TEXT,2);
-                    text(left,row.y+row.h*.36f,std::to_string(value),9.8f*u,C_DIM,8);
+                int categoryIndex=0;
+                for(const auto& item:quickSettings){
+                    if(item.page!=settingsPage)continue;
+                    if(categoryIndex<settingsScroll){++categoryIndex;continue;}
+                    const int visible=categoryIndex-settingsScroll;
+                    if(visible>=7)break;
+                    const Rect row=settingsContentRow(l,visible);
+                    box(row,categoryIndex%2?0xFF252930U:0xFF292D35U,9.f);
+                    text(row.x+14*u,row.y+row.h*.60f,item.label,10.9f*u,C_TEXT,45);
+                    const int value=quickValue(item);
+                    if(item.toggle){
+                        const Rect pill{row.x+row.w-70*u,row.y+6*u,57*u,row.h-12*u};
+                        box(pill,value?0xFF47747DU:0xFF41454EU,11.f);
+                        text(pill.x+13*u,pill.y+pill.h*.70f,value?"ON":"OFF",10.5f*u,C_TEXT,4);
+                    }else{
+                        const float left=row.x+row.w*.52f;
+                        const float barWidth=row.w*.48f-80*u;
+                        box({left,row.y+row.h*.57f,barWidth,3*u},0xFF48515AU,2.f);
+                        box({left,row.y+row.h*.57f,
+                            barWidth*float(value-item.low)/float(std::max(1,item.high-item.low)),3*u},
+                            0xFF9EDCE7U,2.f);
+                        text(row.x+row.w-71*u,row.y+row.h*.63f,"-",14*u,C_TEXT,2);
+                        text(row.x+row.w-31*u,row.y+row.h*.63f,"+",14*u,C_TEXT,2);
+                        text(left,row.y+row.h*.36f,std::to_string(value),9.8f*u,C_DIM,8);
+                    }
+                    ++categoryIndex;
                 }
             }
-            if(settingsPage==5){
-                static constexpr const char* labels[]={"Open + Search","Focus Search","Next Song",
-                    "Previous Song","Pause / Resume","Stop Song","Repeat Mode","Shuffle Playlist",
-                    "Volume +5","Volume -5","Toggle Lyrics","Toggle HUD"};
-                for(int i=0;i<12;++i){
-                    const Rect row=settingsKeybindRow(l,i);
-                    box(row,i%2?0xFF252930U:0xFF292D35U,9.f);
-                    text(row.x+11*u,row.y+row.h*.60f,labels[i],10.4f*u,C_TEXT,24);
-                    const bool waiting=bindingAction==i;
-                    const std::string shown=waiting?"PRESS A KEY":keyName(keybinds[static_cast<size_t>(i)]);
-                    box({row.x+row.w-102*u,row.y+6*u,91*u,row.h-12*u},
-                        waiting?0xFF47747DU:0xFF3B4149U,8.f);
-                    text(row.x+row.w-94*u,row.y+row.h*.60f,shown,9.4f*u,C_TEXT,13);
-                }
-            }
-            }
+            if(categoryCount>7)
+                text(content.x+content.w-104*u,content.y+content.h-5*u,
+                    "SCROLL "+std::to_string(settingsScroll+1)+" / "+
+                    std::to_string(categoryCount),8.7f*u,C_DIM,22);
             const Rect advanced=settingsAdvanced(l);
             box(advanced,0xFF3A414AU,8.f);
             text(advanced.x+13*u,advanced.y+20*u,"ADVANCED SETTINGS",10*u,C_TEXT,22);
@@ -3453,7 +3426,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.0 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.0 UNIFIED STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3473,35 +3446,35 @@ private:
         box(l.right,C_PANEL,12.f);
 
         // Left: focused now-playing card. Small art leaves room for lyrics, seek and controls.
-        const float artX=l.left.x+61*u;
-        const float artY=l.left.y+68*u;
+        const float artX=l.left.x+54*u;
+        const float artY=l.left.y+60*u;
         if(!coverImage.empty()) {
             pl::modmenu::DrawCommand c;
             c.type=pl::modmenu::DrawCommandType::Image;c.imageId=coverImage;
-            c.x=artX-43*u;c.y=artY-43*u;c.w=86*u;c.h=86*u;c.color=0xFFFFFFFFU;
+            c.x=artX-37*u;c.y=artY-37*u;c.w=74*u;c.h=74*u;c.color=0xFFFFFFFFU;
             out.push_back(std::move(c));
         } else {
-            disc(artX,artY,46*u,0xFF37393DU);
-            disc(artX,artY,38*u,0xFF1E2024U);
-            disc(artX,artY,27*u,0xFF4C4F55U);
-            disc(artX,artY,10*u,C_MINT);
+            disc(artX,artY,40*u,0xFF37393DU);
+            disc(artX,artY,33*u,0xFF1E2024U);
+            disc(artX,artY,23*u,0xFF4C4F55U);
+            disc(artX,artY,9*u,C_MINT);
         }
-        const float ix=l.left.x+119*u;
-        text(ix,l.left.y+37*u,"NOW PLAYING",10.5f*u,C_MINT,35);
+        const float ix=l.left.x+103*u;
+        text(ix,l.left.y+32*u,"NOW PLAYING",10.1f*u,C_MINT,35);
         const size_t titleChars=static_cast<size_t>(
-            std::clamp((l.left.w-129*u)/(7.8f*u),9.f,35.f));
-        text(ix,l.left.y+65*u,animation_?marqueeTitle(title,titleChars,tick):title,
-             15.2f*u,C_TEXT,static_cast<size_t>(titleChars*4));
-        text(ix,l.left.y+87*u,artist,12*u,C_DIM,43);
+            std::clamp((l.left.w-112*u)/(7.5f*u),9.f,35.f));
+        text(ix,l.left.y+56*u,animation_?marqueeTitle(title,titleChars,tick):title,
+             14.5f*u,C_TEXT,static_cast<size_t>(titleChars*4));
+        text(ix,l.left.y+76*u,artist,11.4f*u,C_DIM,43);
         // Compact status, no potentially huge text block overlapping seek.
-        text(l.left.x+17*u,l.left.y+134*u,info,10.6f*u,C_DIM,
+        text(l.left.x+17*u,l.left.y+119*u,info,10.2f*u,C_DIM,
              static_cast<size_t>(std::max(12.f,l.left.w/(7.7f*u))));
         if(worldLyrics3D_)
-            text(l.left.x+17*u,l.left.y+149*u,lm_world3d::status(),9.2f*u,C_MINT,48);
+            text(l.left.x+17*u,l.left.y+134*u,lm_world3d::status(),9.1f*u,C_MINT,48);
 
         // Player card no longer embeds a second lyrics box.
-        const float separation=std::min(l.seek.y-22*u,l.left.y+158*u);
-        if(separation>l.left.y+139*u) {
+        const float separation=std::min(l.seek.y-22*u,l.left.y+145*u);
+        if(separation>l.left.y+130*u) {
             box({l.left.x+16*u,separation,l.left.w-32*u,1*u},0x33FFFFFFU,1.f);
             icon("audio-lines",l.left.x+18*u,separation+12*u,13*u);
             text(l.left.x+40*u,separation+23*u,
@@ -3544,9 +3517,9 @@ private:
             Rect r=tab==0?l.tabSearch:tab==1?l.tabQueue:l.tabLyrics;
             const bool active=rightTab==tab;
             box(r,active?0xFF525760U:0xFF282B31U,8.f);
-            const std::string label=tab==0?"SEARCH":tab==1?"PLAYLIST":"LYRICS";
-            const float alignX=r.x+(r.w-static_cast<float>(label.size())*6.2f*u)*.5f;
-            text(alignX,r.y+20*u,label,11.1f*u,active?C_TEXT:C_DIM,14);
+            const std::string label=tab==0?"SEARCH":tab==1?"QUEUE":"LYRICS";
+            const float alignX=r.x+(r.w-static_cast<float>(label.size())*5.8f*u)*.5f;
+            text(alignX,r.y+18*u,label,10.4f*u,active?C_TEXT:C_DIM,14);
         }
         const auto drawPage=[&](size_t count,const std::string& prefix){
             if(!compact&&count>5){

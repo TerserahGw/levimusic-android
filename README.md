@@ -5,7 +5,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Current test build:** v1.7.0 Beta (27 November 2026)
+**Current stable build:** v1.7.0 (27 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -21,7 +21,7 @@ LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aure
 - **Multiple lyric sources:** QQ Music/QRC, LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, local lyrics, and supported caption fallbacks. Results vary by song and provider availability.
 - **3D floating lyrics:** client-only world-space lyric panels with Unicode font fallback, four font styles, four color palettes, segmented transitions, and configurable placement. No per-world addon is required; other players do not see your lyrics.
 - **2D HUD lyrics:** synchronized words can be placed above or below the compact HUD and aligned left or right while 3D lyrics remain active.
-- **Settings:** Compact UI [WIP] provides scrollable song lists and a single scrollable settings surface; the classic six-tab layout remains available when Compact UI is disabled.
+- **Settings:** a compact category sidebar keeps General, camera, style, experimental, and keybind options organized while the selected category scrolls independently.
 - **Expanded keybinds:** bind open-and-search, search focus, next, previous, play/pause, stop, repeat, shuffle, volume, lyrics, and HUD actions.
 
 This project is an unofficial community mod. It is not affiliated with Mojang, Microsoft, or the LeviLauncher maintainers.
@@ -42,13 +42,12 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 Install the single `LeviMusic-1.7.0-arm64-v8a.levipack`. The optional companion is now named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-## New in v1.7.0 Beta
+## New in v1.7.0 Stable
 
 - Unified the previous Standard and Standalone packages.
-- Fixed the cinematic pass hand-off so the camera component survives cross-thread ECS scheduling; the feature remains labelled WIP until device verification.
 - Strengthened recordable PCM cave reflections and added Auto/Cave/Underwater diagnostic selection; Immersive Sound remains WIP.
 - Added twelve configurable keyboard actions. Opening the player by keybind focuses Search and opens text input immediately.
-- Added Compact UI [WIP], scrollable result/playlist lists, and a scrollable all-settings view.
+- Added Compact UI [WIP], denser player controls and right-side tabs, scrollable result/playlist lists, and a category-sidebar Settings layout.
 - Renamed and compacted the companion app and added an automatic-pairing tutorial.
 
 ## Fixed and improved in v1.6.11
