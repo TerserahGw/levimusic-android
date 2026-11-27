@@ -2,7 +2,9 @@
 
 // Experimental client-side environment probe for LeviMusic immersive audio.
 // Exact-build ECS and BlockSource queries are kept fail-closed.
+#include <pl/memory/Hook.hpp>
 #include <android/log.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -23,6 +25,16 @@ inline std::atomic<int64_t> lastCaveEvidence{0};
 inline std::atomic<int> loggedEnvironment{-1};
 inline IsInWaterFn isInWater=nullptr;
 inline IsSolidFn isSolid=nullptr;
+inline IsSolidFn originalSolid=nullptr;
+inline void* solidTarget=nullptr;
+inline std::atomic<bool> solidHooked{false};
+struct SourceCandidate {
+    std::atomic<uintptr_t> source{0};
+    std::atomic<int> x{0},y{0},z{0};
+    std::atomic<int64_t> sampled{0};
+};
+inline std::array<SourceCandidate,8> sourceCandidates{};
+inline std::atomic<uint32_t> sourceSerial{0};
 
 inline int64_t nowMs(){
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -33,6 +45,20 @@ inline bool plausible(uintptr_t value,size_t alignment=alignof(void*)){
 }
 template<class T> inline T read(uintptr_t base,size_t offset){
     T value{};std::memcpy(&value,reinterpret_cast<const void*>(base+offset),sizeof(value));return value;
+}
+inline bool solidHook(void* source,const BlockPos& pos){
+    const bool result=originalSolid&&originalSolid(source,pos);
+    // Do not guess BlockSource from Actor/Dimension offsets. Capture receivers
+    // that Minecraft itself passes to this exact virtual-dispatch wrapper.
+    if(enabled.load(std::memory_order_relaxed)&&plausible(reinterpret_cast<uintptr_t>(source))){
+        auto& slot=sourceCandidates[sourceSerial.fetch_add(1,std::memory_order_relaxed)%sourceCandidates.size()];
+        slot.source.store(reinterpret_cast<uintptr_t>(source),std::memory_order_relaxed);
+        slot.x.store(pos.x,std::memory_order_relaxed);
+        slot.y.store(pos.y,std::memory_order_relaxed);
+        slot.z.store(pos.z,std::memory_order_relaxed);
+        slot.sampled.store(nowMs(),std::memory_order_release);
+    }
+    return result;
 }
 inline void prepare(uintptr_t base,bool exact26661){
     supported=false;isInWater=nullptr;isSolid=nullptr;
@@ -50,9 +76,20 @@ inline void prepare(uintptr_t base,bool exact26661){
         return;
     }
     isInWater=reinterpret_cast<IsInWaterFn>(base+waterRva);
-    isSolid=reinterpret_cast<IsSolidFn>(base+solidRva);
+    solidTarget=reinterpret_cast<void*>(base+solidRva);
+    if(!solidHooked.load()){
+        if(pl::memory::hook(solidTarget,reinterpret_cast<void*>(&solidHook),
+            reinterpret_cast<void**>(&originalSolid))!=0||!originalSolid){
+            __android_log_print(ANDROID_LOG_WARN,"LeviMusicImmersive",
+                "BlockSource capture hook failed");
+            return;
+        }
+        solidHooked=true;
+    }
+    isSolid=originalSolid;
     supported=true;
-    __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive","environment queries ready for Minecraft 1.26.66.1");
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
+        "environment queries and BlockSource capture ready for Minecraft 1.26.66.1");
 }
 inline bool solidAt(void* region,const BlockPos& pos){
     return isSolid&&isSolid(region,pos);
@@ -78,13 +115,27 @@ inline void observePlayer(void* player,float x,float y,float z){
     // previous implementation guessed a Block name layout and therefore never
     // returned "water" on 1.26.66.1.
     if(isInWater(player)){publish(Environment::Underwater);return;}
-    const auto actor=reinterpret_cast<uintptr_t>(player);
-    const auto dimension=read<uintptr_t>(actor,0x1C0);
-    if(!plausible(dimension)){publish(Environment::Open);return;}
-    const auto region=read<uintptr_t>(dimension,0xD0);
-    if(!plausible(region)){publish(Environment::Open);return;}
     const BlockPos head{int(std::floor(x)),int(std::floor(y+1.55f)),int(std::floor(z))};
-    auto* source=reinterpret_cast<void*>(region);
+    uintptr_t bestSource=0;int bestDistance=INT32_MAX;int64_t bestAge=INT64_MAX;
+    for(auto& candidate:sourceCandidates){
+        const int64_t sampled=candidate.sampled.load(std::memory_order_acquire);
+        const int64_t age=now-sampled;
+        if(sampled<=0||age<0||age>2200)continue;
+        const int dx=std::abs(candidate.x.load(std::memory_order_relaxed)-head.x);
+        const int dy=std::abs(candidate.y.load(std::memory_order_relaxed)-head.y);
+        const int dz=std::abs(candidate.z.load(std::memory_order_relaxed)-head.z);
+        const int distance=dx+dy+dz;
+        if(dx<=96&&dy<=96&&dz<=96&&(distance<bestDistance||
+           (distance==bestDistance&&age<bestAge))){
+            bestSource=candidate.source.load(std::memory_order_relaxed);
+            bestDistance=distance;bestAge=age;
+        }
+    }
+    if(!plausible(bestSource)){
+        publish(Environment::Open);
+        return;
+    }
+    auto* source=reinterpret_cast<void*>(bestSource);
     constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
         {2,0},{-2,0},{0,2},{0,-2},{3,0},{-3,0},{0,3},{0,-3}};
     int roofHits=0;
@@ -119,9 +170,21 @@ inline void observePlayer(void* player,float x,float y,float z){
     publish(now-lastCaveEvidence.load()<6000?Environment::Cave:Environment::Open,
             roofHits,enclosedDirections);
 }
-inline void request(bool value){enabled=value;if(!value){environment=0;lastCaveEvidence=0;loggedEnvironment=-1;}}
+inline void request(bool value){
+    enabled=value;
+    if(!value){
+        environment=0;lastCaveEvidence=0;loggedEnvironment=-1;
+        for(auto& candidate:sourceCandidates){candidate.sampled=0;candidate.source=0;}
+    }
+}
 inline Environment current(){return static_cast<Environment>(environment.load());}
 inline const char* name(Environment value){
     return value==Environment::Underwater?"underwater":value==Environment::Cave?"cave":"open";
+}
+inline void unload(){
+    request(false);
+    if(solidHooked&&solidTarget)
+        pl::memory::unhook(solidTarget,reinterpret_cast<void*>(&solidHook));
+    solidHooked=false;solidTarget=nullptr;originalSolid=nullptr;isSolid=nullptr;supported=false;
 }
 } // namespace lm_immersive

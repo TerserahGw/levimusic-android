@@ -947,7 +947,9 @@ inline void prepare(){
         state=State::Unsupported;return;
     }
     const bool exact26661=image.selected&&image.selected->name=="1.26.66.1";
+#if !defined(LEVI_STANDALONE)
     lm_immersive::prepare(image.base,exact26661);
+#endif
     lm_cinematic::discover(image.base,exact26661);
     std::array<uintptr_t,BindingCount> addresses{};
     auto exact=[&](const Profile& candidate){
@@ -1063,6 +1065,7 @@ inline void shutdown(){
 inline void unload(){
     shutdown();
     lm_cinematic::unload();
+    lm_immersive::unload();
     if(renderHooked)pl::memory::unhook(renderTarget,reinterpret_cast<void*>(&renderHook));
     if(tickHooked)pl::memory::unhook(tickTarget,reinterpret_cast<void*>(&tickHook));
     installed=false;

@@ -23,6 +23,8 @@ struct Pose { float x=0,y=0,z=0,pitch=0,yaw=0;uintptr_t world=0;int64_t sampled=
 inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{false};
 inline std::atomic<int> idleDelay{15};
 inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0};
+inline std::atomic<int64_t> cameraHookAt{0},lastDiagnostic{0};
+inline std::atomic<uint64_t> cameraHookCalls{0},cameraApplyCalls{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;
 inline Pose pose{};
@@ -38,7 +40,7 @@ inline int64_t nowMs(){
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 inline void noteActivity(){lastActivity=nowMs();enteredAt=0;}
-inline void setPlaying(bool value){playing=value;if(!value){enteredAt=0;blend=0.f;}}
+inline void setPlaying(bool value){playing=value;}
 inline void observePlayer(float x,float y,float z,float pitch,float yaw,uintptr_t world){
     std::lock_guard lock(poseMutex);pose={x,y,z,pitch,yaw,world,nowMs()};
 }
@@ -113,7 +115,10 @@ inline void applyOrbit(float* m,float yaw,float lateral,float vertical,
     m[14]=cy*tz-sy*tx+(cy-1.f)*pivot-lateral;
 }
 inline bool shouldRun(Pose& out,float& strength,float& angle){
-    if(!enabled||!supported||!playing)return false;
+    // Cinematic AFK is a camera mode, not a playback-state mode. Requiring the
+    // Bridge's asynchronous playing flag made the feature silently remain in
+    // WAITING even while audio was already audible.
+    if(!enabled||!supported)return false;
     const int64_t now=nowMs();
     {std::lock_guard lock(poseMutex);out=pose;}
     if(!out.world||now-out.sampled>1200)return false;
@@ -130,6 +135,7 @@ inline bool shouldRun(Pose& out,float& strength,float& angle){
 }
 inline void setupHook(void* owner,void* stack,float partial){
     if(original)original(owner,stack,partial);
+    cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
     Pose current;float strength=0,angle=0;
     if(!shouldRun(current,strength,angle)||!matrixTopDirty||!cameraDeps||!plausible(stack))return;
     float* stackMatrix=matrixTopDirty(stack);
@@ -162,6 +168,10 @@ inline void setupHook(void* owner,void* stack,float partial){
     }
     cameraDeps(stack);
     cameraAppliedAt=nowMs();
+    const auto count=cameraApplyCalls.fetch_add(1,std::memory_order_relaxed)+1;
+    if(count==1)
+        __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
+            "orbit applied to live camera matrix");
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=false;return;}
@@ -196,6 +206,25 @@ inline void request(bool value,int delay=15){
 inline bool active(){
     return enabled&&supported&&blend.load()>.01f&&nowMs()-cameraAppliedAt.load()<350;
 }
+inline void diagnose(){
+    if(!enabled.load(std::memory_order_relaxed))return;
+    const int64_t now=nowMs();
+    int64_t previous=lastDiagnostic.load(std::memory_order_relaxed);
+    if(now-previous<5000||!lastDiagnostic.compare_exchange_strong(
+       previous,now,std::memory_order_relaxed))return;
+    Pose current;{std::lock_guard lock(poseMutex);current=pose;}
+    const auto hookAt=cameraHookAt.load();
+    const auto appliedAt=cameraAppliedAt.load();
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
+        "state supported=%d playing=%d poseAge=%lld idleAge=%lld hookCalls=%llu hookAge=%lld applyCalls=%llu applyAge=%lld blend=%.2f",
+        int(supported.load()),int(playing.load()),
+        static_cast<long long>(current.sampled?now-current.sampled:-1),
+        static_cast<long long>(now-lastActivity.load()),
+        static_cast<unsigned long long>(cameraHookCalls.load()),
+        static_cast<long long>(hookAt?now-hookAt:-1),
+        static_cast<unsigned long long>(cameraApplyCalls.load()),
+        static_cast<long long>(appliedAt?now-appliedAt:-1),double(blend.load()));
+}
 inline bool effectiveCamera(float& x,float& y,float& z){
     if(!active())return false;
     Pose current;{std::lock_guard lock(poseMutex);current=pose;}
@@ -213,6 +242,9 @@ inline const char* status(){
     if(!supported)return "UNAVAILABLE";
     return active()?"ACTIVE":"WAITING";
 }
-inline void shutdown(){enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;}
+inline void shutdown(){
+    enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;
+    cameraHookAt=0;cameraHookCalls=0;cameraApplyCalls=0;lastDiagnostic=0;
+}
 inline void unload(){shutdown();if(hooked&&target)pl::memory::unhook(target,reinterpret_cast<void*>(&setupHook));hooked=false;supported=false;}
 } // namespace lm_cinematic

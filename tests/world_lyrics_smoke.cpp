@@ -79,13 +79,12 @@ int main(){
     lm_cinematic::shutdown();
     // Exact-build environment callbacks drive both underwater and enclosure
     // classification without reading private Block string layouts.
-    alignas(8) std::array<char,0x300> actorFixture{};
-    alignas(8) std::array<char,0x200> dimensionFixture{},sourceFixture{};
-    auto fixturePtr=[](char* base,size_t offset,uintptr_t value){std::memcpy(base+offset,&value,sizeof(value));};
-    fixturePtr(actorFixture.data(),0x1c0,reinterpret_cast<uintptr_t>(dimensionFixture.data()));
-    fixturePtr(dimensionFixture.data(),0xd0,reinterpret_cast<uintptr_t>(sourceFixture.data()));
+    alignas(8) std::array<char,0x300> actorFixture{},sourceFixture{};
     lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;lm_immersive::isSolid=fixtureSolid;
     lm_immersive::request(true);
+    auto& source=lm_immersive::sourceCandidates[0];
+    source.source=reinterpret_cast<uintptr_t>(sourceFixture.data());
+    source.x=0;source.y=65;source.z=0;source.sampled=lm_immersive::nowMs();
     environmentFixture=2;lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Underwater);
