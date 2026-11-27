@@ -10,6 +10,7 @@ int environmentFixture=0;
 void original(void*,void*,void*){++originals;}
 void cameraOriginal(void*,void*,float){}
 float* cameraTop(void*){return cameraMatrix;}
+float* cameraTopMissing(void*){return nullptr;}
 void cameraDependency(void* receiver){cameraDependencyReceiver=receiver;}
 bool fixtureWater(void*){return environmentFixture==2;}
 bool fixtureSolid(void*,const lm_immersive::BlockPos& position){
@@ -77,11 +78,37 @@ int main(){
     assert(std::abs(cameraMatrix[14])>.01f&&std::abs(finalCamera[14])>.01f);
     assert(lm_cinematic::active());
     lm_cinematic::shutdown();
+    // The live log showed a valid SetupCamera owner but no usable stack
+    // matrix. The verified owner transform must still receive the orbit.
+    std::memcpy(cameraOwner.data()+0xeb0,identity,sizeof(identity));
+    cameraDependencyReceiver=nullptr;
+    lm_cinematic::matrixTopDirty=cameraTopMissing;
+    lm_cinematic::enabled=true;lm_cinematic::supported=true;lm_cinematic::playing=true;
+    lm_cinematic::idleDelay=10;lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
+    lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
+    lm_cinematic::observePlayer(0,64,0,0,0,1);
+    lm_cinematic::setupHook(cameraOwner.data(),cameraStack.data(),0);
+    assert(cameraDependencyReceiver==nullptr);
+    assert(std::abs(finalCamera[14])>.01f);
+    assert(lm_cinematic::cameraApplyCalls.load()==1);
+    lm_cinematic::shutdown();
     // Exact-build environment callbacks drive both underwater and enclosure
     // classification without reading private Block string layouts.
     alignas(8) std::array<char,0x300> actorFixture{},sourceFixture{};
     lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;lm_immersive::isSolid=fixtureSolid;
+    lm_immersive::originalSolid=fixtureSolid;
     lm_immersive::request(true);
+    // Rendering may query distant chunks after the nearby world query. Only a
+    // receiver observed near the current player may become the probe source.
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
+    lm_immersive::solidHook(sourceFixture.data(),{400,70,400});
+    for(const auto& candidate:lm_immersive::sourceCandidates)
+        assert(candidate.sampled.load()==0);
+    lm_immersive::solidHook(sourceFixture.data(),{2,65,2});
+    bool capturedNearSource=false;
+    for(const auto& candidate:lm_immersive::sourceCandidates)
+        capturedNearSource|=candidate.source.load()==reinterpret_cast<uintptr_t>(sourceFixture.data());
+    assert(capturedNearSource);
     auto& source=lm_immersive::sourceCandidates[0];
     source.source=reinterpret_cast<uintptr_t>(sourceFixture.data());
     source.x=0;source.y=65;source.z=0;source.sampled=lm_immersive::nowMs();

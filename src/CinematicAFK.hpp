@@ -24,7 +24,7 @@ inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{f
 inline std::atomic<int> idleDelay{15};
 inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0};
 inline std::atomic<int64_t> cameraHookAt{0},lastDiagnostic{0};
-inline std::atomic<uint64_t> cameraHookCalls{0},cameraApplyCalls{0};
+inline std::atomic<uint64_t> cameraHookCalls{0},cameraApplyCalls{0},matrixRejectCalls{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;
 inline Pose pose{};
@@ -137,18 +137,23 @@ inline void setupHook(void* owner,void* stack,float partial){
     if(original)original(owner,stack,partial);
     cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
     Pose current;float strength=0,angle=0;
-    if(!shouldRun(current,strength,angle)||!matrixTopDirty||!cameraDeps||!plausible(stack))return;
-    float* stackMatrix=matrixTopDirty(stack);
+    if(!shouldRun(current,strength,angle))return;
+    float* stackMatrix=matrixTopDirty&&plausible(stack)?matrixTopDirty(stack):nullptr;
     // Target 1.26.66.1 writes its final camera matrix from owner+0xEB0 through
     // owner+0xF2C. The reference mod used +0xEB8 because its older class layout
     // was eight bytes larger. Using that reference offset on this target kept
     // the hook alive but transformed the wrong 16-float window.
     auto* cameraMatrix=plausible(owner)?
         reinterpret_cast<float*>(static_cast<uint8_t*>(owner)+0xEB0):nullptr;
-    if(!saneMatrix(stackMatrix))return;
+    const bool hasStackMatrix=saneMatrix(stackMatrix);
     const bool hasCameraMatrix=saneMatrix(cameraMatrix);
+    if(!hasStackMatrix&&!hasCameraMatrix){
+        matrixRejectCalls.fetch_add(1,std::memory_order_relaxed);
+        return;
+    }
     std::array<float,16> originalStack{},originalCamera{};
-    std::memcpy(originalStack.data(),stackMatrix,sizeof(originalStack));
+    if(hasStackMatrix)
+        std::memcpy(originalStack.data(),stackMatrix,sizeof(originalStack));
     if(hasCameraMatrix)
         std::memcpy(originalCamera.data(),cameraMatrix,sizeof(originalCamera));
     const auto shot=shotAt(nowMs()-enteredAt.load(),strength);
@@ -156,17 +161,20 @@ inline void setupHook(void* owner,void* stack,float partial){
     // code passed distance as the pivot with zero pull-back, so it could rotate
     // lyric placement without ever moving the visible camera away from the
     // player's eye.
-    applyOrbit(stackMatrix,shot.yaw,shot.distance,shot.vertical,shot.pitch,0.f);
+    if(hasStackMatrix)
+        applyOrbit(stackMatrix,shot.yaw,shot.distance,shot.vertical,shot.pitch,0.f);
     if(hasCameraMatrix)
         applyOrbit(cameraMatrix,shot.yaw,shot.distance,shot.vertical,shot.pitch,0.f);
-    if(!saneMatrix(stackMatrix)||(hasCameraMatrix&&!saneMatrix(cameraMatrix))){
-        std::memcpy(stackMatrix,originalStack.data(),sizeof(originalStack));
+    if((hasStackMatrix&&!saneMatrix(stackMatrix))||
+       (hasCameraMatrix&&!saneMatrix(cameraMatrix))){
+        if(hasStackMatrix)
+            std::memcpy(stackMatrix,originalStack.data(),sizeof(originalStack));
         if(hasCameraMatrix)
             std::memcpy(cameraMatrix,originalCamera.data(),sizeof(originalCamera));
         cameraAppliedAt=0;
         return;
     }
-    cameraDeps(stack);
+    if(hasStackMatrix&&cameraDeps&&plausible(stack))cameraDeps(stack);
     cameraAppliedAt=nowMs();
     const auto count=cameraApplyCalls.fetch_add(1,std::memory_order_relaxed)+1;
     if(count==1)
@@ -216,13 +224,14 @@ inline void diagnose(){
     const auto hookAt=cameraHookAt.load();
     const auto appliedAt=cameraAppliedAt.load();
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "state supported=%d playing=%d poseAge=%lld idleAge=%lld hookCalls=%llu hookAge=%lld applyCalls=%llu applyAge=%lld blend=%.2f",
+        "state supported=%d playing=%d poseAge=%lld idleAge=%lld hookCalls=%llu hookAge=%lld applyCalls=%llu rejects=%llu applyAge=%lld blend=%.2f",
         int(supported.load()),int(playing.load()),
         static_cast<long long>(current.sampled?now-current.sampled:-1),
         static_cast<long long>(now-lastActivity.load()),
         static_cast<unsigned long long>(cameraHookCalls.load()),
         static_cast<long long>(hookAt?now-hookAt:-1),
         static_cast<unsigned long long>(cameraApplyCalls.load()),
+        static_cast<unsigned long long>(matrixRejectCalls.load()),
         static_cast<long long>(appliedAt?now-appliedAt:-1),double(blend.load()));
 }
 inline bool effectiveCamera(float& x,float& y,float& z){
@@ -244,7 +253,7 @@ inline const char* status(){
 }
 inline void shutdown(){
     enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;
-    cameraHookAt=0;cameraHookCalls=0;cameraApplyCalls=0;lastDiagnostic=0;
+    cameraHookAt=0;cameraHookCalls=0;cameraApplyCalls=0;matrixRejectCalls=0;lastDiagnostic=0;
 }
 inline void unload(){shutdown();if(hooked&&target)pl::memory::unhook(target,reinterpret_cast<void*>(&setupHook));hooked=false;supported=false;}
 } // namespace lm_cinematic

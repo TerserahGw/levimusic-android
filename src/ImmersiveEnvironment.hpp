@@ -35,6 +35,9 @@ struct SourceCandidate {
 };
 inline std::array<SourceCandidate,8> sourceCandidates{};
 inline std::atomic<uint32_t> sourceSerial{0};
+inline std::atomic<int> probePlayerX{0},probePlayerY{0},probePlayerZ{0};
+inline std::atomic<int64_t> probePlayerSample{0};
+inline std::atomic<int> loggedSourceState{-1};
 
 inline int64_t nowMs(){
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -50,13 +53,19 @@ inline bool solidHook(void* source,const BlockPos& pos){
     const bool result=originalSolid&&originalSolid(source,pos);
     // Do not guess BlockSource from Actor/Dimension offsets. Capture receivers
     // that Minecraft itself passes to this exact virtual-dispatch wrapper.
-    if(enabled.load(std::memory_order_relaxed)&&plausible(reinterpret_cast<uintptr_t>(source))){
+    const int64_t now=nowMs();
+    const int64_t playerAge=now-probePlayerSample.load(std::memory_order_acquire);
+    const int dx=std::abs(pos.x-probePlayerX.load(std::memory_order_relaxed));
+    const int dy=std::abs(pos.y-probePlayerY.load(std::memory_order_relaxed));
+    const int dz=std::abs(pos.z-probePlayerZ.load(std::memory_order_relaxed));
+    if(enabled.load(std::memory_order_relaxed)&&playerAge>=0&&playerAge<2200&&
+       dx<=64&&dy<=64&&dz<=64&&plausible(reinterpret_cast<uintptr_t>(source))){
         auto& slot=sourceCandidates[sourceSerial.fetch_add(1,std::memory_order_relaxed)%sourceCandidates.size()];
         slot.source.store(reinterpret_cast<uintptr_t>(source),std::memory_order_relaxed);
         slot.x.store(pos.x,std::memory_order_relaxed);
         slot.y.store(pos.y,std::memory_order_relaxed);
         slot.z.store(pos.z,std::memory_order_relaxed);
-        slot.sampled.store(nowMs(),std::memory_order_release);
+        slot.sampled.store(now,std::memory_order_release);
     }
     return result;
 }
@@ -107,6 +116,11 @@ inline void publish(Environment value,int roofHits=0,int wallHits=0){
 inline void observePlayer(void* player,float x,float y,float z){
     if(!enabled.load(std::memory_order_relaxed)){publish(Environment::Open);return;}
     const int64_t now=nowMs();
+    const BlockPos head{int(std::floor(x)),int(std::floor(y+1.55f)),int(std::floor(z))};
+    probePlayerX.store(head.x,std::memory_order_relaxed);
+    probePlayerY.store(head.y,std::memory_order_relaxed);
+    probePlayerZ.store(head.z,std::memory_order_relaxed);
+    probePlayerSample.store(now,std::memory_order_release);
     int64_t previous=lastSample.load(std::memory_order_relaxed);
     if(now-previous<600||!lastSample.compare_exchange_strong(
         previous,now,std::memory_order_relaxed))return;
@@ -115,7 +129,6 @@ inline void observePlayer(void* player,float x,float y,float z){
     // previous implementation guessed a Block name layout and therefore never
     // returned "water" on 1.26.66.1.
     if(isInWater(player)){publish(Environment::Underwater);return;}
-    const BlockPos head{int(std::floor(x)),int(std::floor(y+1.55f)),int(std::floor(z))};
     uintptr_t bestSource=0;int bestDistance=INT32_MAX;int64_t bestAge=INT64_MAX;
     for(auto& candidate:sourceCandidates){
         const int64_t sampled=candidate.sampled.load(std::memory_order_acquire);
@@ -132,9 +145,16 @@ inline void observePlayer(void* player,float x,float y,float z){
         }
     }
     if(!plausible(bestSource)){
+        if(loggedSourceState.exchange(0)!=0)
+            __android_log_print(ANDROID_LOG_WARN,"LeviMusicImmersive",
+                "no recent BlockSource query near player");
         publish(Environment::Open);
         return;
     }
+    if(loggedSourceState.exchange(1)!=1)
+        __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
+            "live BlockSource selected distance=%d age=%lld",bestDistance,
+            static_cast<long long>(bestAge));
     auto* source=reinterpret_cast<void*>(bestSource);
     constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
         {2,0},{-2,0},{0,2},{0,-2},{3,0},{-3,0},{0,3},{0,-3}};
@@ -174,6 +194,7 @@ inline void request(bool value){
     enabled=value;
     if(!value){
         environment=0;lastCaveEvidence=0;loggedEnvironment=-1;
+        probePlayerSample=0;loggedSourceState=-1;
         for(auto& candidate:sourceCandidates){candidate.sampled=0;candidate.source=0;}
     }
 }

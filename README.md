@@ -5,7 +5,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Stable:** v1.6.9 (27 November 2026)
+**Stable:** v1.6.10 (27 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional 3D floating lyrics rendered locally in your Minecraft world.
@@ -39,20 +39,26 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Choose **one** LeviPack variant from the [v1.6.9 stable release](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.6.9). Do not enable both variants at once.
+Choose **one** LeviPack variant from the [v1.6.10 stable release](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.6.10). Do not enable both variants at once.
 
 ### Full mode (with Android Bridge)
 
-- [LeviMusic-1.6.9-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.9/LeviMusic-1.6.9-arm64-v8a.levipack)
-- [LeviMusic-Bridge-1.6.9.apk](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.9/LeviMusic-Bridge-1.6.9.apk)
+- [LeviMusic-1.6.10-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.10/LeviMusic-1.6.10-arm64-v8a.levipack)
+- [LeviMusic-Bridge-1.6.10.apk](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.10/LeviMusic-Bridge-1.6.10.apk)
 
 Install both files. The Bridge app handles playback, searches, and playlists. Existing playlists are migrated from Android preferences to an atomic file on the first edit; export and import remain available in the app.
 
 ### Standalone mode (without Bridge)
 
-- [LeviMusic-Standalone-1.6.9-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.9/LeviMusic-Standalone-1.6.9-arm64-v8a.levipack)
+- [LeviMusic-Standalone-1.6.10-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.10/LeviMusic-Standalone-1.6.10-arm64-v8a.levipack)
 
 Standalone uses the hosted Aurelis Symphony API. It needs internet access but no user-run server or Bridge APK. Playlists are stored in the mod's configuration folder with a backup. Upstream YouTube streams can still fail if the provider blocks access.
+
+## Fixed and improved in v1.6.10
+
+- Standard filters live block-query receivers against the current player position so distant world queries cannot replace the active room/cave source.
+- Environment diagnostics now report whether a recent near-player BlockSource is available.
+- Immersive Sound and 3D Lyrics Beats remain Standard-only.
 
 ## Fixed and improved in v1.6.9
 

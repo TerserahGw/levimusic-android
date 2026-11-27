@@ -221,7 +221,7 @@ public final class BridgeApi {
             }
             else if(path.equals("/v1/health")){
                 PlayerService.minecraftHeartbeat();
-                json=new JSONObject().put("ok",true).put("version","1.6.9").put("api",4);
+                json=new JSONObject().put("ok",true).put("version","1.6.10").put("api",4);
             }
             else if(path.equals("/v1/queue")){
                 JSONObject player=PlayerService.getStatus();
