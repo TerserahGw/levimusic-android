@@ -313,7 +313,9 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version == "1.6.7":
+          if version == "1.6.8":
+              notes = Path("release-notes/v1.6.8.md").read_text(encoding="utf-8")
+          elif version == "1.6.7":
               notes = Path("release-notes/v1.6.7.md").read_text(encoding="utf-8")
           elif version == "1.6.6":
               notes = "\n".join([

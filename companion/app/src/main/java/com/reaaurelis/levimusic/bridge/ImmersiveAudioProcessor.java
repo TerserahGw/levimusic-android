@@ -35,7 +35,7 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
     @Override protected void onFlush(){
         sampleRate=Math.max(8000,inputAudioFormat.sampleRate);
         channels=Math.max(1,inputAudioFormat.channelCount);
-        int frames=Math.max(2048,(int)(sampleRate*.42f));
+        int frames=Math.max(4096,(int)(sampleRate*.58f));
         delay=new float[frames*channels];
         lowPass=new float[channels];
         writeFrame=0;wet=0f;
@@ -61,7 +61,7 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
         ByteBuffer output=replaceOutputBuffer(bytes);
         if(delay.length==0){while(input.remaining()>=2)output.putShort(input.getShort());output.flip();return;}
         int mode=environment;
-        float target=mode==1?1f:mode==2?.32f:0f;
+        float target=mode==1?.92f:mode==2?.36f:0f;
         int ringFrames=delay.length/channels;
         int samples=bytes/2;
         for(int i=0;i<samples;i++){
@@ -70,19 +70,29 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
             wet+= (target-wet)*.00045f;
             float out;
             if(mode==2||wet>.001f){
-                int d1=Math.max(1,(int)(sampleRate*.067f));
-                int d2=Math.max(1,(int)(sampleRate*.131f));
-                int d3=Math.max(1,(int)(sampleRate*.227f));
-                float early=delayed(d1,ch),middle=delayed(d2,ch),tail=delayed(d3,ch);
+                int d1=Math.max(1,(int)(sampleRate*.043f));
+                int d2=Math.max(1,(int)(sampleRate*.089f));
+                int d3=Math.max(1,(int)(sampleRate*.149f));
+                int d4=Math.max(1,(int)(sampleRate*.263f));
+                float early=delayed(d1,ch),middle=delayed(d2,ch);
+                float late=delayed(d3,ch),tail=delayed(d4,ch);
                 if(mode==2){
                     lowPass[ch]+=(dry-lowPass[ch])*.115f;
                     float muffled=lowPass[ch];
                     out=muffled*.78f+(early*.13f+middle*.07f)*wet;
                     delay[writeFrame*channels+ch]=muffled+tail*.20f;
                 }else{
-                    float reflections=early*.58f+middle*.34f+tail*.22f;
-                    out=dry*(1f-.20f*wet)+reflections*.57f*wet;
-                    delay[writeFrame*channels+ch]=dry+reflections*.34f*wet;
+                    int opposite=channels>1?(ch^1):ch;
+                    if(opposite>=channels)opposite=ch;
+                    float cross=delayed(d2,opposite);
+                    float reflections=early*.52f+middle*.38f+late*.29f+
+                                      tail*.20f+cross*.18f;
+                    // Strong, clearly audible early reflections followed by a
+                    // lower feedback tail. This remains in PCM and therefore
+                    // does not depend on a vendor AudioEffect implementation.
+                    out=dry*(1f-.28f*wet)+reflections*.62f*wet;
+                    float feedback=dry+reflections*.39f*wet;
+                    delay[writeFrame*channels+ch]=Math.max(-1.35f,Math.min(1.35f,feedback));
                 }
             }else{
                 out=dry;

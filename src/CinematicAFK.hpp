@@ -65,6 +65,26 @@ inline bool saneMatrix(const float* matrix){
         if(!std::isfinite(matrix[i])||std::abs(matrix[i])>1.e7f)return false;
     return true;
 }
+struct Shot {
+    float yaw=0.f;
+    float distance=0.f;
+    float vertical=0.f;
+    float pitch=0.f;
+};
+inline Shot shotAt(int64_t elapsed,float strength){
+    const float seconds=std::max(0.f,float(elapsed)*.001f);
+    // A continuous orbit with two slower crane/dolly waves. Keeping every
+    // component continuous avoids visible cuts when the AFK director changes
+    // composition and gives the lyric renderer the exact same camera pose.
+    Shot shot;
+    shot.yaw=(seconds*.145f+std::sin(seconds*.071f)*.24f)*strength;
+    shot.distance=(5.8f+std::sin(seconds*.113f)*1.15f+
+                   std::sin(seconds*.031f)*.55f)*strength;
+    shot.vertical=(1.75f+std::sin(seconds*.087f)*.72f+
+                   std::sin(seconds*.029f)*.38f)*strength;
+    shot.pitch=(-.105f+std::sin(seconds*.087f)*.065f)*strength;
+    return shot;
+}
 // Port of the audited reference transform. The old approximation rotated the
 // basis but only subtracted m[14]; that moved the lyric camera calculation
 // while leaving Bedrock's final view effectively on its original pivot.
@@ -113,25 +133,30 @@ inline void setupHook(void* owner,void* stack,float partial){
     Pose current;float strength=0,angle=0;
     if(!shouldRun(current,strength,angle)||!matrixTopDirty||!cameraDeps||!plausible(stack))return;
     float* stackMatrix=matrixTopDirty(stack);
+    // Target 1.26.66.1 writes its final camera matrix from owner+0xEB0 through
+    // owner+0xF2C. The reference mod used +0xEB8 because its older class layout
+    // was eight bytes larger. Using that reference offset on this target kept
+    // the hook alive but transformed the wrong 16-float window.
     auto* cameraMatrix=plausible(owner)?
-        reinterpret_cast<float*>(static_cast<uint8_t*>(owner)+0xEB8):nullptr;
-    // SetupCamera keeps a second final camera transform in its owner. Updating
-    // only the stack matrix makes world lyrics orbit while the visible camera
-    // remains unchanged.
-    if(!saneMatrix(stackMatrix)||!saneMatrix(cameraMatrix))return;
+        reinterpret_cast<float*>(static_cast<uint8_t*>(owner)+0xEB0):nullptr;
+    if(!saneMatrix(stackMatrix))return;
+    const bool hasCameraMatrix=saneMatrix(cameraMatrix);
     std::array<float,16> originalStack{},originalCamera{};
     std::memcpy(originalStack.data(),stackMatrix,sizeof(originalStack));
-    std::memcpy(originalCamera.data(),cameraMatrix,sizeof(originalCamera));
-    const float shot=std::sin(angle*.43f);
-    const float pitch=(-.12f+shot*.08f)*strength;
-    const float distance=5.4f+shot*.9f;
-    const float yaw=angle*strength;
-    const float vertical=(2.15f+std::sin(angle*.61f)*.55f)*strength;
-    applyOrbit(stackMatrix,yaw,0.f,vertical,pitch,distance);
-    applyOrbit(cameraMatrix,yaw,0.f,vertical,pitch,distance);
-    if(!saneMatrix(stackMatrix)||!saneMatrix(cameraMatrix)){
+    if(hasCameraMatrix)
+        std::memcpy(originalCamera.data(),cameraMatrix,sizeof(originalCamera));
+    const auto shot=shotAt(nowMs()-enteredAt.load(),strength);
+    // Pull back along local Z while rotating the camera basis. The previous
+    // code passed distance as the pivot with zero pull-back, so it could rotate
+    // lyric placement without ever moving the visible camera away from the
+    // player's eye.
+    applyOrbit(stackMatrix,shot.yaw,shot.distance,shot.vertical,shot.pitch,0.f);
+    if(hasCameraMatrix)
+        applyOrbit(cameraMatrix,shot.yaw,shot.distance,shot.vertical,shot.pitch,0.f);
+    if(!saneMatrix(stackMatrix)||(hasCameraMatrix&&!saneMatrix(cameraMatrix))){
         std::memcpy(stackMatrix,originalStack.data(),sizeof(originalStack));
-        std::memcpy(cameraMatrix,originalCamera.data(),sizeof(originalCamera));
+        if(hasCameraMatrix)
+            std::memcpy(cameraMatrix,originalCamera.data(),sizeof(originalCamera));
         cameraAppliedAt=0;
         return;
     }
@@ -175,9 +200,12 @@ inline bool effectiveCamera(float& x,float& y,float& z){
     if(!active())return false;
     Pose current;{std::lock_guard lock(poseMutex);current=pose;}
     const int64_t entered=enteredAt.load();if(!entered)return false;
-    const float a=float(nowMs()-entered)*.00018f;
-    const float d=5.4f+std::sin(a*.43f)*.9f;
-    x=current.x+std::sin(a)*d;y=current.y+2.25f+std::sin(a*.61f)*.55f;z=current.z+std::cos(a)*d;
+    const auto shot=shotAt(nowMs()-entered,blend.load());
+    constexpr float deg=.01745329251994329577f;
+    const float worldYaw=current.yaw*deg+shot.yaw;
+    x=current.x+std::sin(worldYaw)*shot.distance;
+    y=current.y+1.62f+shot.vertical;
+    z=current.z-std::cos(worldYaw)*shot.distance;
     return true;
 }
 inline const char* status(){

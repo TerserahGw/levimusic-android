@@ -51,6 +51,7 @@ public final class PlayerService extends MediaSessionService {
     public static final String ACTION_PLAY="com.reaaurelis.levimusic.PLAY";
     public static final String ACTION_READY="com.reaaurelis.levimusic.READY";
     private static volatile PlayerService active;
+    private static volatile String requestedImmersiveEnvironment="open";
     private final Handler handler=new Handler(Looper.getMainLooper());
     private final ExecutorService resolver=Executors.newSingleThreadExecutor();
     private final ExecutorService radioWorker=Executors.newSingleThreadExecutor();
@@ -88,11 +89,17 @@ public final class PlayerService extends MediaSessionService {
 
     public static boolean isActive(){return active!=null;}
     public static void setEnvironment(String value){
-        PlayerService current=active;
-        if(current==null)return;
         String safe="underwater".equals(value)?"underwater":"cave".equals(value)?"cave":"open";
+        requestedImmersiveEnvironment=safe;
+        PlayerService current=active;
+        if(current==null){Log.i(TAG,"Immersive environment queued: "+safe);return;}
         current.immersiveProcessor.setEnvironment(safe);
-        current.handler.post(()->{current.immersiveEnvironment=safe;current.applyImmersiveSound();});
+        current.handler.post(()->{
+            if(!safe.equals(current.immersiveEnvironment))
+                Log.i(TAG,"Immersive environment applied: "+safe);
+            current.immersiveEnvironment=safe;
+            current.applyImmersiveSound();
+        });
     }
     private void releaseImmersiveSound(){
         if(immersiveEq!=null){try{immersiveEq.release();}catch(RuntimeException ignored){}immersiveEq=null;}
@@ -397,6 +404,8 @@ public final class PlayerService extends MediaSessionService {
     @Override public void onCreate(){
         super.onCreate();
         active=this;
+        immersiveEnvironment=requestedImmersiveEnvironment;
+        immersiveProcessor.setEnvironment(immersiveEnvironment);
         BridgeApi.ensureStarted(getApplicationContext());
         NotificationManager notifications=(NotificationManager)getSystemService(NOTIFICATION_SERVICE);
         if(notifications!=null && Build.VERSION.SDK_INT>=26){

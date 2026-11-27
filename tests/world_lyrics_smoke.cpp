@@ -63,7 +63,7 @@ int main(){
     lm_cinematic::applyOrbit(zeroOrbit,0,0,0,0,5.4f);
     assert(std::memcmp(zeroOrbit,identity,sizeof(identity))==0);
     std::memcpy(cameraMatrix,identity,sizeof(identity));
-    std::memcpy(cameraOwner.data()+0xeb8,identity,sizeof(identity));
+    std::memcpy(cameraOwner.data()+0xeb0,identity,sizeof(identity));
     lm_cinematic::original=cameraOriginal;
     lm_cinematic::matrixTopDirty=cameraTop;
     lm_cinematic::cameraDeps=cameraDependency;
@@ -72,7 +72,7 @@ int main(){
     lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
     lm_cinematic::observePlayer(0,64,0,0,0,1);
     lm_cinematic::setupHook(cameraOwner.data(),cameraStack.data(),0);
-    auto* finalCamera=reinterpret_cast<float*>(cameraOwner.data()+0xeb8);
+    auto* finalCamera=reinterpret_cast<float*>(cameraOwner.data()+0xeb0);
     assert(cameraDependencyReceiver==cameraStack.data());
     assert(std::abs(cameraMatrix[14])>.01f&&std::abs(finalCamera[14])>.01f);
     assert(lm_cinematic::active());
@@ -95,7 +95,7 @@ int main(){
     environmentFixture=0;lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Cave);
-    lm_immersive::lastCaveEvidence=lm_immersive::nowMs()-4000;
+    lm_immersive::lastCaveEvidence=lm_immersive::nowMs()-7000;
     lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Open);

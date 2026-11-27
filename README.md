@@ -5,7 +5,7 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Stable:** v1.6.7 (27 November 2026)
+**Stable:** v1.6.8 (27 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional 3D floating lyrics rendered locally in your Minecraft world.
@@ -39,20 +39,26 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Choose **one** LeviPack variant from the [v1.6.7 stable release](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.6.7). Do not enable both variants at once.
+Choose **one** LeviPack variant from the [v1.6.8 stable release](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.6.8). Do not enable both variants at once.
 
 ### Full mode (with Android Bridge)
 
-- [LeviMusic-1.6.7-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.7/LeviMusic-1.6.7-arm64-v8a.levipack)
-- [LeviMusic-Bridge-1.6.7.apk](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.7/LeviMusic-Bridge-1.6.7.apk)
+- [LeviMusic-1.6.8-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.8/LeviMusic-1.6.8-arm64-v8a.levipack)
+- [LeviMusic-Bridge-1.6.8.apk](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.8/LeviMusic-Bridge-1.6.8.apk)
 
 Install both files. The Bridge app handles playback, searches, and playlists. Existing playlists are migrated from Android preferences to an atomic file on the first edit; export and import remain available in the app.
 
 ### Standalone mode (without Bridge)
 
-- [LeviMusic-Standalone-1.6.7-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.7/LeviMusic-Standalone-1.6.7-arm64-v8a.levipack)
+- [LeviMusic-Standalone-1.6.8-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.8/LeviMusic-Standalone-1.6.8-arm64-v8a.levipack)
 
 Standalone uses the hosted Aurelis Symphony API. It needs internet access but no user-run server or Bridge APK. Playlists are stored in the mod's configuration folder with a backup. Upstream YouTube streams can still fail if the provider blocks access.
+
+## Fixed and improved in v1.6.8
+
+- Immersive Sound and 3D Lyrics Beats are now Standard-only; Standalone no longer exposes or runs either experiment.
+- Standard preserves environment updates sent before playback begins and periodically resynchronizes the active environment with Bridge.
+- Room/cave detection covers higher ceilings and irregular walls, while a stronger PCM reflection chain makes indoor echo easier to hear.
 
 ## Fixed and improved in v1.6.7
 
@@ -94,7 +100,7 @@ Standalone uses the hosted Aurelis Symphony API. It needs internet access but no
 
 - Offline non-Latin lyrics no longer display a **Font unavailable** placeholder in the 3D world. A line that cannot be rasterized and has no usable romanization is omitted from 3D while its HUD lyric remains available.
 - Playlist playback now follows the saved order in Full and Standalone, keeps Up Next in the same sequence, and loops to the first track after the last.
-- Settings now include a dedicated **Experimental** tab for 3D Lyrics Beats.
+- Standard settings include a dedicated **Experimental** tab for 3D Lyrics Beats; this experiment is not included in Standalone.
 - HUD lyrics can be switched independently and positioned at Up Left, Up Right, Down Left, or Down Right around the compact player.
 - Opening the music menu while moving no longer leaves the Minecraft player walking after the movement touch is released.
 

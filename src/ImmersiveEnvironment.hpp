@@ -20,6 +20,7 @@ inline std::atomic<bool> supported{false};
 inline std::atomic<int> environment{0};
 inline std::atomic<int64_t> lastSample{0};
 inline std::atomic<int64_t> lastCaveEvidence{0};
+inline std::atomic<int> loggedEnvironment{-1};
 inline IsInWaterFn isInWater=nullptr;
 inline IsSolidFn isSolid=nullptr;
 
@@ -56,30 +57,40 @@ inline void prepare(uintptr_t base,bool exact26661){
 inline bool solidAt(void* region,const BlockPos& pos){
     return isSolid&&isSolid(region,pos);
 }
+inline void publish(Environment value,int roofHits=0,int wallHits=0){
+    const int next=int(value);
+    environment=next;
+    const int previous=loggedEnvironment.exchange(next);
+    if(previous!=next)
+        __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
+            "environment=%s roof=%d walls=%d",
+            value==Environment::Underwater?"underwater":value==Environment::Cave?"cave":"open",
+            roofHits,wallHits);
+}
 inline void observePlayer(void* player,float x,float y,float z){
-    if(!enabled.load(std::memory_order_relaxed)){environment=0;return;}
+    if(!enabled.load(std::memory_order_relaxed)){publish(Environment::Open);return;}
     const int64_t now=nowMs();
     int64_t previous=lastSample.load(std::memory_order_relaxed);
     if(now-previous<600||!lastSample.compare_exchange_strong(
         previous,now,std::memory_order_relaxed))return;
-    if(!player||!supported||!isInWater||!isSolid){environment=0;return;}
+    if(!player||!supported||!isInWater||!isSolid){publish(Environment::Open);return;}
     // This exact-build wrapper asks the Actor ECS for its in-water flag. The
     // previous implementation guessed a Block name layout and therefore never
     // returned "water" on 1.26.66.1.
-    if(isInWater(player)){environment=int(Environment::Underwater);return;}
+    if(isInWater(player)){publish(Environment::Underwater);return;}
     const auto actor=reinterpret_cast<uintptr_t>(player);
     const auto dimension=read<uintptr_t>(actor,0x1C0);
-    if(!plausible(dimension)){environment=0;return;}
+    if(!plausible(dimension)){publish(Environment::Open);return;}
     const auto region=read<uintptr_t>(dimension,0xD0);
-    if(!plausible(region)){environment=0;return;}
+    if(!plausible(region)){publish(Environment::Open);return;}
     const BlockPos head{int(std::floor(x)),int(std::floor(y+1.55f)),int(std::floor(z))};
     auto* source=reinterpret_cast<void*>(region);
-    constexpr int roofOffsets[9][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
-        {2,0},{-2,0},{0,2},{0,-2}};
+    constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
+        {2,0},{-2,0},{0,2},{0,-2},{3,0},{-3,0},{0,3},{0,-3}};
     int roofHits=0;
     for(const auto& d:roofOffsets){
         bool hit=false;
-        for(int height=1;height<=12&&!hit;++height)
+        for(int height=1;height<=20&&!hit;++height)
             hit=solidAt(source,{head.x+d[0],head.y+height,head.z+d[1]});
         if(hit)++roofHits;
     }
@@ -87,8 +98,8 @@ inline void observePlayer(void* player,float x,float y,float z){
     constexpr int directions[8][2]={{1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}};
     for(const auto& d:directions){
         bool blocked=false;
-        for(int radius=1;radius<=12&&!blocked;++radius){
-            for(int height:{-1,0,2,4}){
+        for(int radius=1;radius<=14&&!blocked;++radius){
+            for(int height:{0,1,2,3}){
                 if(solidAt(source,{head.x+d[0]*radius,head.y+height,head.z+d[1]*radius})){
                     blocked=true;break;
                 }
@@ -96,17 +107,19 @@ inline void observePlayer(void* player,float x,float y,float z){
         }
         if(blocked)++enclosedDirections;
     }
-    // A roof plus two reflected directions is enough for rooms and broad caves;
-    // a highly enclosed ravine also qualifies without a directly overhead roof.
-    const bool cave=(roofHits>=2&&enclosedDirections>=2)||enclosedDirections>=6;
-    if(cave){lastCaveEvidence=now;environment=int(Environment::Cave);return;}
+    // A low/wide ceiling is the strongest room signal. One ceiling ray plus a
+    // nearby wall also covers irregular caves; many side walls cover tunnels
+    // where the exact vertical ray briefly lands in an opening.
+    const bool cave=roofHits>=3||(roofHits>=1&&enclosedDirections>=1)||
+                    enclosedDirections>=5;
+    if(cave){lastCaveEvidence=now;publish(Environment::Cave,roofHits,enclosedDirections);return;}
     // Block queries can briefly miss at chunk boundaries and while moving.
     // Holding the last enclosed result prevents the Bridge from destroying and
     // rebuilding the reverb chain several times per second.
-    environment=now-lastCaveEvidence.load()<3000?
-        int(Environment::Cave):int(Environment::Open);
+    publish(now-lastCaveEvidence.load()<6000?Environment::Cave:Environment::Open,
+            roofHits,enclosedDirections);
 }
-inline void request(bool value){enabled=value;if(!value){environment=0;lastCaveEvidence=0;}}
+inline void request(bool value){enabled=value;if(!value){environment=0;lastCaveEvidence=0;loggedEnvironment=-1;}}
 inline Environment current(){return static_cast<Environment>(environment.load());}
 inline const char* name(Environment value){
     return value==Environment::Underwater?"underwater":value==Environment::Cave?"cave":"open";

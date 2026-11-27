@@ -12,7 +12,7 @@ Standard mode now always exposes the automatic Offline playlist in Minecraft. Th
 
 ## v1.6.2 playlist, HUD, and input fixes
 
-Saved playlists now drive Up Next in their stored order and loop after the final track in both variants. HUD lyrics have an independent visibility switch and four corner positions around the compact player. 3D Lyrics Beats is grouped under a dedicated Experimental tab. Opening the menu while a movement touch is active no longer traps movement. If an offline non-Latin lyric cannot be rasterized and has no usable romanization, LeviMusic skips that 3D line instead of drawing a missing-font message; its 2D HUD lyric remains available.
+Saved playlists now drive Up Next in their stored order and loop after the final track in both variants. HUD lyrics have an independent visibility switch and four corner positions around the compact player. In Standard, 3D Lyrics Beats is grouped under a dedicated Experimental tab; Standalone does not expose or run it. Opening the menu while a movement touch is active no longer traps movement. If an offline non-Latin lyric cannot be rasterized and has no usable romanization, LeviMusic skips that 3D line instead of drawing a missing-font message; its 2D HUD lyric remains available.
 
 ## v1.6.1 offline hotfix
 
