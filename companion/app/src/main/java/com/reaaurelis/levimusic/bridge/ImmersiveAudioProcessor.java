@@ -61,7 +61,7 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
         ByteBuffer output=replaceOutputBuffer(bytes);
         if(delay.length==0){while(input.remaining()>=2)output.putShort(input.getShort());output.flip();return;}
         int mode=environment;
-        float target=mode==1?.92f:mode==2?.36f:0f;
+        float target=mode==1?.98f:mode==2?.36f:0f;
         int ringFrames=delay.length/channels;
         int samples=bytes/2;
         for(int i=0;i<samples;i++){
@@ -74,6 +74,7 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
                 int d2=Math.max(1,(int)(sampleRate*.089f));
                 int d3=Math.max(1,(int)(sampleRate*.149f));
                 int d4=Math.max(1,(int)(sampleRate*.263f));
+                int d5=Math.max(1,(int)(sampleRate*.417f));
                 float early=delayed(d1,ch),middle=delayed(d2,ch);
                 float late=delayed(d3,ch),tail=delayed(d4,ch);
                 if(mode==2){
@@ -85,13 +86,14 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
                     int opposite=channels>1?(ch^1):ch;
                     if(opposite>=channels)opposite=ch;
                     float cross=delayed(d2,opposite);
-                    float reflections=early*.52f+middle*.38f+late*.29f+
-                                      tail*.20f+cross*.18f;
+                    float far=delayed(d5,opposite);
+                    float reflections=early*.62f+middle*.47f+late*.36f+
+                                      tail*.27f+cross*.24f+far*.16f;
                     // Strong, clearly audible early reflections followed by a
                     // lower feedback tail. This remains in PCM and therefore
                     // does not depend on a vendor AudioEffect implementation.
-                    out=dry*(1f-.28f*wet)+reflections*.62f*wet;
-                    float feedback=dry+reflections*.39f*wet;
+                    out=dry*(1f-.38f*wet)+reflections*.78f*wet;
+                    float feedback=dry+reflections*.47f*wet;
                     delay[writeFrame*channels+ch]=Math.max(-1.35f,Math.min(1.35f,feedback));
                 }
             }else{

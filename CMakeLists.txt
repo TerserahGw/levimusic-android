@@ -15,13 +15,12 @@ FetchContent_Declare(preloader_android
 FetchContent_MakeAvailable(preloader_android)
 
 add_library(levimusic SHARED src/LeviMusic.cpp)
-add_library(levimusic_standalone SHARED src/LeviMusic.cpp)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/DIAGNOSTIC_PROBE")
     target_compile_definitions(levimusic PRIVATE LEVI_DIAGNOSTIC_PROBE=1)
 endif()
-target_compile_definitions(levimusic_standalone PRIVATE LEVI_STANDALONE=1)
+target_compile_definitions(levimusic PRIVATE LEVI_STANDALONE=1 LEVI_UNIFIED=1)
 find_library(ANDROID_LOG_LIB log REQUIRED)
-foreach(target IN ITEMS levimusic levimusic_standalone)
+foreach(target IN ITEMS levimusic)
     target_include_directories(${target} PRIVATE ${preloader_android_SOURCE_DIR}/include)
     target_compile_options(${target} PRIVATE -Wall -Wextra -fvisibility=hidden -fvisibility-inlines-hidden)
     target_link_options(${target} PRIVATE "-Wl,-z,max-page-size=16384")
@@ -29,37 +28,18 @@ foreach(target IN ITEMS levimusic levimusic_standalone)
 endforeach()
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.6.15-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.7.0-arm64-v8a.levipack")
+set(BROWSER_DEX "${CMAKE_CURRENT_BINARY_DIR}/browser-dex/classes.dex")
+if(NOT EXISTS "${BROWSER_DEX}")
+    message(FATAL_ERROR "Unified fallback browser.dex missing. Compile standalone_browser Java with d8 before CMake build.")
+endif()
 add_custom_target(levipack
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest.json" "${PACK_DIR}/manifest.json"
     COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:levimusic>" "${PACK_DIR}/liblevimusic.so"
     COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_LICENSES.md" "${PACK_DIR}/THIRD_PARTY_LICENSES.md"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${PACK_DIR}" ${CMAKE_COMMAND} -E tar cf "${PACK_FILE}" --format=zip manifest.json liblevimusic.so THIRD_PARTY_LICENSES.md
+    COMMAND ${CMAKE_COMMAND} -E copy "${BROWSER_DEX}" "${PACK_DIR}/browser.dex"
+    COMMAND ${CMAKE_COMMAND} -E chdir "${PACK_DIR}" ${CMAKE_COMMAND} -E tar cf "${PACK_FILE}" --format=zip manifest.json liblevimusic.so THIRD_PARTY_LICENSES.md browser.dex
     DEPENDS levimusic
     VERBATIM)
-
-# Optional native-only build. In addition to Audius, this variant bundles an
-# experimental, VISIBLE Android WebView panel as browser.dex. Browser playback
-# remains controlled by the website; no audio extraction or hidden video.
-# This standalone variant does not have a full Bridge music API.
-# Never enable both native variants simultaneously.
-set(STANDALONE_DIR "${CMAKE_CURRENT_BINARY_DIR}/standalone_pack")
-set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.6.15-arm64-v8a.levipack")
-set(BROWSER_DEX "${CMAKE_CURRENT_BINARY_DIR}/browser-dex/classes.dex")
-if(NOT EXISTS "${BROWSER_DEX}")
-    message(FATAL_ERROR "Standalone browser.dex missing. Compile standalone_browser Java with d8 before CMake build.")
-endif()
-add_custom_target(levipack_standalone
-    COMMAND ${CMAKE_COMMAND} -E rm -rf "${STANDALONE_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${STANDALONE_DIR}"
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/manifest-standalone.json" "${STANDALONE_DIR}/manifest.json"
-    COMMAND ${CMAKE_COMMAND} -E copy "$<TARGET_FILE:levimusic_standalone>" "${STANDALONE_DIR}/liblevimusic_standalone.so"
-    COMMAND ${CMAKE_COMMAND} -E copy "${CMAKE_CURRENT_SOURCE_DIR}/THIRD_PARTY_LICENSES.md" "${STANDALONE_DIR}/THIRD_PARTY_LICENSES.md"
-    COMMAND ${CMAKE_COMMAND} -E copy "${BROWSER_DEX}" "${STANDALONE_DIR}/browser.dex"
-    COMMAND ${CMAKE_COMMAND} -E chdir "${STANDALONE_DIR}" ${CMAKE_COMMAND} -E tar cf "${STANDALONE_FILE}" --format=zip manifest.json liblevimusic_standalone.so THIRD_PARTY_LICENSES.md browser.dex
-    DEPENDS levimusic_standalone
-    VERBATIM)
-
-

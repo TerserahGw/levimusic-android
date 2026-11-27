@@ -2032,11 +2032,7 @@ struct UI {
     bool ok()const{return w>0&&h>0;}
 };
 struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
-#if defined(LEVI_STANDALONE)
-constexpr std::array<SettingRow,26> quickSettings{{
-#else
-constexpr std::array<SettingRow,28> quickSettings{{
-#endif
+constexpr std::array<SettingRow,30> quickSettings{{
     {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
     {"lyricTrailFollow","Follow player and rise",0,0,1,true},
     {"romanizeLyrics","Romanized subtitles",0,0,1,true},
@@ -2061,14 +2057,12 @@ constexpr std::array<SettingRow,28> quickSettings{{
     {"hudSize","Compact HUD size (%)",3,55,125,false},
     {"hudX","Compact HUD horizontal (%)",3,0,100,false},
     {"hudY","Compact HUD vertical (%)",3,0,100,false},
-#if !defined(LEVI_STANDALONE)
     {"lyricBeats","3D Lyrics Beats (Bridge audio)",4,0,1,true},
-#endif
-    {"cinematicAfk","Cinematic AFK View [26.66 Only]",4,0,1,true},
+    {"cinematicAfk","Cinematic AFK View [WIP - 26.66 Only]",4,0,1,true},
     {"cinematicDelay","AFK delay (seconds)",4,10,60,false},
-#if !defined(LEVI_STANDALONE)
-    {"immersiveSound","Immersive Sound [Experimental]",4,0,1,true},
-#endif
+    {"immersiveSound","Immersive Sound [WIP - Bridge]",4,0,1,true},
+    {"immersiveMode","Environment: Auto / Cave / Underwater",4,0,2,false},
+    {"compactUi","Compact UI [WIP]",4,0,1,true},
 }};
 inline Rect settingsTab(const UI& l,int page){
     const float u=l.s,gap=4*u,w=(l.outer.w-48*u-5*gap)/6.f;
@@ -2079,11 +2073,23 @@ inline Rect settingsRow(const UI& l,int index){
     return {l.outer.x+24*u,l.outer.y+107*u+float(index)*step,
             l.outer.w-48*u,step-5*u};
 }
+inline Rect settingsKeybindRow(const UI& l,int index){
+    const float u=l.s,gap=7*u,columnW=(l.outer.w-55*u-gap)/2.f;
+    const int column=index/6,row=index%6;
+    const float step=std::min(47*u,(l.outer.h-154*u)/6.f);
+    return {l.outer.x+24*u+column*(columnW+gap),l.outer.y+107*u+row*step,
+            columnW,step-5*u};
+}
+inline Rect compactSettingsRow(const UI& l,int index){
+    const float u=l.s,top=l.outer.y+66*u;
+    const float step=std::max(32*u,(l.outer.h-105*u)/7.f);
+    return {l.outer.x+24*u,top+index*step,l.outer.w-48*u,step-5*u};
+}
 inline Rect settingsAdvanced(const UI& l){
     const float u=l.s;return {l.outer.x+l.outer.w-180*u,
         l.outer.y+l.outer.h-43*u,155*u,30*u};
 }
-UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15) {
+UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=false) {
     UI p;
     const auto surface=pl::modmenu::getHudSurfaceSize();
     p.w=surface.width;p.h=surface.height;
@@ -2098,7 +2104,8 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15) {
         miniW,miniH
     };
     const float topPercent=std::clamp(panelTop,12,32)/100.f;
-    p.outer={p.w*.045f,p.h*topPercent,p.w*.91f,p.h*(.977f-topPercent)};
+    p.outer=compact?Rect{p.w*.075f,p.h*.10f,p.w*.85f,p.h*.86f}:
+                    Rect{p.w*.045f,p.h*topPercent,p.w*.91f,p.h*(.977f-topPercent)};
     const float contentY=p.outer.y+53*u,contentH=p.outer.h-65*u;
     const float contentX=p.outer.x+15*u,contentW=p.outer.w-30*u;
     const float gutter=9*u,playerW=contentW*.375f;
@@ -2134,8 +2141,9 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15) {
     p.seek={p.left.x+18*u,bottom-41*u,p.left.w-36*u,15*u};
     const float rowStart=p.right.y+118*u;
     const float rowBottom=p.right.y+p.right.h-40*u;
-    const float rowStep=std::max(19*u,(rowBottom-rowStart)/5.f);
-    for(int i=0;i<5;i++)
+    const int rowCount=compact?7:5;
+    const float rowStep=std::max(19*u,(rowBottom-rowStart)/float(rowCount));
+    for(int i=0;i<rowCount;i++)
         p.rows.push_back({p.right.x+11*u,rowStart+i*rowStep,
                           p.right.w-22*u,std::max(15*u,rowStep-4*u)});
     p.pagePrev={p.right.x+p.right.w-112*u,p.right.y+p.right.h-36*u,37*u,29*u};
@@ -2200,13 +2208,18 @@ class LeviMusic {
     int repeatMode_=1; // 0 off, 1 all, 2 one; playlists loop by default.
     bool shuffle_=false,bridgePlaylistQueue_=false;
     bool open_=false,typing_=false,hud_=true,lyricsOn_=true,playing_=false,shutdown_=false;
-    bool settingsOpen_=false;int settingsPage_=0;
-    std::atomic<bool> cinematicAfk_{false},immersiveSound_{false};
-    std::atomic<int> cinematicDelay_{15};
-    std::array<int,4> keybinds_{{139,140,138,137}}; // F8 open, F9 next, F7 previous, F6 play/pause.
+    bool settingsOpen_=false;int settingsPage_=0,settingsScroll_=0;
+    std::atomic<bool> cinematicAfk_{false},immersiveSound_{false},compactUi_{false};
+    std::atomic<int> cinematicDelay_{15},immersiveMode_{0};
+    // Open, Search, Next, Previous, Play/Pause, Stop, Repeat, Shuffle,
+    // Volume+, Volume-, Lyrics and HUD.
+    std::array<int,12> keybinds_{{139,136,140,138,137,141,135,134,133,132,131,142}};
     int bindingAction_=-1;
     std::set<int> pressedKeys_;
     std::set<int> menuPointers_;
+    std::map<int,float> pointerStartY_;
+    std::map<int,int> pointerStartPage_;
+    std::set<int> pointerDragged_;
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<int> hudLyricPosition_{0};
@@ -2255,11 +2268,16 @@ public:
             if(savedSettings_.find("hudLyricPosition")==savedSettings_.end())
                 savedSettings_["hudLyricPosition"]=
                     savedSettings_["lyricBelow"]=="true"||savedSettings_["lyricBelow"]=="1"?"2":"0";
-#if defined(LEVI_STANDALONE)
+#if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
             // These experiments are intentionally Standard-only. Ignore stale
             // values left by an older Standalone installation.
             savedSettings_.erase("lyricBeats");
             savedSettings_.erase("immersiveSound");
+            if(savedSettings_["chruServer"].empty()||
+               savedSettings_["chruServer"]=="http://127.0.0.1:8080")
+                savedSettings_["chruServer"]="https://aurelis-symphony.go.altare.global";
+#elif defined(LEVI_STANDALONE)
+            savedSettings_.erase("useBridge");
             if(savedSettings_["chruServer"].empty()||
                savedSettings_["chruServer"]=="http://127.0.0.1:8080")
                 savedSettings_["chruServer"]="https://aurelis-symphony.go.altare.global";
@@ -2271,7 +2289,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.6.15 beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.0 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2284,11 +2302,6 @@ public:
             .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(true)
             .description("Native music HUD. Bridge mode controls Spotify or YouTube Music via companion Android app.")
             .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,remembered("volume","75"),"0","100")
-#if defined(LEVI_STANDALONE)
-            .config("useBridge","Use Android Bridge (optional)",pl::modmenu::ConfigType::Toggle,remembered("useBridge","false"))
-#else
-            .config("useBridge","Use Android Bridge",pl::modmenu::ConfigType::Toggle,remembered("useBridge","true"))
-#endif
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
@@ -2309,9 +2322,7 @@ public:
             .config("otherArcSpread","Other Cameras Line Arc (degrees)",pl::modmenu::ConfigType::SliderInt,remembered("otherArcSpread","220"),"60","330")
             .config("otherPlacement","Other Cameras Layout (0 arc / 1 ring / 2 scattered ring)",pl::modmenu::ConfigType::SliderInt,remembered("otherPlacement","2"),"0","2")
             .config("lyricTrailFollow","3D Lyrics Follow Player and Rise",pl::modmenu::ConfigType::Toggle,remembered("lyricTrailFollow","true"))
-#if !defined(LEVI_STANDALONE)
             .config("lyricBeats","Experimental 3D Lyrics Beats (Bridge audio)",pl::modmenu::ConfigType::Toggle,remembered("lyricBeats","false"))
-#endif
             .config("romanizeLyrics","Romanize lyrics (Latin pronunciation)",pl::modmenu::ConfigType::Toggle,remembered("romanizeLyrics","true"))
 #if defined(LEVI_STANDALONE)
             .config("embeddedBrowser","Experimental embedded WebView (visible video)",pl::modmenu::ConfigType::Toggle,remembered("embeddedBrowser","false"))
@@ -2333,19 +2344,18 @@ public:
             .config("hudY","HUD Vertical Position (0-100%)",pl::modmenu::ConfigType::SliderInt,remembered("hudY","93"),"0","100")
             .config("panelTop","Menu Distance from Top (%)",pl::modmenu::ConfigType::SliderInt,remembered("panelTop","15"),"12","32")
             .config("animation","Subtle Animations",pl::modmenu::ConfigType::Toggle,remembered("animation","true"))
+            .config("compactUi","Compact UI [WIP]",pl::modmenu::ConfigType::Toggle,remembered("compactUi","false"))
+            .config("cinematicAfk","Cinematic AFK View [WIP - 26.66 Only]",pl::modmenu::ConfigType::Toggle,remembered("cinematicAfk","false"))
+            .config("cinematicDelay","Cinematic AFK Delay",pl::modmenu::ConfigType::SliderInt,remembered("cinematicDelay","15"),"10","60")
+            .config("immersiveSound","Immersive Sound [WIP - Bridge]",pl::modmenu::ConfigType::Toggle,remembered("immersiveSound","false"))
+            .config("immersiveMode","Immersive Environment (0 Auto / 1 Cave / 2 Underwater)",pl::modmenu::ConfigType::SliderInt,remembered("immersiveMode","0"),"0","2")
             .onConfigChanged([](std::string_view,std::string_view k,std::string_view v){
                 instance().setConfig(k,v);
             }).registerModule();
         if(!ok){restoringSettings_=false;return false;}
         for(const auto& [key,value]:savedSettings_)setConfig(key,value);
         lm_cinematic::request(cinematicAfk_,cinematicDelay_);
-#if defined(LEVI_STANDALONE)
-        lm_world3d::experimentalBeats=false;
-        immersiveSound_=false;
-        lm_immersive::request(false);
-#else
         lm_immersive::request(immersiveSound_);
-#endif
         lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
         restoringSettings_=false;
         static std::once_flag registered;
@@ -2531,7 +2541,7 @@ private:
             try{cinematicDelay_=std::clamp(std::stoi(std::string(v)),10,60);}catch(...){}
             lm_cinematic::request(cinematicAfk_,cinematicDelay_);
         } else if(k=="immersiveSound") {
-#if defined(LEVI_STANDALONE)
+#if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
             immersiveSound_=false;
             lm_immersive::request(false);
 #else
@@ -2539,6 +2549,10 @@ private:
             lm_immersive::request(immersiveSound_);
             lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
 #endif
+        } else if(k=="immersiveMode") {
+            try{immersiveMode_=std::clamp(std::stoi(std::string(v)),0,2);}catch(...){immersiveMode_=0;}
+        } else if(k=="compactUi") {
+            compactUi_=v=="true"||v=="1";
         } else if(k=="worldTextScript") {
             try{worldTextScript_=std::clamp(std::stoi(std::string(v)),0,1);}catch(...){}
         } else if(k=="worldFont") {
@@ -2556,7 +2570,7 @@ private:
         } else if(k=="lyricTrailFollow") {
             lm_world3d::lyricTrailFollow=v=="true"||v=="1";
         } else if(k=="lyricBeats") {
-#if defined(LEVI_STANDALONE)
+#if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
             lm_world3d::experimentalBeats=false;
 #else
             lm_world3d::experimentalBeats=v=="true"||v=="1";
@@ -2583,7 +2597,11 @@ private:
         } else if(k=="floatingLyrics") {
             floatingLyrics_=v=="true"||v=="1";
         } else if(k=="useBridge") {
+#if defined(LEVI_UNIFIED)
+            (void)v;
+#else
             useBridge_=v=="true"||v=="1";
+#endif
         } else if(k=="lyricBelow") {
             lyricsBelow_=v=="true"||v=="1";
             if(savedSettings_.find("hudLyricPosition")==savedSettings_.end())
@@ -2602,9 +2620,15 @@ private:
             try{panelTop_=std::clamp(std::stoi(std::string(v)),12,32);}catch(...){}
         } else if(k=="animation") {
             animation_ = v=="1"||v=="true";
-        } else if(k=="keyOpen"||k=="keyNext"||k=="keyPrevious"||k=="keyPlay") {
-            const int index=k=="keyOpen"?0:k=="keyNext"?1:k=="keyPrevious"?2:3;
-            try{keybinds_[static_cast<size_t>(index)]=std::clamp(std::stoi(std::string(v)),1,288);}catch(...){}
+        } else if(k.rfind("key",0)==0) {
+            static constexpr std::array<std::string_view,12> keys{{"keyOpen","keySearch","keyNext",
+                "keyPrevious","keyPlay","keyStop","keyRepeat","keyShuffle","keyVolumeUp",
+                "keyVolumeDown","keyLyrics","keyHud"}};
+            const auto it=std::find(keys.begin(),keys.end(),k);
+            if(it!=keys.end())try{
+                keybinds_[static_cast<size_t>(it-keys.begin())]=
+                    std::clamp(std::stoi(std::string(v)),1,288);
+            }catch(...){}
         } else {
             std::lock_guard lock(mu_);
 #if defined(LEVI_STANDALONE)
@@ -2670,6 +2694,8 @@ private:
         if(k=="cinematicAfk")return cinematicAfk_;
         if(k=="cinematicDelay")return cinematicDelay_;
         if(k=="immersiveSound")return immersiveSound_;
+        if(k=="immersiveMode")return immersiveMode_;
+        if(k=="compactUi")return compactUi_;
         if(k=="romanizeLyrics")return romanizeLyrics_;
         if(k=="animation")return animation_;
         if(k=="hudLyrics")return hudLyrics_;
@@ -2697,7 +2723,7 @@ private:
     bool touch(const pl::input::TouchEvent& e){
         if(!enabled_)return false;
         lm_cinematic::noteActivity();
-        UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
+        UI l=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
         if(!l.ok())return false;
         bool opened,hud,settingsOpen;int settingsPage;
         {std::lock_guard lock(mu_);opened=open_;hud=hud_;
@@ -2708,16 +2734,43 @@ private:
         // must still reach Minecraft on UP/CANCEL so movement cannot stick.
         if(e.action==0||e.action==5){
             const bool capture=opened||(hud&&l.mini.contains(e.x,e.y));
-            if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);}
+            if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);
+                pointerStartY_[e.pointerId]=e.y;
+                pointerStartPage_[e.pointerId]=(compactUi_&&settingsOpen_)?settingsScroll_:page_;
+                pointerDragged_.erase(e.pointerId);}
             return capture;
         }
         bool captured=false;
         {std::lock_guard lock(mu_);captured=menuPointers_.contains(e.pointerId);}
         if(!captured)return false;
-        if(e.action==2)return true;
-        if(e.action==3){std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);return true;}
+        if(e.action==2){
+            bool changed=false;
+            if(compactUi_&&opened){
+                std::lock_guard lock(mu_);
+                const float start=pointerStartY_.contains(e.pointerId)?pointerStartY_[e.pointerId]:e.y;
+                const int origin=pointerStartPage_.contains(e.pointerId)?pointerStartPage_[e.pointerId]:page_;
+                const float delta=start-e.y;
+                if(std::abs(delta)>8*l.s)pointerDragged_.insert(e.pointerId);
+                const size_t count=settingsOpen_?quickSettings.size()+keybinds_.size():
+                    rightTab_==0?results_.size():rightTab_==1?
+                    (libraryMode_==3?queueTracks_.size():libraryMode_==1?playlistNames_.size():results_.size()):0;
+                const int visible=settingsOpen_?7:int(l.rows.size());
+                const int limit=std::max(0,int(count)-visible);
+                const int next=std::clamp(origin+int(std::round(delta/std::max(18.f,34*l.s))),0,limit);
+                if(settingsOpen_){changed=next!=settingsScroll_;settingsScroll_=next;}
+                else {changed=next!=page_;page_=next;}
+            }
+            if(changed)paint();return true;
+        }
+        if(e.action==3){std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);
+            pointerStartY_.erase(e.pointerId);pointerStartPage_.erase(e.pointerId);
+            pointerDragged_.erase(e.pointerId);return true;}
         if(e.action!=1&&e.action!=6)return true;
-        {std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);}
+        bool dragged=false;
+        {std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);
+            dragged=pointerDragged_.erase(e.pointerId)>0;
+            pointerStartY_.erase(e.pointerId);pointerStartPage_.erase(e.pointerId);}
+        if(dragged)return true;
         if(!opened){
             if(hud&&l.mini.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);open_=true;panelToggled_=std::chrono::steady_clock::now();}
@@ -2732,6 +2785,31 @@ private:
                 {std::lock_guard lock(mu_);settingsOpen_=false;open_=false;
                     panelToggled_=std::chrono::steady_clock::now();}
                 pl::modmenu::requestOpenMenu();
+            }else if(compactUi_){
+                for(int visible=0;visible<7;++visible){
+                    const Rect area=compactSettingsRow(l,visible);
+                    if(!area.contains(e.x,e.y))continue;
+                    const int item=settingsScroll_+visible;
+                    if(item<static_cast<int>(quickSettings.size())){
+                        const auto& row=quickSettings[static_cast<size_t>(item)];
+                        const int old=quickValue(row);int value=old;
+                        if(row.toggle)value=1-old;
+                        else if(e.x>area.x+area.w-36*l.s)value=old+1;
+                        else if(e.x>area.x+area.w-76*l.s)value=old-1;
+                        else if(e.x>area.x+area.w*.52f)
+                            value=row.low+int(std::round((row.high-row.low)*
+                                std::clamp((e.x-(area.x+area.w*.52f))/
+                                           (area.w*.48f-80*l.s),0.f,1.f)));
+                        value=std::clamp(value,row.low,row.high);
+                        if(value!=old)setConfig(row.key,std::to_string(value));
+                    }else{
+                        const int bind=item-static_cast<int>(quickSettings.size());
+                        if(bind>=0&&bind<static_cast<int>(keybinds_.size())){
+                            std::lock_guard lock(mu_);bindingAction_=bind;
+                        }
+                    }
+                    break;
+                }
             }else{
                 bool tab=false;
                 for(int page=0;page<6;++page)if(settingsTab(l,page).contains(e.x,e.y)){
@@ -2739,7 +2817,7 @@ private:
                 }
                 if(!tab){
                     if(settingsPage==5){
-                        for(int i=0;i<4;++i)if(settingsRow(l,i).contains(e.x,e.y)){
+                        for(int i=0;i<12;++i)if(settingsKeybindRow(l,i).contains(e.x,e.y)){
                             std::lock_guard lock(mu_);bindingAction_=i;break;
                         }
                     }
@@ -2769,15 +2847,15 @@ private:
             {std::lock_guard lock(mu_);open_=false;typing_=false;panelToggled_=std::chrono::steady_clock::now();}
             pl::input::hideKeyboard();
         }else if(l.settings.contains(e.x,e.y)){
-            {std::lock_guard lock(mu_);settingsOpen_=true;settingsPage_=0;typing_=false;}
+            {std::lock_guard lock(mu_);settingsOpen_=true;settingsPage_=0;settingsScroll_=0;typing_=false;}
             pl::input::hideKeyboard();
-#if defined(LEVI_STANDALONE)
+#if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
         }else if(l.pair.contains(e.x,e.y)&&!useBridge_){
             if(browserEnabled_)addJob(Action::OpenBrowser);
             else update("Embedded browser disabled","Standalone",
                         "Enable the experimental WebView in mod settings first");
 #endif
-        }else if(l.pair.contains(e.x,e.y)&&useBridge_){
+        }else if(l.pair.contains(e.x,e.y)){
             addJob(Action::Pair);
         }else if(l.tabSearch.contains(e.x,e.y)){
             {std::lock_guard lock(mu_);
@@ -2836,9 +2914,9 @@ private:
                 addJob(old.empty()?Action::PlaylistCreate:Action::PlaylistRename,
                     old.empty()?name:old+"\n"+name);
             }else if(tab!=2 && l.pagePrev.contains(e.x,e.y)){
-                {std::lock_guard lock(mu_);page_=std::max(0,page_-1);}
+                if(!compactUi_){std::lock_guard lock(mu_);page_=std::max(0,page_-1);}
             }else if(tab!=2 && l.pageNext.contains(e.x,e.y)){
-                {std::lock_guard lock(mu_);
+                if(!compactUi_){std::lock_guard lock(mu_);
                     const size_t count=tab==0?results_.size():
                             mode==3?queueTracks_.size():
                             mode==1?playlistNames_.size():results_.size();
@@ -2852,7 +2930,7 @@ private:
                 {
                     std::lock_guard lock(mu_);
                     for(size_t i=0;i<l.rows.size();i++){
-                        int index=page_*5+static_cast<int>(i);
+                        int index=(compactUi_?page_:page_*5)+static_cast<int>(i);
                         const bool inRange=tab==0?index<static_cast<int>(results_.size()):
                             mode==3?index<static_cast<int>(queueTracks_.size()):
                             mode==1?index<static_cast<int>(playlistNames_.size()):
@@ -2946,7 +3024,9 @@ private:
         }
         if(bind>=0){
             {std::lock_guard lock(mu_);if(!pressedKeys_.insert(e.keyCode).second)return true;}
-            static constexpr const char* keys[]={"keyOpen","keyNext","keyPrevious","keyPlay"};
+            static constexpr const char* keys[]={"keyOpen","keySearch","keyNext","keyPrevious",
+                "keyPlay","keyStop","keyRepeat","keyShuffle","keyVolumeUp","keyVolumeDown",
+                "keyLyrics","keyHud"};
             {std::lock_guard lock(mu_);bindingAction_=-1;}
             setConfig(keys[bind],std::to_string(e.keyCode));
             return true;
@@ -2974,22 +3054,40 @@ private:
         if(editing)return true;
         int action=-1;
         {std::lock_guard lock(mu_);
-            for(int i=0;i<4;++i)if(keybinds_[static_cast<size_t>(i)]==e.keyCode){action=i;break;}}
+            for(int i=0;i<12;++i)if(keybinds_[static_cast<size_t>(i)]==e.keyCode){action=i;break;}}
         if(action>=0){std::lock_guard lock(mu_);if(!pressedKeys_.insert(e.keyCode).second)return true;}
         if(action==0){
-            {std::lock_guard lock(mu_);open_=!open_;settingsOpen_=false;typing_=false;
-                panelToggled_=std::chrono::steady_clock::now();}
-            pl::input::hideKeyboard();paint();return true;
+            bool opened;
+            {std::lock_guard lock(mu_);open_=!open_;opened=open_;settingsOpen_=false;
+                rightTab_=0;libraryMode_=0;page_=0;typing_=opened;
+                if(opened)query_.clear();panelToggled_=std::chrono::steady_clock::now();}
+            if(opened)pl::input::showKeyboard();else pl::input::hideKeyboard();
+            paint();return true;
         }
-        if(action==1){addJob(Action::Next);return true;}
-        if(action==2){addJob(Action::Previous);return true;}
-        if(action==3){addJob(Action::PlayPause);return true;}
+        if(action==1){
+            {std::lock_guard lock(mu_);open_=true;settingsOpen_=false;rightTab_=0;
+                libraryMode_=0;page_=0;typing_=true;query_.clear();
+                panelToggled_=std::chrono::steady_clock::now();}
+            pl::input::showKeyboard();paint();return true;
+        }
+        if(action==2){addJob(Action::Next);return true;}
+        if(action==3){addJob(Action::Previous);return true;}
+        if(action==4){addJob(Action::PlayPause);return true;}
+        if(action==5){addJob(Action::Stop);return true;}
+        if(action==6){addJob(Action::RepeatCycle);return true;}
+        if(action==7){addJob(Action::ShuffleToggle);return true;}
+        if(action==8||action==9){
+            {std::lock_guard lock(mu_);volume_=std::clamp(volume_+(action==8?5:-5),0,100);}
+            addJob(Action::SetVolume);paint();return true;
+        }
+        if(action==10){setConfig("lyrics",lyricsOn_?"false":"true");return true;}
+        if(action==11){setConfig("hud",hud_?"false":"true");return true;}
         return false;
     }
     void paint(){
         std::lock_guard paintLock(paintMu_);
         if(!enabled_)return;
-        UI l=measure(hudSize_,hudX_,hudY_,panelTop_);
+        UI l=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
         if(!l.ok())return;
         std::string title,artist,info,query,lyric,coverImage;
         std::vector<Track> tracks,queueTracks;
@@ -2997,16 +3095,16 @@ private:
         std::string activePlaylist;
         std::vector<Lyric> timedLyrics;
         float lyricAge=100.f;
-        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage,repeatMode,bindingAction;
+        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage,settingsScroll,repeatMode,bindingAction;
         bool open,showHud,playing,typing,settingsOpen,shuffle,bridgePlaylist,playlistQueue;
-        std::array<int,4> keybinds{};
+        std::array<int,12> keybinds{};
         float panelAge=1.f;
         {
             std::lock_guard lock(mu_);
             title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";coverImage=coverImageId_;
             tracks=results_;queueTracks=queueTracks_;playlistNames=playlistNames_;
             activePlaylist=activePlaylist_;libraryMode=libraryMode_;rightTab=rightTab_;
-            settingsPage=settingsPage_;settingsOpen=settingsOpen_;
+            settingsPage=settingsPage_;settingsScroll=settingsScroll_;settingsOpen=settingsOpen_;
             timedLyrics=lyrics_;
             panelAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-panelToggled_).count();
             lyricAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-lyricChanged_).count();
@@ -3038,6 +3136,7 @@ private:
         const float panelFade=animation_?(open?panelProgress:1.f-panelProgress):1.f;
         const bool panelVisible=open||(animation_&&panelAge<.24f);
         const bool streamingBridge=useBridge_.load();
+        const bool compact=compactUi_.load();
         const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
         // Client-only native 3D scene: independent from Behavior Packs or servers.
         if(worldLyrics3D_){
@@ -3146,6 +3245,46 @@ private:
             text(l.outer.x+34*u,l.outer.y+52*u,"Changes are saved automatically",9.2f*u,C_DIM,48);
             box(l.close,0xFF41444CU,8.f);
             icon("x",l.close.x+6*u,l.close.y+6*u,18*u);
+            if(compact){
+                static constexpr const char* keyLabels[]={"Open + Search","Focus Search","Next Song",
+                    "Previous Song","Pause / Resume","Stop Song","Repeat Mode","Shuffle Playlist",
+                    "Volume +5","Volume -5","Toggle Lyrics","Toggle HUD"};
+                text(l.outer.x+l.outer.w-265*u,l.outer.y+35*u,"COMPACT UI [WIP] • SCROLL",9.6f*u,C_MINT,34);
+                for(int visible=0;visible<7;++visible){
+                    const int item=settingsScroll+visible;
+                    const Rect row=compactSettingsRow(l,visible);
+                    if(item>=static_cast<int>(quickSettings.size()+keybinds.size()))break;
+                    box(row,item%2?0xFF252930U:0xFF292D35U,9.f);
+                    if(item<static_cast<int>(quickSettings.size())){
+                        const auto& setting=quickSettings[static_cast<size_t>(item)];
+                        const int value=quickValue(setting);
+                        text(row.x+14*u,row.y+row.h*.60f,setting.label,11.1f*u,C_TEXT,48);
+                        if(setting.toggle){
+                            const Rect pill{row.x+row.w-70*u,row.y+6*u,57*u,row.h-12*u};
+                            box(pill,value?0xFF47747DU:0xFF41454EU,11.f);
+                            text(pill.x+13*u,pill.y+pill.h*.70f,value?"ON":"OFF",10.5f*u,C_TEXT,4);
+                        }else{
+                            const float left=row.x+row.w*.52f;
+                            const float barWidth=row.w*.48f-80*u;
+                            box({left,row.y+row.h*.57f,barWidth,3*u},0xFF48515AU,2.f);
+                            box({left,row.y+row.h*.57f,
+                                barWidth*float(value-setting.low)/float(std::max(1,setting.high-setting.low)),3*u},
+                                0xFF9EDCE7U,2.f);
+                            text(row.x+row.w-71*u,row.y+row.h*.63f,"-",14*u,C_TEXT,2);
+                            text(row.x+row.w-31*u,row.y+row.h*.63f,"+",14*u,C_TEXT,2);
+                            text(left,row.y+row.h*.36f,std::to_string(value),9.8f*u,C_DIM,8);
+                        }
+                    }else{
+                        const int bind=item-static_cast<int>(quickSettings.size());
+                        text(row.x+14*u,row.y+row.h*.60f,keyLabels[bind],11*u,C_TEXT,32);
+                        const bool waiting=bindingAction==bind;
+                        const std::string shown=waiting?"PRESS A KEY":keyName(keybinds[static_cast<size_t>(bind)]);
+                        box({row.x+row.w-145*u,row.y+6*u,132*u,row.h-12*u},
+                            waiting?0xFF47747DU:0xFF3B4149U,8.f);
+                        text(row.x+row.w-132*u,row.y+row.h*.60f,shown,10.4f*u,C_TEXT,19);
+                    }
+                }
+            }else{
             static constexpr const char* tabs[]={"GENERAL","FIRST PERSON","OTHER CAMERAS","STYLE & HUD","EXPERIMENTAL","KEYBINDS"};
             for(int n=0;n<6;++n){
                 Rect tab=settingsTab(l,n);const bool active=n==settingsPage;
@@ -3177,17 +3316,20 @@ private:
                 }
             }
             if(settingsPage==5){
-                static constexpr const char* labels[]={"Open Music Player","Next Song","Previous Song","Pause / Resume Song"};
-                for(int i=0;i<4;++i){
-                    const Rect row=settingsRow(l,i);
+                static constexpr const char* labels[]={"Open + Search","Focus Search","Next Song",
+                    "Previous Song","Pause / Resume","Stop Song","Repeat Mode","Shuffle Playlist",
+                    "Volume +5","Volume -5","Toggle Lyrics","Toggle HUD"};
+                for(int i=0;i<12;++i){
+                    const Rect row=settingsKeybindRow(l,i);
                     box(row,i%2?0xFF252930U:0xFF292D35U,9.f);
-                    text(row.x+14*u,row.y+row.h*.60f,labels[i],11.5f*u,C_TEXT,40);
+                    text(row.x+11*u,row.y+row.h*.60f,labels[i],10.4f*u,C_TEXT,24);
                     const bool waiting=bindingAction==i;
                     const std::string shown=waiting?"PRESS A KEY":keyName(keybinds[static_cast<size_t>(i)]);
-                    box({row.x+row.w-145*u,row.y+6*u,132*u,row.h-12*u},
+                    box({row.x+row.w-102*u,row.y+6*u,91*u,row.h-12*u},
                         waiting?0xFF47747DU:0xFF3B4149U,8.f);
-                    text(row.x+row.w-132*u,row.y+row.h*.60f,shown,10.4f*u,C_TEXT,19);
+                    text(row.x+row.w-94*u,row.y+row.h*.60f,shown,9.4f*u,C_TEXT,13);
                 }
+            }
             }
             const Rect advanced=settingsAdvanced(l);
             box(advanced,0xFF3A414AU,8.f);
@@ -3311,16 +3453,16 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.6.15 BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.0 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
-            text(l.pair.x+8*u,l.pair.y+21*u,"WEB",10.2f*u,C_TEXT,8);
+            text(l.pair.x+8*u,l.pair.y+21*u,"AUTO",10.2f*u,C_TEXT,8);
         }
 #endif
         if(streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
-            text(l.pair.x+8*u,l.pair.y+21*u,"PAIR",10.2f*u,C_TEXT,6);
+            text(l.pair.x+8*u,l.pair.y+21*u,"BRIDGE",9.2f*u,C_TEXT,7);
 
         }
         box(l.settings,0xFF32343AU,9.f);
@@ -3407,20 +3549,22 @@ private:
             text(alignX,r.y+20*u,label,11.1f*u,active?C_TEXT:C_DIM,14);
         }
         const auto drawPage=[&](size_t count,const std::string& prefix){
-            if(count>5){
+            if(!compact&&count>5){
                 box(l.pagePrev,0xFF34373EU,7.f);
                 icon("chevron-left",l.pagePrev.x+9*u,l.pagePrev.y+6*u,18*u);
                 box(l.pageNext,0xFF34373EU,7.f);
                 icon("chevron-right",l.pageNext.x+9*u,l.pageNext.y+6*u,18*u);
             }
-            text(l.right.x+14*u,l.right.y+l.right.h-14*u,
-                 prefix+"  "+std::to_string(page+1)+" / "+
-                    std::to_string(std::max<size_t>(1,(count+4)/5)),10*u,C_DIM,41);
+            const std::string state=compact?
+                ("SCROLL "+std::to_string(std::min<size_t>(count,count?size_t(page+1):0))+" / "+
+                 std::to_string(count)):
+                (std::to_string(page+1)+" / "+std::to_string(std::max<size_t>(1,(count+4)/5)));
+            text(l.right.x+14*u,l.right.y+l.right.h-14*u,prefix+"  "+state,10*u,C_DIM,41);
         };
         const auto drawSongs=[&](const std::vector<Track>& songs,bool isRadio,
                                  bool addControl,bool isSaved){
             for(size_t i=0;i<l.rows.size();++i){
-                size_t n=static_cast<size_t>(page*5)+i;
+                size_t n=static_cast<size_t>(compact?page:page*5)+i;
                 if(n>=songs.size())break;
                 Rect row=l.rows[i];
                 const bool chosen=isRadio?n==0:static_cast<int>(n)==current;
@@ -3541,7 +3685,7 @@ private:
                 box(l.savedCreate,0xFF555960U,8.f);
                 icon("plus",l.savedCreate.x+14*u,l.savedCreate.y+6*u,18*u);
                 for(size_t i=0;i<l.rows.size();i++){
-                    size_t index=static_cast<size_t>(page*5)+i;
+                    size_t index=static_cast<size_t>(compact?page:page*5)+i;
                     if(index>=playlistNames.size())break;
                     Rect row=l.rows[i];
                     box(row,0xFF292C32U,8.f);
@@ -3689,7 +3833,7 @@ private:
         auto lastBridge=std::chrono::steady_clock::now()-std::chrono::seconds(2);
         auto lastAutoBridge=std::chrono::steady_clock::now()-std::chrono::seconds(10);
         auto lastQueue=std::chrono::steady_clock::now()-std::chrono::seconds(3);
-#if !defined(LEVI_STANDALONE)
+#if !defined(LEVI_STANDALONE) || defined(LEVI_UNIFIED)
         auto lastBeat=std::chrono::steady_clock::now()-std::chrono::seconds(3);
         auto lastImmersiveSent=std::chrono::steady_clock::now()-std::chrono::seconds(4);
         bool beatSent=false;
@@ -3698,6 +3842,7 @@ private:
         bool sawWorld=false,lastInWorld=false,pausedForWorld=false,pausedBridge=false;
         std::string previousId,previousTitle,previousArtist,previousProvider,previousArt;
         bool lastBridgeConnected=false;
+        int bridgeHealthFailures=0;
         while(true){
             Job job{};bool hasJob=false;
             {
@@ -3716,12 +3861,13 @@ private:
             {std::lock_guard lock(mu_);musicPlaying=playing_;}
             lm_cinematic::setPlaying(musicPlaying);
             lm_cinematic::diagnose();
-#if defined(LEVI_STANDALONE)
+#if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
             lm_world3d::request(worldLyrics3D_||cinematicAfk_,true);
 #else
             lm_world3d::request(worldLyrics3D_||cinematicAfk_||immersiveSound_,true);
+            const int forcedEnvironment=immersiveMode_.load();
             const int desiredEnvironment=immersiveSound_?
-                static_cast<int>(lm_immersive::current()):0;
+                (forcedEnvironment?forcedEnvironment:static_cast<int>(lm_immersive::current())):0;
             if(!useBridge_)player.setEnvironment(env,desiredEnvironment);
 #endif
             const bool inWorld=lm_world3d::inWorld();
@@ -3786,10 +3932,36 @@ private:
                 }
                 }
             }
+#if defined(LEVI_UNIFIED)
+            const auto engineNow=std::chrono::steady_clock::now();
+            if(engineNow-lastAutoBridge>std::chrono::seconds(4)){
+                lastAutoBridge=engineNow;
+                std::string candidate=automaticBridgeToken(env);
+                if(!validToken(candidate)){std::lock_guard lock(mu_);candidate=bridgeKey_;}
+                const bool alive=validToken(candidate)&&!bridgeGet("/v1/health",candidate).empty();
+                if(alive){
+                    bridgeHealthFailures=0;
+                    bool switched=!useBridge_.exchange(true);
+                    {std::lock_guard lock(mu_);bridgeKey_=candidate;}
+                    try{
+                        std::filesystem::create_directories(self_.getConfigDir());
+                        std::ofstream file(self_.getConfigDir()/"bridge.token",std::ios::trunc);
+                        if(file)file<<candidate;
+                    }catch(...){}
+                    if(switched){
+                        player.release(env);
+                        update("Bridge connected","Aurelis Symphony","Engine switched automatically");
+                    }
+                }else if(useBridge_&&++bridgeHealthFailures>=3){
+                    bridgeHealthFailures=0;useBridge_=false;lastBridgeConnected=false;
+                    update("Aurelis fallback active","Bridge unavailable","Search and playback continue without pairing");
+                }
+            }
+#endif
             if(useBridge_) {
                 std::string key;
                 {std::lock_guard lock(mu_);key=bridgeKey_;}
-#if !defined(LEVI_STANDALONE)
+#if !defined(LEVI_STANDALONE) || defined(LEVI_UNIFIED)
                 const auto immersiveNow=std::chrono::steady_clock::now();
                 if(!key.empty()&&(desiredEnvironment!=lastImmersive||
                    immersiveNow-lastImmersiveSent>std::chrono::seconds(3))){
@@ -3801,6 +3973,7 @@ private:
                     }
                 }
 #endif
+#if !defined(LEVI_UNIFIED)
                 if(std::chrono::steady_clock::now()-lastAutoBridge>std::chrono::seconds(8)){
                     lastAutoBridge=std::chrono::steady_clock::now();
                     const std::string found=automaticBridgeToken(env);
@@ -3815,7 +3988,8 @@ private:
                         update("LeviMusic connected","Android Bridge","Connected automatically");
                     }
                 }
-#if defined(LEVI_STANDALONE)
+#endif
+#if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
             lm_world3d::experimentalBeats=false;
             lm_world3d::beatState=0;
 #else
@@ -4582,6 +4756,19 @@ private:
                     }
 #endif
                     case Action::Pair:
+#if defined(LEVI_UNIFIED)
+                    {
+                        std::string candidate=clipboardToken(env);
+                        if(!validToken(candidate))candidate=automaticBridgeToken(env);
+                        if(validToken(candidate)&&!bridgeGet("/v1/health",candidate).empty()){
+                            {std::lock_guard lock(mu_);bridgeKey_=candidate;}
+                            useBridge_=true;bridgeHealthFailures=0;
+                            update("Bridge connected","Aurelis Symphony","Engine switched automatically");
+                        }else update("Aurelis fallback active","Bridge not detected",
+                                    "Open LeviMusic - Aurelis Symphony, then retry");
+                        break;
+                    }
+#endif
 #if !defined(LEVI_STANDALONE)
                     case Action::PlaylistList:case Action::PlaylistOpen:
                     case Action::PlaylistPlay:case Action::PlaylistCreate:case Action::PlaylistRename:

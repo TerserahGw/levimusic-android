@@ -42,7 +42,10 @@ inline void* adjustTarget=nullptr;
 inline uintptr_t imageBase=0;
 inline bool exactBuild=false;
 inline thread_local int positionSystemDepth=0;
-inline thread_local void* frameCameraComponent=nullptr;
+// Camera ECS passes may be scheduled on different worker threads. Keeping the
+// component thread-local meant the orientation pass often saw nullptr and
+// silently overwrote the orbit pose. Publish it across the two passes.
+inline std::atomic<void*> frameCameraComponent{nullptr};
 
 inline int64_t nowMs(){
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -172,11 +175,11 @@ inline bool applyCamera(void* camera){
 inline void adjustHook(void* camera,const void* adjusted,const void* delta){
     if(originalAdjust)originalAdjust(camera,adjusted,delta);
     if(positionSystemDepth<=0)return;
-    frameCameraComponent=camera;
+    frameCameraComponent.store(camera,std::memory_order_release);
     applyCamera(camera);
 }
 inline void positionSystemHook(void* system){
-    frameCameraComponent=nullptr;
+    frameCameraComponent.store(nullptr,std::memory_order_release);
     ++positionSystemDepth;
     if(originalPositionSystem)originalPositionSystem(system);
     --positionSystemDepth;
@@ -185,8 +188,8 @@ inline void orientationSystemHook(void* system){
     if(originalOrientationSystem)originalOrientationSystem(system);
     // CameraSetPositionSystem's second view writes the orientation after the
     // adjusted-position pass. Reapply once more so it reaches the renderer.
-    if(frameCameraComponent)applyCamera(frameCameraComponent);
-    frameCameraComponent=nullptr;
+    if(void* camera=frameCameraComponent.exchange(nullptr,std::memory_order_acq_rel))
+        applyCamera(camera);
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=hooked.load();return;}
@@ -274,6 +277,7 @@ inline const char* status(){
 }
 inline void shutdown(){
     enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;
+    frameCameraComponent.store(nullptr,std::memory_order_release);
     cameraHookAt=0;cameraHookCalls=0;cameraApplyCalls=0;cameraRejectCalls=0;
     lastDiagnostic=0;
 }

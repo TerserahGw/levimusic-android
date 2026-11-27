@@ -93,6 +93,8 @@ public final class MainActivity extends Activity {
         try { startForegroundService(ready); } catch(Exception ex){ android.util.Log.w("LeviMusic","Could not warm up media service",ex); }
         handler.post(poll);
         handler.post(lyricTicker);
+        if(!getPreferences(MODE_PRIVATE).getBoolean("pair_tutorial_v170",false))
+            handler.postDelayed(this::showPairingTutorial,450);
     }
     private int dp(float n){return (int)(getResources().getDisplayMetrics().density*n+.5f);}
     private GradientDrawable bg(int fill,float radius){
@@ -121,13 +123,13 @@ public final class MainActivity extends Activity {
     private void buildUI(){
         LinearLayout root=column();
         root.setBackgroundColor(BG);
-        root.setPadding(dp(18),dp(11),dp(18),dp(12));
+        root.setPadding(dp(14),dp(8),dp(14),dp(9));
 
         LinearLayout header=new LinearLayout(this);
         header.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout titles=column();
-        add(titles,text("LeviMusic",27,PRIMARY,true),-1,-2);
-        TextView sub=text("YOUR SOUNDTRACK IN EVERY WORLD",10,ACCENT,true);
+        add(titles,text("LeviMusic - Aurelis Symphony",21,PRIMARY,true),-1,-2);
+        TextView sub=text("UNIFIED BRIDGE & MUSIC ENGINE",9,ACCENT,true);
         sub.setLetterSpacing(.11f);
         sub.setPadding(0,dp(2),0,0);add(titles,sub,-1,-2);
         header.addView(titles,new LinearLayout.LayoutParams(0,-2,1));
@@ -135,7 +137,7 @@ public final class MainActivity extends Activity {
         settings.setBackground(bg(SURFACE,13));
         settings.setOnClickListener(v->showBridgeSettings());
         add(header,settings,42,42);
-        add(root,header,-1,61);
+        add(root,header,-1,52);
 
         LinearLayout searchBox=new LinearLayout(this);
         searchBar=searchBox;
@@ -159,25 +161,25 @@ public final class MainActivity extends Activity {
         searchInput.setOnEditorActionListener((v,action,event)->{
             if(action==EditorInfo.IME_ACTION_SEARCH){search();return true;}return false;
         });
-        LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(-1,dp(56));
-        searchParams.topMargin=dp(14);
+        LinearLayout.LayoutParams searchParams=new LinearLayout.LayoutParams(-1,dp(50));
+        searchParams.topMargin=dp(8);
         root.addView(searchBox,searchParams);
         mainArea=column();
         root.addView(mainArea,new LinearLayout.LayoutParams(-1,0,1));
 
         LinearLayout hero=column();homeHero=hero;
         hero.setBackground(glow(0xFF315E5D,0xFF21353F,22));
-        hero.setPadding(dp(20),dp(15),dp(18),dp(15));
+        hero.setPadding(dp(16),dp(11),dp(15),dp(11));
         TextView eyebrow=text("✦  SOUNDTRACK FOR YOUR WORLD",10,ACCENT,true);
         eyebrow.setLetterSpacing(.11f);add(hero,eyebrow,-1,-2);
-        heroNow=text("A new world, a new soundtrack.",19,PRIMARY,true);
+        heroNow=text("A new world, a new soundtrack.",17,PRIMARY,true);
         heroNow.setSingleLine(true);heroNow.setEllipsize(android.text.TextUtils.TruncateAt.END);
         heroNow.setPadding(0,dp(8),0,dp(2));add(hero,heroNow,-1,-2);
         TextView hint=text("Search for music or continue from the mini player",12,SECONDARY,false);
         add(hero,hint,-1,-2);
         hero.setOnClickListener(v->expandPlayer(true));
         LinearLayout.LayoutParams heroParams=new LinearLayout.LayoutParams(-1,-2);
-        heroParams.topMargin=dp(14);mainArea.addView(hero,heroParams);
+        heroParams.topMargin=dp(8);mainArea.addView(hero,heroParams);
 
         LinearLayout listTitle=new LinearLayout(this);
         listTitle.setGravity(Gravity.CENTER_VERTICAL);
@@ -197,8 +199,8 @@ public final class MainActivity extends Activity {
         add(listTitle,lrcTab,-2,-2);
         trackCount=text("",12,SECONDARY,false);
         add(listTitle,trackCount,-2,-2);
-        LinearLayout.LayoutParams listTitleParams=new LinearLayout.LayoutParams(-1,dp(54));
-        listTitleParams.topMargin=dp(10);
+        LinearLayout.LayoutParams listTitleParams=new LinearLayout.LayoutParams(-1,dp(47));
+        listTitleParams.topMargin=dp(5);
         mainArea.addView(listTitle,listTitleParams);
 
         ScrollView scroller=new ScrollView(this);
@@ -295,7 +297,7 @@ public final class MainActivity extends Activity {
         add(controls,next,49,47);
         add(player,controls,-1,58);
 
-        headerStatus=text("Bridge is ready to connect your music and Minecraft",10,SOFT,false);
+        headerStatus=text("Open Minecraft: Bridge pairs automatically; otherwise Aurelis fallback stays active",10,SOFT,false);
         headerStatus.setGravity(Gravity.CENTER);
         headerStatus.setPadding(0,dp(9),0,0);
         add(root,headerStatus,-1,25);
@@ -977,14 +979,15 @@ public final class MainActivity extends Activity {
     }
     private void showBridgeSettings(){
         String token=BridgeService.getOrCreateToken(this);
-        String info="Connect the Minecraft mod to this app.\n\n"
-             +"1. Notification Access is optional for the built-in music player.\n"
-             +"2. Tap Pair Minecraft and then the PAIR control in game. No typing needed.\n"
-             +"3. Start a song here and return to Minecraft.\n\n"
+        String info="Connect Minecraft to Aurelis Symphony.\n\n"
+             +"1. Open this app once so the local Bridge is ready.\n"
+             +"2. Enable LeviMusic 1.7.0 in LeviLauncher and enter a world.\n"
+             +"3. Wait up to four seconds: the mod switches to Bridge automatically.\n"
+             +"4. If the app is unavailable, the same mod returns to Aurelis fallback.\n\n"
              +"PAIRING KEY:\n"+token+"\n\n"
-             +"Notification Access is a sensitive system permission. Only enable it if you trust the app.";
+             +"Copy the key only for manual recovery. Notification Access is optional.";
         new AlertDialog.Builder(this)
-            .setTitle("Minecraft connection")
+            .setTitle("Pair Minecraft")
             .setMessage(info)
             .setPositiveButton("Pair Minecraft (copy)",(dialog,which)->{
                 ((ClipboardManager)getSystemService(CLIPBOARD_SERVICE))
@@ -994,6 +997,21 @@ public final class MainActivity extends Activity {
                 startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS));
             })
             .setNegativeButton("Close",null)
+            .show();
+    }
+    private void showPairingTutorial(){
+        String info="One LeviPack now handles both modes.\n\n"
+            +"• Without this app: Aurelis fallback searches and plays music directly.\n"
+            +"• With this app open: Bridge is detected and selected automatically.\n"
+            +"• The in-game AUTO / BRIDGE badge shows the active engine.\n"
+            +"• Open Settings any time to copy the recovery key or grant optional Notification Access.";
+        new AlertDialog.Builder(this)
+            .setTitle("Quick pairing tutorial")
+            .setMessage(info)
+            .setPositiveButton("Got it",(dialog,which)->
+                getPreferences(MODE_PRIVATE).edit().putBoolean("pair_tutorial_v170",true).apply())
+            .setNeutralButton("Pairing details",(dialog,which)->showBridgeSettings())
+            .setCancelable(false)
             .show();
     }
     @Override public void onDestroy(){

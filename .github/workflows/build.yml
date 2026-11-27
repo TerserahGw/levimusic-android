@@ -124,10 +124,6 @@ jobs:
           obj = json.loads(path.read_text(encoding="utf-8"))
           obj["version"] = os.environ["VERSION"]
           path.write_text(json.dumps(obj, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-          path2 = Path("manifest-standalone.json")
-          standalone = json.loads(path2.read_text(encoding="utf-8"))
-          standalone["version"] = os.environ["VERSION"]
-          path2.write_text(json.dumps(standalone,indent=2,ensure_ascii=False)+"\n",encoding="utf-8")
           print("Packaging LeviMusic version", obj["version"])
           PY
 
@@ -183,8 +179,8 @@ jobs:
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 \
             -DCMAKE_BUILD_TYPE=Release
 
-      - name: Compile and package .levipack
-        run: cmake --build build --target levipack levipack_standalone --parallel 2
+      - name: Compile and package unified .levipack
+        run: cmake --build build --target levipack --parallel 2
 
       - name: Setup Java for Android companion
         uses: actions/setup-java@v4
@@ -264,8 +260,8 @@ jobs:
           release_file="build/LeviMusic-${VERSION}-arm64-v8a.levipack"
           source_file="$release_file"
           if [[ ! -f "$source_file" ]]; then
-            mapfile -t candidates < <(find build -maxdepth 1 -type f -name 'LeviMusic-*-arm64-v8a.levipack' ! -name 'LeviMusic-Standalone-*' -print)
-            [[ "${#candidates[@]}" -eq 1 ]] || { printf 'Expected one Standard LeviPack, found %s\n' "${#candidates[@]}"; exit 1; }
+            mapfile -t candidates < <(find build -maxdepth 1 -type f -name 'LeviMusic-*-arm64-v8a.levipack' -print)
+            [[ "${#candidates[@]}" -eq 1 ]] || { printf 'Expected one unified LeviPack, found %s\n' "${#candidates[@]}"; exit 1; }
             source_file="${candidates[0]}"
           fi
           if [[ "$source_file" != "$release_file" ]]; then
@@ -273,28 +269,13 @@ jobs:
           fi
           unzip -t "$release_file"
           unzip -p "$release_file" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          standalone_release="build/LeviMusic-Standalone-${VERSION}-arm64-v8a.levipack"
-          standalone_src="$standalone_release"
-          if [[ ! -f "$standalone_src" ]]; then
-            mapfile -t candidates < <(find build -maxdepth 1 -type f -name 'LeviMusic-Standalone-*-arm64-v8a.levipack' -print)
-            [[ "${#candidates[@]}" -eq 1 ]] || { printf 'Expected one Standalone LeviPack, found %s\n' "${#candidates[@]}"; exit 1; }
-            standalone_src="${candidates[0]}"
-          fi
-          if [[ "$standalone_src" != "$standalone_release" ]]; then
-            mv "$standalone_src" "$standalone_release"
-          fi
-          unzip -t "$standalone_release"
-          unzip -p "$standalone_release" manifest.json | python3 -c 'import json,os,sys; data=json.load(sys.stdin); assert data["version"]==os.environ["VERSION"], data'
-          echo "standalone=$standalone_release" >> "$GITHUB_OUTPUT"
           echo "file=$release_file" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact for every successful build
         uses: actions/upload-artifact@v4
         with:
           name: LeviMusic-${{ steps.version.outputs.version }}-arm64-v8a
-          path: |
-            ${{ steps.package.outputs.file }}
-            ${{ steps.package.outputs.standalone }}
+          path: ${{ steps.package.outputs.file }}
           if-no-files-found: error
 
       - name: Require permanent APK signing before publishing
@@ -331,7 +312,7 @@ jobs:
           channel = os.environ["CHANNEL"]
           previous = os.environ.get("PREVIOUS_TAG", "")
           label = "beta" if channel == "beta" else "stable"
-          if version in {"1.6.14", "1.6.15"}:
+          if version in {"1.6.14", "1.6.15", "1.7.0"}:
               notes = ""
           elif version == "1.6.13":
               notes = Path("release-notes/v1.6.13.md").read_text(encoding="utf-8")
@@ -493,7 +474,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
           PACKAGE: ${{ steps.package.outputs.file }}
-          STANDALONE: ${{ steps.package.outputs.standalone }}
           CHANNEL: ${{ steps.version.outputs.channel }}
           APK: build/LeviMusic-Bridge-${{ steps.version.outputs.version }}.apk
         shell: bash
@@ -502,7 +482,7 @@ jobs:
           release_flags=()
           if [[ "$CHANNEL" == beta ]]; then release_flags+=(--prerelease); fi
           if [[ "${{ steps.release_check.outputs.exists }}" == true ]]; then
-            gh release upload "$TAG" "$PACKAGE" "$STANDALONE" "$APK" --clobber
+            gh release upload "$TAG" "$PACKAGE" "$APK" --clobber
             gh release edit "$TAG" --target "$GITHUB_SHA" --notes-file release-notes.md
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
               -f sha="$GITHUB_SHA" -F force=true >/dev/null
@@ -515,7 +495,7 @@ jobs:
               fi
             fi
           else
-            gh release create "$TAG" "$PACKAGE" "$STANDALONE" "$APK" \
+            gh release create "$TAG" "$PACKAGE" "$APK" \
               --target "$GITHUB_SHA" \
               "${release_flags[@]}" \
               --title "LeviMusic - Aurelis Online v$VERSION" \

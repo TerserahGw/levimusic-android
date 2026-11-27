@@ -5,23 +5,24 @@
 [![Latest release](https://img.shields.io/github/v/release/TerserahGw/levimusic-android?label=Latest%20release)](https://github.com/TerserahGw/levimusic-android/releases/latest)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-**Stable:** v1.6.11 (27 November 2026)
+**Current test build:** v1.7.0 Beta (27 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
-LeviMusic combines an in-game music interface with a separate Android companion (LeviMusic Bridge). It includes music discovery, playlists, an editable Up Next queue, synchronized lyrics, and optional 3D floating lyrics rendered locally in your Minecraft world.
+LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
 
 **[Download the latest release](https://github.com/TerserahGw/levimusic-android/releases/latest)** · [All releases](https://github.com/TerserahGw/levimusic-android/releases) · [Feature details](FEATURES.md)
 
 ## Features
 
-- **Music player and discovery:** play music using the Android Bridge, browse/search tracks, see artwork and artist details, and control Repeat or playlist Shuffle.
+- **Unified playback engine:** Aurelis fallback works without pairing, while the Bridge is selected automatically when the companion is available.
 - **Search / Playlist / Lyrics tabs:** a touch-friendly in-game interface for landscape Android. Create playlists and add or remove their tracks directly in game.
 - **Editable Up Next:** starting a song creates a temporary related-track radio with up to three future suggestions when available. Remove, play, or add songs to the queue. Saved playlists retain their own order.
 - **Synchronized lyrics:** active-line highlights and word-by-word timing when a source provides authentic word timestamps. Smaller romanized readings appear beneath the original text.
 - **Multiple lyric sources:** QQ Music/QRC, LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, local lyrics, and supported caption fallbacks. Results vary by song and provider availability.
 - **3D floating lyrics:** client-only world-space lyric panels with Unicode font fallback, four font styles, four color palettes, segmented transitions, and configurable placement. No per-world addon is required; other players do not see your lyrics.
 - **2D HUD lyrics:** synchronized words can be placed above or below the compact HUD and aligned left or right while 3D lyrics remain active.
-- **Settings:** a six-tab in-game panel for common controls, including dedicated Experimental and Keybinds tabs, with Advanced Settings for the complete list. The default 3D layout uses the verified user preset.
+- **Settings:** Compact UI [WIP] provides scrollable song lists and a single scrollable settings surface; the classic six-tab layout remains available when Compact UI is disabled.
+- **Expanded keybinds:** bind open-and-search, search focus, next, previous, play/pause, stop, repeat, shuffle, volume, lyrics, and HUD actions.
 
 This project is an unofficial community mod. It is not affiliated with Mojang, Microsoft, or the LeviLauncher maintainers.
 
@@ -31,7 +32,7 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 | --- | --- |
 | Device | Android **ARM64 (arm64-v8a)** |
 | Game / launcher | Minecraft Bedrock running through LeviLauncher Android with a compatible native mod loader |
-| Core music features | Full mode uses Bridge; Standalone defaults to the hosted Aurelis Symphony API and needs internet access, without a user-run server |
+| Core music features | One unified LeviPack; Aurelis fallback is automatic when the Bridge is unavailable |
 | 3D world lyrics | Native profiles for Minecraft **1.26.52**, **1.26.60**, **1.26.62.1**, and **1.26.66.1** (exact ARM64 Build ID only), and only when the ARM64 binary's Build ID/signatures match |
 | Minecraft 1.26.66.1 | Exact binary profile added in v1.5.1; v1.6.5 adds corrected and signature-locked environment queries plus native matrix validation |
 
@@ -39,20 +40,16 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Choose **one** LeviPack variant from the [v1.6.11 stable release](https://github.com/TerserahGw/levimusic-android/releases/tag/v1.6.11). Do not enable both variants at once.
+Install the single `LeviMusic-1.7.0-arm64-v8a.levipack`. The optional companion is now named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-### Full mode (with Android Bridge)
+## New in v1.7.0 Beta
 
-- [LeviMusic-1.6.11-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.11/LeviMusic-1.6.11-arm64-v8a.levipack)
-- [LeviMusic-Bridge-1.6.11.apk](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.11/LeviMusic-Bridge-1.6.11.apk)
-
-Install both files. The Bridge app handles playback, searches, and playlists. Existing playlists are migrated from Android preferences to an atomic file on the first edit; export and import remain available in the app.
-
-### Standalone mode (without Bridge)
-
-- [LeviMusic-Standalone-1.6.11-arm64-v8a.levipack](https://github.com/TerserahGw/levimusic-android/releases/download/v1.6.11/LeviMusic-Standalone-1.6.11-arm64-v8a.levipack)
-
-Standalone uses the hosted Aurelis Symphony API. It needs internet access but no user-run server or Bridge APK. Playlists are stored in the mod's configuration folder with a backup. Upstream YouTube streams can still fail if the provider blocks access.
+- Unified the previous Standard and Standalone packages.
+- Fixed the cinematic pass hand-off so the camera component survives cross-thread ECS scheduling; the feature remains labelled WIP until device verification.
+- Strengthened recordable PCM cave reflections and added Auto/Cave/Underwater diagnostic selection; Immersive Sound remains WIP.
+- Added twelve configurable keyboard actions. Opening the player by keybind focuses Search and opens text input immediately.
+- Added Compact UI [WIP], scrollable result/playlist lists, and a scrollable all-settings view.
+- Renamed and compacted the companion app and added an automatic-pairing tutorial.
 
 ## Fixed and improved in v1.6.11
 
