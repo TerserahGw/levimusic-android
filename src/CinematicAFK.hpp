@@ -23,7 +23,7 @@ struct Pose { float x=0,y=0,z=0,pitch=0,yaw=0;uintptr_t world=0;int64_t sampled=
 inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{false};
 inline std::atomic<int> idleDelay{15};
 inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0};
-inline std::atomic<int64_t> cameraHookAt{0},lastDiagnostic{0};
+inline std::atomic<int64_t> cameraHookAt{0},lastDiagnostic{0},lastProbeDump{0};
 inline std::atomic<uint64_t> cameraHookCalls{0},cameraApplyCalls{0},matrixRejectCalls{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;
@@ -133,11 +133,57 @@ inline bool shouldRun(Pose& out,float& strength,float& angle){
     angle=float(now-entered)*.00018f;
     return true;
 }
+#if defined(LEVI_DIAGNOSTIC_PROBE)
+inline void dumpComponent(const char* label,const void* component){
+    if(!plausible(component,alignof(float))){
+        __android_log_print(ANDROID_LOG_INFO,"LeviMusicProbe",
+            "camera %s pointer=%p invalid",label,component);
+        return;
+    }
+    std::array<uint32_t,16> raw{};
+    std::array<float,16> value{};
+    std::memcpy(raw.data(),component,sizeof(raw));
+    std::memcpy(value.data(),component,sizeof(value));
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicProbe",
+        "camera %s pointer=%p f0-7=[%.6g %.6g %.6g %.6g | %.6g %.6g %.6g %.6g]",
+        label,component,double(value[0]),double(value[1]),double(value[2]),double(value[3]),
+        double(value[4]),double(value[5]),double(value[6]),double(value[7]));
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicProbe",
+        "camera %s f8-15=[%.6g %.6g %.6g %.6g | %.6g %.6g %.6g %.6g] raw0-3=%08x,%08x,%08x,%08x",
+        label,double(value[8]),double(value[9]),double(value[10]),double(value[11]),
+        double(value[12]),double(value[13]),double(value[14]),double(value[15]),
+        raw[0],raw[1],raw[2],raw[3]);
+}
+inline void dumpCameraProbe(void* owner,void* view,const Pose& current,float strength){
+    const int64_t now=nowMs();
+    int64_t previous=lastProbeDump.load(std::memory_order_relaxed);
+    if(now-previous<3000||!lastProbeDump.compare_exchange_strong(
+        previous,now,std::memory_order_relaxed))return;
+    void* first=matrixTopDirty&&plausible(view)?matrixTopDirty(view):nullptr;
+    void* second=matrixTopDirty&&plausible(view)?
+        matrixTopDirty(static_cast<uint8_t*>(view)+0x90):nullptr;
+    uintptr_t registry=0;
+    if(plausible(owner))
+        std::memcpy(&registry,static_cast<uint8_t*>(owner)+0x10f8,sizeof(registry));
+    __android_log_print(ANDROID_LOG_INFO,"LeviMusicProbe",
+        "camera owner=%p view=%p registry=%p first=%p second=%p pose=[%.3f %.3f %.3f %.3f %.3f] strength=%.2f",
+        owner,view,reinterpret_cast<void*>(registry),first,second,double(current.x),
+        double(current.y),double(current.z),double(current.pitch),double(current.yaw),
+        double(strength));
+    dumpComponent("componentA",first);
+    dumpComponent("componentB",second);
+}
+#endif
 inline void setupHook(void* owner,void* stack,float partial){
     if(original)original(owner,stack,partial);
     cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
     Pose current;float strength=0,angle=0;
     if(!shouldRun(current,strength,angle))return;
+#if defined(LEVI_DIAGNOSTIC_PROBE)
+    dumpCameraProbe(owner,stack,current,strength);
+    matrixRejectCalls.fetch_add(1,std::memory_order_relaxed);
+    return;
+#endif
     float* stackMatrix=matrixTopDirty&&plausible(stack)?matrixTopDirty(stack):nullptr;
     // Target 1.26.66.1 writes its final camera matrix from owner+0xEB0 through
     // owner+0xF2C. The reference mod used +0xEB8 because its older class layout
@@ -253,7 +299,8 @@ inline const char* status(){
 }
 inline void shutdown(){
     enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;
-    cameraHookAt=0;cameraHookCalls=0;cameraApplyCalls=0;matrixRejectCalls=0;lastDiagnostic=0;
+    cameraHookAt=0;cameraHookCalls=0;cameraApplyCalls=0;matrixRejectCalls=0;
+    lastDiagnostic=0;lastProbeDump=0;
 }
 inline void unload(){shutdown();if(hooked&&target)pl::memory::unhook(target,reinterpret_cast<void*>(&setupHook));hooked=false;supported=false;}
 } // namespace lm_cinematic

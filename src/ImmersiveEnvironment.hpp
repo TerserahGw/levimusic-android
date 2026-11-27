@@ -33,6 +33,8 @@ inline std::atomic<bool> solidHooked{false};
 inline std::atomic<int> probePlayerX{0},probePlayerY{0},probePlayerZ{0};
 inline std::atomic<int64_t> probePlayerSample{0};
 inline std::atomic<int> loggedProbeState{-1};
+inline std::atomic<int64_t> lastSourceDump{0};
+inline uintptr_t imageBase=0;
 
 inline int64_t nowMs(){
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -100,6 +102,29 @@ inline bool solidHook(void* source,const BlockPos& pos){
     const int dx=std::abs(pos.x-head.x);
     const int dy=std::abs(pos.y-head.y);
     const int dz=std::abs(pos.z-head.z);
+#if defined(LEVI_DIAGNOSTIC_PROBE)
+    if(enabled.load(std::memory_order_relaxed)&&plausible(reinterpret_cast<uintptr_t>(source))){
+        int64_t previous=lastSourceDump.load(std::memory_order_relaxed);
+        if((now-previous>=3000)&&lastSourceDump.compare_exchange_strong(
+            previous,now,std::memory_order_relaxed)){
+            uintptr_t vtable=0,method=0;
+            std::array<uintptr_t,4> words{};
+            std::memcpy(&vtable,source,sizeof(vtable));
+            std::memcpy(words.data(),source,sizeof(words));
+            if(plausible(vtable))std::memcpy(&method,
+                reinterpret_cast<const void*>(vtable+0x1b8),sizeof(method));
+            __android_log_print(ANDROID_LOG_INFO,"LeviMusicProbe",
+                "blocksource source=%p vtableRva=0x%llx methodRva=0x%llx pos=[%d %d %d] head=[%d %d %d] delta=[%d %d %d] result=%d",
+                source,static_cast<unsigned long long>(vtable>=imageBase?vtable-imageBase:0),
+                static_cast<unsigned long long>(method>=imageBase?method-imageBase:0),
+                pos.x,pos.y,pos.z,head.x,head.y,head.z,dx,dy,dz,int(result));
+            __android_log_print(ANDROID_LOG_INFO,"LeviMusicProbe",
+                "blocksource words=%llx,%llx,%llx,%llx",
+                static_cast<unsigned long long>(words[0]),static_cast<unsigned long long>(words[1]),
+                static_cast<unsigned long long>(words[2]),static_cast<unsigned long long>(words[3]));
+        }
+    }
+#endif
     if(enabled.load(std::memory_order_relaxed)&&playerAge>=0&&playerAge<2200&&
        !probeUnderwater.load(std::memory_order_relaxed)&&dx<=64&&dy<=64&&dz<=64&&
        plausible(reinterpret_cast<uintptr_t>(source))){
@@ -109,13 +134,16 @@ inline bool solidHook(void* source,const BlockPos& pos){
             if(loggedProbeState.exchange(1)!=1)
                 __android_log_print(ANDROID_LOG_INFO,"LeviMusicImmersive",
                     "sampling live BlockSource inside callback distance=%d",dx+dy+dz);
+#if !defined(LEVI_DIAGNOSTIC_PROBE)
             sampleEnclosure(source,head,now);
+#endif
         }
     }
     return result;
 }
 inline void prepare(uintptr_t base,bool exact26661){
     supported=false;isInWater=nullptr;isSolid=nullptr;
+    imageBase=base;
     if(!base||!exact26661)return;
     constexpr uintptr_t waterRva=0xFD8DB60;
     constexpr uintptr_t solidRva=0x10374160;
@@ -180,7 +208,7 @@ inline void request(bool value){
     if(!value){
         environment=0;lastSample=0;lastWorldProbe=0;lastCaveEvidence=0;
         loggedEnvironment=-1;probeUnderwater=false;
-        probePlayerSample=0;loggedProbeState=-1;
+        probePlayerSample=0;loggedProbeState=-1;lastSourceDump=0;
     }
 }
 inline Environment current(){return static_cast<Environment>(environment.load());}

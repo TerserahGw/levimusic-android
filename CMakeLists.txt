@@ -16,6 +16,9 @@ FetchContent_MakeAvailable(preloader_android)
 
 add_library(levimusic SHARED src/LeviMusic.cpp)
 add_library(levimusic_standalone SHARED src/LeviMusic.cpp)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/DIAGNOSTIC_PROBE")
+    target_compile_definitions(levimusic PRIVATE LEVI_DIAGNOSTIC_PROBE=1)
+endif()
 target_compile_definitions(levimusic_standalone PRIVATE LEVI_STANDALONE=1)
 find_library(ANDROID_LOG_LIB log REQUIRED)
 foreach(target IN ITEMS levimusic levimusic_standalone)
@@ -26,7 +29,7 @@ foreach(target IN ITEMS levimusic levimusic_standalone)
 endforeach()
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.6.11-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.6.12-arm64-v8a.levipack")
 add_custom_target(levipack
     COMMAND ${CMAKE_COMMAND} -E rm -rf "${PACK_DIR}"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${PACK_DIR}"
@@ -43,7 +46,7 @@ add_custom_target(levipack
 # This standalone variant does not have a full Bridge music API.
 # Never enable both native variants simultaneously.
 set(STANDALONE_DIR "${CMAKE_CURRENT_BINARY_DIR}/standalone_pack")
-set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.6.11-arm64-v8a.levipack")
+set(STANDALONE_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-Standalone-1.6.12-arm64-v8a.levipack")
 set(BROWSER_DEX "${CMAKE_CURRENT_BINARY_DIR}/browser-dex/classes.dex")
 if(NOT EXISTS "${BROWSER_DEX}")
     message(FATAL_ERROR "Standalone browser.dex missing. Compile standalone_browser Java with d8 before CMake build.")
