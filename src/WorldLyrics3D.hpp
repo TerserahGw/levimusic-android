@@ -295,7 +295,7 @@ inline void tickHook(void* player){
     const float normalizedYaw=std::remainder(yaw,360.f);
     const auto world=read<uintptr_t>(player,profile->level);
     lastPlayerTick=nowMs();lastPlayerWorld=world;
-    lm_cinematic::observePlayer(position.x,position.y,position.z,pitch,normalizedYaw,world);
+    lm_cinematic::observePlayer(player,position.x,position.y,position.z,pitch,normalizedYaw,world);
     lm_immersive::observePlayer(player,position.x,position.y,position.z);
     if(!enabled.load(std::memory_order_relaxed))return;
     Pose next{pitch,normalizedYaw,reinterpret_cast<uintptr_t>(player),
