@@ -94,7 +94,7 @@ inline void sampleClient(void* client){
     if(!plausible(vtable)){loggedProbeState=0;return;}
     uintptr_t method=0;
     std::memcpy(&method,reinterpret_cast<const void*>(vtable+30*sizeof(void*)),sizeof(method));
-    if(!plausible(method)){loggedProbeState=0;return;}
+    if(!plausible(method,1)){loggedProbeState=0;return;}
     auto getRegion=reinterpret_cast<GetRegionFn>(method);
     void* source=getRegion(client);
     if(!plausible(reinterpret_cast<uintptr_t>(source))){loggedProbeState=0;return;}

@@ -162,7 +162,7 @@ inline void cameraHook(void* camera,void* component,void* player){
         "CameraComponent orbit active");
 }
 inline void prepare(uintptr_t base,bool exact26661){
-    if(hooked||!exact26661||!base){supported=hooked;return;}
+    if(hooked||!exact26661||!base){supported=hooked.load();return;}
     constexpr auto updateRva=uintptr_t(0x8A42900);
     constexpr std::string_view signature=
         "? ? ? D1 ? ? ? FD ? ? ? A9 ? ? ? F9 ? ? ? A9 ? ? ? A9 ? ? ? 91 54 D0 3B D5 ? ? ? 52";
