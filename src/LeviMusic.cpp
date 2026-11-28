@@ -3444,7 +3444,7 @@ private:
                             const float lyricSize=((floatingLyrics_ && !worldLyrics3D_)?15.8f:14.4f)*u;
                             auto alignedX=[&](std::string_view value,float size){
                                 if(!alignRight||(floatingLyrics_&&!worldLyrics3D_))return subtitleX;
-                                const std::string drawn=shorten(value,70);
+                                const std::string drawn=shorten(std::string(value),70);
                                 const float width=float(lm_timing::utf8Length(drawn))*size*.56f;
                                 return std::max(3*u,l.mini.x+l.mini.w-3*u-width);
                             };
