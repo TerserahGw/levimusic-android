@@ -24,6 +24,29 @@ inline size_t utf8Length(std::string_view value){
     return count;
 }
 
+// Match provider word cues back to the original lyric without inventing
+// character boundaries. Gaps are kept with the following cue, so punctuation
+// such as Japanese 、。 remains visible while every returned boundary still
+// belongs to an authentic provider timestamp.
+inline std::vector<size_t> alignedTokenEnds(
+    std::string_view line,const std::vector<WordCue>& words){
+    std::vector<size_t> ends;
+    if(line.empty()||words.empty())return ends;
+    size_t cursor=0;
+    for(const auto& word:words){
+        const auto first=word.text.find_first_not_of(" \t\r\n");
+        if(first==std::string::npos)return {};
+        const auto last=word.text.find_last_not_of(" \t\r\n");
+        const std::string_view token(word.text.data()+first,last-first+1);
+        const size_t at=line.find(token,cursor);
+        if(at==std::string_view::npos)return {};
+        cursor=at+token.size();
+        ends.push_back(cursor);
+    }
+    if(cursor<line.size())ends.back()=line.size();
+    return ends;
+}
+
 inline std::string revealedText(std::string_view line,
                                 const std::vector<WordCue>& words,int positionMs){
     if(words.empty())return std::string(line); // ordinary line-timed LRC
@@ -46,6 +69,13 @@ inline std::string revealedText(std::string_view line,
             (visible*ends.size()+words.size()-1)/words.size(),size_t(1),ends.size());
         return std::string(line.substr(0,ends[shown-1]));
     }
+
+    // Non-spaced scripts must follow the provider's real token boundaries.
+    // This also tolerates punctuation present in the display line but omitted
+    // by the timed token text.
+    const auto aligned=alignedTokenEnds(line,words);
+    if(aligned.size()==words.size())
+        return std::string(line.substr(0,aligned[visible-1]));
 
     // For CJK or split syllables, use the relative character lengths of the
     // source tokens, stopping only at a complete UTF-8 code point.

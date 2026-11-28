@@ -204,24 +204,35 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
        !canvasCtor||!draw||!configField)return false;
     jobject config=env->GetStaticObjectField(configClass,configField);
     const bool minecraft=font==0;
-    // Minecraft Style deliberately removes sub-pixel smoothing and uses a
-    // square monospace silhouette. Smooth keeps the existing high-resolution
-    // Android fallback, which is still needed for every Unicode script.
-    jobject paint=env->NewObject(paintClass,paintCtor,minecraft?0:3);
-    jstring family=toJava(env,minecraft?"monospace":"sans-serif-condensed");
+    // The Minecraft option keeps the proven v1.7.0 Latin renderer. Unsupported
+    // scripts switch per-part to the Unicode fallback introduced in v1.7.1.
+    jobject paint=env->NewObject(paintClass,paintCtor,3);
+    jstring family=toJava(env,minecraft?"sans-serif":"sans-serif-condensed");
+    jstring unicodeFamily=toJava(env,"monospace");
     jobject face=family?env->CallStaticObjectMethod(faceClass,faceCreate,family,0):nullptr;
+    jobject unicodeFace=unicodeFamily?
+        env->CallStaticObjectMethod(faceClass,faceCreate,unicodeFamily,0):nullptr;
     if(paint&&face){
-        env->CallVoidMethod(paint,setSize,minecraft?66.f:72.f);
-        env->CallVoidMethod(paint,setScale,minecraft?.94f:.82f);
+        env->CallVoidMethod(paint,setSize,72.f);
+        env->CallVoidMethod(paint,setScale,minecraft?1.f:.82f);
         env->CallVoidMethod(paint,setSkew,0.f);
-        env->CallVoidMethod(paint,setBold,minecraft?JNI_TRUE:JNI_FALSE);
+        env->CallVoidMethod(paint,setBold,JNI_FALSE);
         env->CallVoidMethod(paint,setColor,jint(0xFFFFFFFFU));
         jobject old=env->CallObjectMethod(paint,setFace,face);
         if(old)env->DeleteLocalRef(old);
     }
-    bool ok=config&&paint&&face&&!clearException(env,"world font setup");
+    bool ok=config&&paint&&face&&unicodeFace&&!clearException(env,"world font setup");
     for(const auto& part:parts){
         if(!ok)break;
+        const bool complex=std::any_of(part.begin(),part.end(),
+            [](unsigned char ch){return ch>=128;});
+        if(minecraft){
+            env->CallVoidMethod(paint,setSize,complex?66.f:72.f);
+            env->CallVoidMethod(paint,setScale,complex?.94f:1.f);
+            env->CallVoidMethod(paint,setBold,complex?JNI_TRUE:JNI_FALSE);
+            jobject old=env->CallObjectMethod(paint,setFace,complex?unicodeFace:face);
+            if(old)env->DeleteLocalRef(old);
+        }
         jstring text=toJava(env,part);
         if(!text){ok=false;break;}
         const float measured=ok?env->CallFloatMethod(paint,measure,text):0.f;
@@ -244,11 +255,9 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
                 else {
                     std::vector<uint8_t> alpha(rgba.size());
                     for(size_t i=0;i<rgba.size();++i)alpha[i]=uint8_t(uint32_t(rgba[i])>>24);
-                    const bool complex=std::any_of(part.begin(),part.end(),
-                        [](unsigned char ch){return ch>=128;});
-                    const int sampleStep=minecraft?(complex?4:5):(complex?1:2);
+                    const int sampleStep=minecraft?(complex?4:2):(complex?1:2);
                     mesh=lm_world3d::rasterMesh(alpha,width,height,80,sampleStep);
-                    if(minecraft)mesh.outline.clear();
+                    if(minecraft&&complex)mesh.outline.clear();
                     mesh.scale*=2.f/3.f; // keep world size while increasing raster density
                     if(mesh.pixels.empty())ok=false;
                 }
@@ -261,6 +270,8 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         env->DeleteLocalRef(text);
         if(ok)result.push_back(std::move(mesh));
     }
+    if(unicodeFace)env->DeleteLocalRef(unicodeFace);
+    if(unicodeFamily)env->DeleteLocalRef(unicodeFamily);
     if(face)env->DeleteLocalRef(face);
     if(family)env->DeleteLocalRef(family);
     if(paint)env->DeleteLocalRef(paint);

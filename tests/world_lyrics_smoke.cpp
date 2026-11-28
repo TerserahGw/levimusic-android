@@ -335,9 +335,16 @@ int main(){
     const auto exactCjk=unicodeParts("夜に駆ける",cjkWords);
     assert(exactCjk.size()==4&&exactCjk[0]=="夜"&&exactCjk[2]=="駆け");
     const auto punctuatedCjk=unicodeParts("夜に、駆ける",cjkWords);
-    assert(punctuatedCjk.size()==4);
+    assert(punctuatedCjk.size()==4&&punctuatedCjk[0]=="夜"&&
+           punctuatedCjk[1]=="に"&&punctuatedCjk[2]=="、駆け"&&
+           punctuatedCjk[3]=="る");
     std::string rebuiltCjk;for(const auto& part:punctuatedCjk)rebuiltCjk+=part;
     assert(rebuiltCjk=="夜に、駆ける");
+    assert(lm_timing::revealedText("夜に、駆ける",cjkWords,5350)=="夜に");
+    assert(lm_timing::revealedText("夜に、駆ける",cjkWords,5700)=="夜に、駆け");
+    const std::vector<lm_timing::WordCue> mismatchedCjk{{5000,5500,"yoru"},
+        {5500,6000,"ni"},{6000,6500,"kakeru"}};
+    assert(unicodeParts("夜に駆ける",mismatchedCjk)==splitUnicodeLyric("夜に駆ける"));
     scene=Scene{};
     std::vector<GlyphMesh> unicodeMesh;
     for(size_t i=0;i<splitUnicodeLyric("夜に駆ける 한국어").size();++i){
