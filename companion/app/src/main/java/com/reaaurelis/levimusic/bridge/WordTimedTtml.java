@@ -24,6 +24,19 @@ final class WordTimedTtml {
     private static String mark(long ms,char open,char close){
         return String.format(Locale.ROOT,"%c%02d:%05.2f%c",open,ms/60000,(ms%60000)/1000.0,close);
     }
+    private static boolean excluded(Element element){
+        String role=(element.getAttribute("ttm:role")+" "+element.getAttribute("role")).toLowerCase(Locale.ROOT);
+        return role.contains("roman")||role.contains("translation")||role.contains("x-bg");
+    }
+    private static void append(Node node,StringBuilder output,boolean markers,boolean[] timed){
+        if(node.getNodeType()==Node.TEXT_NODE){output.append(node.getNodeValue());return;}
+        if(!(node instanceof Element))return;
+        Element element=(Element)node;if(excluded(element))return;
+        long at=ms(element.getAttribute("begin"));
+        if(markers&&at>=0){output.append(mark(at,'<','>'));timed[0]=true;}
+        NodeList children=element.getChildNodes();
+        for(int i=0;i<children.getLength();i++)append(children.item(i),output,markers,timed);
+    }
     static String convert(String ttml){
         if(ttml==null||ttml.length()>500000||!ttml.contains("<tt")
             ||ttml.contains("<!DOCTYPE")||ttml.contains("<!ENTITY"))return "";
@@ -42,26 +55,17 @@ final class WordTimedTtml {
                 Element line=(Element)rows.item(i);
                 long start=ms(line.getAttribute("begin"));
                 if(start<0)continue;
-                StringBuilder body=new StringBuilder();
-                boolean timed=false;
+                StringBuilder body=new StringBuilder();boolean[] timed={false};
                 NodeList children=line.getChildNodes();
-                for(int j=0;j<children.getLength();j++){
-                    Node child=children.item(j);
-                    if(child instanceof Element){
-                        Element span=(Element)child;
-                        if(span.getAttribute("ttm:role").contains("roman")||
-                           span.getAttribute("ttm:role").contains("translation")||
-                           span.getAttribute("ttm:role").equals("x-bg"))continue;
-                        long at=ms(span.getAttribute("begin"));
-                        if(at>=0){body.append(mark(at,'<','>'));timed=true;}
-                        body.append(span.getTextContent());
-                    }else if(child.getNodeType()==Node.TEXT_NODE)body.append(child.getTextContent());
+                for(int j=0;j<children.getLength();j++)append(children.item(j),body,true,timed);
+                if(!timed[0]){
+                    body.setLength(0);boolean[] ignored={false};
+                    for(int j=0;j<children.getLength();j++)append(children.item(j),body,false,ignored);
                 }
-                if(!timed){body.setLength(0);body.append(line.getTextContent());}
                 String clean=body.toString().replaceAll("\\s+"," ").trim();
                 if(clean.isEmpty())continue;
                 output.append(mark(start,'[',']')).append(' ').append(clean);
-                if(timed){long end=ms(line.getAttribute("end"));if(end>start)output.append(mark(end,'<','>'));}
+                if(timed[0]){long end=ms(line.getAttribute("end"));if(end>start)output.append(mark(end,'<','>'));}
                 output.append('\n');
             }
             return output.toString();

@@ -330,6 +330,14 @@ int main(){
     const auto gaze=normalized(pose.position+Vec3{0,1.6f,0}-cam);
     assert(newRay.x*gaze.x+newRay.y*gaze.y+newRay.z*gaze.z>.4f);
     assert(scene.panels.front().anchor.x==thirdFirst.x);
+    const std::vector<lm_timing::WordCue> cjkWords{{5000,5350,"夜"},
+        {5350,5700,"に"},{5700,6300,"駆け"},{6300,6800,"る"}};
+    const auto exactCjk=unicodeParts("夜に駆ける",cjkWords);
+    assert(exactCjk.size()==4&&exactCjk[0]=="夜"&&exactCjk[2]=="駆け");
+    const auto punctuatedCjk=unicodeParts("夜に、駆ける",cjkWords);
+    assert(punctuatedCjk.size()==4);
+    std::string rebuiltCjk;for(const auto& part:punctuatedCjk)rebuiltCjk+=part;
+    assert(rebuiltCjk=="夜に、駆ける");
     scene=Scene{};
     std::vector<GlyphMesh> unicodeMesh;
     for(size_t i=0;i<splitUnicodeLyric("夜に駆ける 한국어").size();++i){
@@ -343,6 +351,16 @@ int main(){
     assert(scene.panels.size()==unicodeMesh.size());
     assert(scene.panels.front().pixels.front().coverage==180);
     assert(scene.panels.front().pixelScale==.016f);
+    scene=Scene{};pose.time=nowMs();
+    std::vector<GlyphMesh> cjkMeshes(exactCjk.size());
+    for(auto& mesh:cjkMeshes){mesh.width=12;mesh.scale=.016f;mesh.pixels.push_back({0,0,0,255});}
+    publish("夜に駆ける",5000,7000,5000,false,cjkWords,cjkMeshes,0);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.panels.size()==4&&scene.panels[0].sourceWord==0&&
+           scene.panels[1].sourceWord==1&&scene.panels[1].appeared==0);
+    publish("夜に駆ける",5000,7000,5900,false,cjkWords,cjkMeshes,0);
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.panels[1].appeared>0&&scene.panels[2].appeared>0&&scene.panels[3].appeared==0);
     scene=Scene{};
     pose.time=nowMs();
     const std::vector<lm_timing::WordCue> fadeWords{{100,200,"one"},

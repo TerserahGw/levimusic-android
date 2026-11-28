@@ -410,11 +410,49 @@ inline std::vector<std::string> unicodeParts(std::string_view text,
         std::string joined;
         std::vector<std::string> parts;
         for(const auto& word:words){
-            joined+=word.text;
-            if(lm_timing::utf8Length(word.text)>6)return splitUnicodeLyric(text);
-            parts.push_back(word.text);
+            const auto first=word.text.find_first_not_of(" \t\r\n");
+            if(first==std::string::npos)continue;
+            const auto last=word.text.find_last_not_of(" \t\r\n");
+            const std::string token=word.text.substr(first,last-first+1);
+            joined+=token;
+            if(lm_timing::utf8Length(token)>6)break;
+            parts.push_back(token);
         }
-        if(joined==text)return parts;
+        if(joined==text&&parts.size()>1)return parts;
+
+        // CJK providers sometimes include punctuation/furigana differences in
+        // their token text. Keep the authentic cue count anyway and divide the
+        // displayed line proportionally instead of collapsing a short line to
+        // one six-character panel that appears all at once.
+        std::vector<size_t> offsets{0};
+        for(size_t at=0;at<text.size();){
+            ++at;
+            while(at<text.size()&&
+                  (static_cast<unsigned char>(text[at])&0xC0)==0x80)++at;
+            offsets.push_back(at);
+        }
+        const size_t characters=offsets.size()-1;
+        const size_t count=std::min({size_t(32),words.size(),characters});
+        if(count>1){
+            std::vector<size_t> weights(words.size(),1);
+            size_t totalWeight=0;
+            for(size_t i=0;i<words.size();++i){
+                weights[i]=std::max<size_t>(1,lm_timing::utf8Length(words[i].text));
+                totalWeight+=weights[i];
+            }
+            parts.clear();size_t previousChar=0,usedWeight=0,source=0;
+            for(size_t i=0;i<count;++i){
+                const size_t sourceEnd=(i+1)*words.size()/count;
+                while(source<sourceEnd){usedWeight+=weights[source];++source;}
+                size_t endChar=i+1==count?characters:
+                    (characters*usedWeight+totalWeight/2)/totalWeight;
+                endChar=std::clamp(endChar,previousChar+1,characters-(count-i-1));
+                parts.emplace_back(text.substr(offsets[previousChar],
+                    offsets[endChar]-offsets[previousChar]));
+                previousChar=endChar;
+            }
+            return parts;
+        }
     }
     return splitUnicodeLyric(text);
 }

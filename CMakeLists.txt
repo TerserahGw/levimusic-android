@@ -28,7 +28,7 @@ foreach(target IN ITEMS levimusic)
 endforeach()
 
 set(PACK_DIR "${CMAKE_CURRENT_BINARY_DIR}/levipack")
-set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.7.1-Beta8-arm64-v8a.levipack")
+set(PACK_FILE "${CMAKE_CURRENT_BINARY_DIR}/LeviMusic-1.7.1-arm64-v8a.levipack")
 set(BROWSER_DEX "${CMAKE_CURRENT_BINARY_DIR}/browser-dex/classes.dex")
 if(NOT EXISTS "${BROWSER_DEX}")
     message(FATAL_ERROR "Unified fallback browser.dex missing. Compile standalone_browser Java with d8 before CMake build.")

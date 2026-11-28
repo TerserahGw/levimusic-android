@@ -246,8 +246,9 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
                     for(size_t i=0;i<rgba.size();++i)alpha[i]=uint8_t(uint32_t(rgba[i])>>24);
                     const bool complex=std::any_of(part.begin(),part.end(),
                         [](unsigned char ch){return ch>=128;});
-                    const int sampleStep=minecraft?(complex?3:4):(complex?1:2);
+                    const int sampleStep=minecraft?(complex?4:5):(complex?1:2);
                     mesh=lm_world3d::rasterMesh(alpha,width,height,80,sampleStep);
+                    if(minecraft)mesh.outline.clear();
                     mesh.scale*=2.f/3.f; // keep world size while increasing raster density
                     if(mesh.pixels.empty())ok=false;
                 }
@@ -2446,7 +2447,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta8 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1 unified stable loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -3736,7 +3737,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta8 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1 UNIFIED STABLE",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
