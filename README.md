@@ -6,7 +6,7 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 **Current stable build:** v1.7.0 (27 November 2026)
-**Current beta build:** v1.7.1-Beta4 (28 November 2026)
+**Current beta build:** v1.7.1-Beta5 (28 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -41,16 +41,15 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta4-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta5-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-## Testing in v1.7.1-Beta4
+## Testing in v1.7.1-Beta5
 
-- Cinematic AFK uses player pose changes as the authoritative activity signal, so synthetic input callbacks no longer postpone the orbit indefinitely.
-- Automatic cave/room sampling reads the live 1.26.66.1 Dimension BlockSource directly and probes the enclosure more frequently.
-- Enhanced LRC word markers are preserved as individual word cues instead of being flattened into line timing.
-- 3D lyrics keep the original script as the main line and render a smaller romanized reading underneath.
-- The compact HUD is draggable through LeviLauncher Edit/Customize Controls and retains its proportional position across screen sizes.
-- Up Next reserves one bottom footer for list status and controls, preventing overlapping information text.
+- 3D text rasterization accepts Android font fallback for Japanese, Korean, Chinese, Arabic, emoji, symbols, and other Unicode scripts, with denser glyph meshes.
+- Instrumental gaps display animated musical-note interludes instead of leaving an expired vocal line in world space.
+- Lyrics moved from the right tab into Now Playing between track metadata and the duration bar.
+- The embedded lyric view follows and highlights the active line, supports word-timestamp progress, centered text, and vertical scrolling.
+- Compact UI now reduces the complete Music and Settings panels; disabling it restores the full-size layout.
 
 ## New in v1.7.0 Stable
 

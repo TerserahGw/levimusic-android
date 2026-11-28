@@ -188,7 +188,6 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;");
     auto setColor=env->GetMethodID(paintClass,"setColor","(I)V");
     auto measure=env->GetMethodID(paintClass,"measureText","(Ljava/lang/String;)F");
-    auto hasGlyph=env->GetMethodID(paintClass,"hasGlyph","(Ljava/lang/String;)Z");
     auto faceCreate=env->GetStaticMethodID(faceClass,"create",
         "(Ljava/lang/String;I)Landroid/graphics/Typeface;");
     auto bitmapCreate=env->GetStaticMethodID(bitmapClass,"createBitmap",
@@ -201,7 +200,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
     auto configField=env->GetStaticFieldID(configClass,"ARGB_8888",
         "Landroid/graphics/Bitmap$Config;");
     if(clearException(env,"world font methods")||!paintCtor||!setSize||!setScale||!setSkew||!setBold||!setFace||!setColor||
-       !measure||!hasGlyph||!faceCreate||!bitmapCreate||!getPixels||!recycle||
+       !measure||!faceCreate||!bitmapCreate||!getPixels||!recycle||
        !canvasCtor||!draw||!configField)return false;
     jobject config=env->GetStaticObjectField(configClass,configField);
     jobject paint=env->NewObject(paintClass,paintCtor,3);
@@ -209,7 +208,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
     jstring family=toJava(env,families[std::clamp(font,0,3)]);
     jobject face=family?env->CallStaticObjectMethod(faceClass,faceCreate,family,0):nullptr;
     if(paint&&face){
-        env->CallVoidMethod(paint,setSize,48.f);
+        env->CallVoidMethod(paint,setSize,72.f);
         // Android may choose the same CJK fallback for several family names.
         // Give every choice a visible weight, slant, or width of its own.
         env->CallVoidMethod(paint,setScale,font==3?.82f:font==2?1.08f:1.f);
@@ -224,11 +223,9 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         if(!ok)break;
         jstring text=toJava(env,part);
         if(!text){ok=false;break;}
-        // Missing font glyphs should be handled by romanized fallback, not boxes.
-        if(!env->CallBooleanMethod(paint,hasGlyph,text))ok=false;
         const float measured=ok?env->CallFloatMethod(paint,measure,text):0.f;
-        const int width=std::clamp(int(std::ceil(measured))+14,14,600);
-        constexpr int height=68;
+        const int width=std::clamp(int(std::ceil(measured))+18,18,900);
+        constexpr int height=100;
         jobject bitmap=ok?env->CallStaticObjectMethod(bitmapClass,bitmapCreate,
             width,height,config):nullptr;
         jobject canvas=bitmap?env->NewObject(canvasClass,canvasCtor,bitmap):nullptr;
@@ -236,7 +233,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         if(!bitmap||!canvas||!pixels||clearException(env,"world font bitmap"))ok=false;
         lm_world3d::GlyphMesh mesh;
         if(ok){
-            env->CallVoidMethod(canvas,draw,text,6.f,56.f,paint);
+            env->CallVoidMethod(canvas,draw,text,8.f,80.f,paint);
             env->CallVoidMethod(bitmap,getPixels,pixels,0,width,0,0,width,height);
             if(clearException(env,"world font draw"))ok=false;
             else {
@@ -248,8 +245,9 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
                     for(size_t i=0;i<rgba.size();++i)alpha[i]=uint8_t(uint32_t(rgba[i])>>24);
                     const bool complex=std::any_of(part.begin(),part.end(),
                         [](unsigned char ch){return ch>=128;});
-                    const int sampleStep=complex&&lm_timing::utf8Length(part)<=2?1:2;
-                    mesh=lm_world3d::rasterMesh(alpha,width,height,56,sampleStep);
+                    const int sampleStep=complex?1:2;
+                    mesh=lm_world3d::rasterMesh(alpha,width,height,80,sampleStep);
+                    mesh.scale*=2.f/3.f; // keep world size while increasing raster density
                     if(mesh.pixels.empty())ok=false;
                 }
             }
@@ -2061,9 +2059,9 @@ struct Rect {
     bool contains(float a,float b)const{return a>=x&&b>=y&&a<=x+w&&b<=y+h;}
 };
 struct UI {
-    float w{},h{},s{};
+    float w{},h{},s{},m{};
     Rect mini,outer,left,lyrics,right,close,settings,pair,library,addSong,searchBox,searchGo,repeat,shuffle,prev,play,next,stop,seek,pagePrev,pageNext;
-    Rect tabSearch,tabQueue,tabLyrics,queueNow,queueSaved,savedInput,savedCreate;
+    Rect tabSearch,tabQueue,queueNow,queueSaved,savedInput,savedCreate;
     std::vector<Rect> rows;
     bool ok()const{return w>0&&h>0;}
 };
@@ -2103,27 +2101,27 @@ constexpr std::array<SettingRow,32> quickSettings{{
     {"compactUi","Compact UI [WIP]",4,0,1,true},
 }};
 inline Rect settingsSidebar(const UI& l){
-    const float u=l.s;
+    const float u=l.m;
     return {l.outer.x+20*u,l.outer.y+82*u,std::min(158*u,l.outer.w*.25f),l.outer.h-130*u};
 }
 inline Rect settingsCategoryRow(const UI& l,int index){
-    const float u=l.s;const Rect side=settingsSidebar(l);
+    const float u=l.m;const Rect side=settingsSidebar(l);
     // All current categories always fit; on shorter surfaces the rows compact
     // themselves instead of disappearing below the panel.
     const float step=std::max(27*u,std::min(44*u,(side.h-12*u)/6.f));
     return {side.x+6*u,side.y+6*u+index*step,side.w-12*u,step-5*u};
 }
 inline Rect settingsContent(const UI& l){
-    const float u=l.s;const Rect side=settingsSidebar(l);
+    const float u=l.m;const Rect side=settingsSidebar(l);
     return {side.x+side.w+10*u,side.y,l.outer.x+l.outer.w-20*u-(side.x+side.w+10*u),side.h};
 }
 inline Rect settingsContentRow(const UI& l,int index){
-    const float u=l.s;const Rect content=settingsContent(l);
+    const float u=l.m;const Rect content=settingsContent(l);
     const float step=std::max(34*u,(content.h-12*u)/7.f);
     return {content.x+6*u,content.y+6*u+index*step,content.w-12*u,step-5*u};
 }
 inline Rect settingsAdvanced(const UI& l){
-    const float u=l.s;return {l.outer.x+l.outer.w-180*u,
+    const float u=l.m;return {l.outer.x+l.outer.w-180*u,
         l.outer.y+l.outer.h-43*u,155*u,30*u};
 }
 UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=false) {
@@ -2140,51 +2138,54 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
         std::clamp((p.h-miniH)*std::clamp(hudY,0,100)/100.f,4*u,p.h-miniH-4*u),
         miniW,miniH
     };
+    p.m=p.s*(compact?.78f:1.f);
+    const float m=p.m;
     const float topPercent=std::clamp(panelTop,12,32)/100.f;
-    p.outer=compact?Rect{p.w*.085f,p.h*.105f,p.w*.83f,p.h*.845f}:
+    p.outer=compact?Rect{p.w*.14f,p.h*.14f,p.w*.72f,p.h*.72f}:
                     Rect{p.w*.055f,p.h*topPercent,p.w*.89f,p.h*(.967f-topPercent)};
-    const float contentY=p.outer.y+48*u,contentH=p.outer.h-59*u;
-    const float contentX=p.outer.x+13*u,contentW=p.outer.w-26*u;
-    const float gutter=8*u,playerW=contentW*.365f;
+    const float contentY=p.outer.y+48*m,contentH=p.outer.h-59*m;
+    const float contentX=p.outer.x+13*m,contentW=p.outer.w-26*m;
+    const float gutter=8*m,playerW=contentW*(compact?.42f:.365f);
     p.left={contentX,contentY,playerW,contentH};
     p.right={contentX+playerW+gutter,contentY,
              contentW-playerW-gutter,contentH};
-    // Right-hand three tabs share one content surface, never overlap.
-    const float tabGap=4*u;
-    const float tabW=(p.right.w-20*u-2*tabGap)/3.f;
-    const float tabY=p.right.y+6*u;
-    p.tabSearch={p.right.x+10*u,tabY,tabW,27*u};
-    p.tabQueue={p.tabSearch.x+tabW+tabGap,tabY,tabW,27*u};
-    p.tabLyrics={p.tabQueue.x+tabW+tabGap,tabY,tabW,27*u};
-    p.close={p.outer.x+p.outer.w-42*u,p.outer.y+10*u,30*u,30*u};
-    p.settings={p.close.x-39*u,p.close.y,30*u,30*u};
-    p.pair={p.settings.x-69*u,p.close.y,61*u,30*u};
-    p.library={p.right.x+p.right.w-91*u,p.right.y+39*u,81*u,28*u};
-    p.queueNow={p.right.x+10*u,p.right.y+39*u,79*u,28*u};
-    p.queueSaved={p.library.x,p.right.y+39*u,81*u,28*u};
-    p.addSong={p.right.x+p.right.w-45*u,p.right.y+73*u,35*u,25*u};
-    p.savedInput={p.right.x+10*u,p.right.y+71*u,p.right.w-82*u,29*u};
-    p.savedCreate={p.right.x+p.right.w-58*u,p.right.y+71*u,48*u,29*u};
-    p.searchBox={p.right.x+10*u,p.right.y+39*u,p.right.w-80*u,30*u};
-    p.searchGo={p.right.x+p.right.w-57*u,p.right.y+39*u,47*u,30*u};
-    const float bottom=p.left.y+p.left.h-57*u;
+    // Lyrics live inside Now Playing; the right side only switches Search/Queue.
+    const float tabGap=4*m;
+    const float tabW=(p.right.w-20*m-tabGap)/2.f;
+    const float tabY=p.right.y+6*m;
+    p.tabSearch={p.right.x+10*m,tabY,tabW,27*m};
+    p.tabQueue={p.tabSearch.x+tabW+tabGap,tabY,tabW,27*m};
+    p.close={p.outer.x+p.outer.w-42*m,p.outer.y+10*m,30*m,30*m};
+    p.settings={p.close.x-39*m,p.close.y,30*m,30*m};
+    p.pair={p.settings.x-69*m,p.close.y,61*m,30*m};
+    p.library={p.right.x+p.right.w-91*m,p.right.y+39*m,81*m,28*m};
+    p.queueNow={p.right.x+10*m,p.right.y+39*m,79*m,28*m};
+    p.queueSaved={p.library.x,p.right.y+39*m,81*m,28*m};
+    p.addSong={p.right.x+p.right.w-45*m,p.right.y+73*m,35*m,25*m};
+    p.savedInput={p.right.x+10*m,p.right.y+71*m,p.right.w-82*m,29*m};
+    p.savedCreate={p.right.x+p.right.w-58*m,p.right.y+71*m,48*m,29*m};
+    p.searchBox={p.right.x+10*m,p.right.y+39*m,p.right.w-80*m,30*m};
+    p.searchGo={p.right.x+p.right.w-57*m,p.right.y+39*m,47*m,30*m};
+    const float bottom=p.left.y+p.left.h-57*m;
     const float mid=p.left.x+p.left.w*.5f;
     p.stop={-10000.f,-10000.f,0.f,0.f};
-    p.prev={mid-87*u,bottom,45*u,44*u};
-    p.play={mid-33*u,bottom,66*u,44*u};
-    p.next={mid+42*u,bottom,45*u,44*u};
-    p.repeat={mid-132*u,bottom+5*u,34*u,34*u};
-    p.shuffle={mid+98*u,bottom+5*u,34*u,34*u};
-    p.seek={p.left.x+18*u,bottom-41*u,p.left.w-36*u,15*u};
-    const float rowStart=p.right.y+116*u;
-    const float rowBottom=p.right.y+p.right.h-40*u;
+    p.prev={mid-87*m,bottom,45*m,44*m};
+    p.play={mid-33*m,bottom,66*m,44*m};
+    p.next={mid+42*m,bottom,45*m,44*m};
+    p.repeat={mid-132*m,bottom+5*m,34*m,34*m};
+    p.shuffle={mid+98*m,bottom+5*m,34*m,34*m};
+    p.seek={p.left.x+18*m,bottom-41*m,p.left.w-36*m,15*m};
+    p.lyrics={p.left.x+14*m,p.left.y+112*m,p.left.w-28*m,
+              std::max(48*m,p.seek.y-(p.left.y+112*m)-18*m)};
+    const float rowStart=p.right.y+116*m;
+    const float rowBottom=p.right.y+p.right.h-40*m;
     const int rowCount=compact?7:5;
-    const float rowStep=std::max(19*u,(rowBottom-rowStart)/float(rowCount));
+    const float rowStep=std::max(19*m,(rowBottom-rowStart)/float(rowCount));
     for(int i=0;i<rowCount;i++)
-        p.rows.push_back({p.right.x+11*u,rowStart+i*rowStep,
-                          p.right.w-22*u,std::max(15*u,rowStep-4*u)});
-    p.pagePrev={p.right.x+p.right.w-112*u,p.right.y+p.right.h-36*u,37*u,29*u};
-    p.pageNext={p.right.x+p.right.w-62*u,p.right.y+p.right.h-36*u,37*u,29*u};
+        p.rows.push_back({p.right.x+11*m,rowStart+i*rowStep,
+                          p.right.w-22*m,std::max(15*m,rowStep-4*m)});
+    p.pagePrev={p.right.x+p.right.w-112*m,p.right.y+p.right.h-36*m,37*m,29*m};
+    p.pageNext={p.right.x+p.right.w-62*m,p.right.y+p.right.h-36*m,37*m,29*m};
     return p;
 }
 inline void reserveHudLyricSpace(UI& layout,bool visible,int position){
@@ -2273,9 +2274,11 @@ class LeviMusic {
     int bindingAction_=-1;
     std::set<int> pressedKeys_;
     std::set<int> menuPointers_;
+    std::set<int> lyricPointers_;
     std::map<int,float> pointerStartY_;
     std::map<int,int> pointerStartPage_;
     std::set<int> pointerDragged_;
+    int playerLyricOffset_=0;
     std::atomic<bool> enabled_{false};
     std::atomic<int> hudSize_{84},hudX_{3},hudY_{93},panelTop_{15};
     std::atomic<int> hudLyricPosition_{0};
@@ -2346,7 +2349,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta4 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta5 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2574,6 +2577,7 @@ private:
     void queueLyrics(const Track& track,int duration,const std::string& key,bool standalone=false){
         {
             std::lock_guard lock(mu_);
+            playerLyricOffset_=0;
             lyricRequest_={track,duration,key,++lyricSerial_};
             lyricRequest_.standalone=standalone;
 #if defined(LEVI_STANDALONE)
@@ -2819,7 +2823,10 @@ private:
                 (hiddenHudTarget&&hiddenLyricTarget.contains(e.x,e.y));
             if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);
                 pointerStartY_[e.pointerId]=e.y;
-                pointerStartPage_[e.pointerId]=settingsOpen_?settingsScroll_:page_;
+                const bool playerLyrics=!settingsOpen_&&l.lyrics.contains(e.x,e.y);
+                if(playerLyrics)lyricPointers_.insert(e.pointerId);
+                pointerStartPage_[e.pointerId]=settingsOpen_?settingsScroll_:
+                    playerLyrics?playerLyricOffset_:page_;
                 pointerDragged_.erase(e.pointerId);}
             return capture;
         }
@@ -2828,7 +2835,25 @@ private:
         if(!captured)return false;
         if(e.action==2){
             bool changed=false;
-            if(opened&&(settingsOpen_||compactUi_)){
+            bool lyricDrag=false;
+            {std::lock_guard lock(mu_);lyricDrag=lyricPointers_.contains(e.pointerId);}
+            if(opened&&lyricDrag){
+                std::lock_guard lock(mu_);
+                const float start=pointerStartY_.contains(e.pointerId)?pointerStartY_[e.pointerId]:e.y;
+                const int origin=pointerStartPage_.contains(e.pointerId)?pointerStartPage_[e.pointerId]:0;
+                const float delta=start-e.y;
+                if(std::abs(delta)>8*l.m)pointerDragged_.insert(e.pointerId);
+                int active=-1;
+                for(size_t i=0;i<lyrics_.size();++i){
+                    if(lyrics_[i].ms>elapsed_)break;
+                    active=int(i);
+                }
+                const int low=active<0?0:-active;
+                const int high=active<0?std::max(0,int(lyrics_.size())-1):
+                    std::max(0,int(lyrics_.size())-1-active);
+                const int next=std::clamp(origin+int(std::round(delta/std::max(18.f,30*l.m))),low,high);
+                changed=next!=playerLyricOffset_;playerLyricOffset_=next;
+            }else if(opened&&(settingsOpen_||compactUi_)){
                 std::lock_guard lock(mu_);
                 const float start=pointerStartY_.contains(e.pointerId)?pointerStartY_[e.pointerId]:e.y;
                 const int origin=pointerStartPage_.contains(e.pointerId)?pointerStartPage_[e.pointerId]:page_;
@@ -2852,14 +2877,17 @@ private:
             if(changed)paint();return true;
         }
         if(e.action==3){std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);
+            lyricPointers_.erase(e.pointerId);
             pointerStartY_.erase(e.pointerId);pointerStartPage_.erase(e.pointerId);
             pointerDragged_.erase(e.pointerId);return true;}
         if(e.action!=1&&e.action!=6)return true;
-        bool dragged=false;
+        bool dragged=false,lyricPointer=false;
         {std::lock_guard lock(mu_);menuPointers_.erase(e.pointerId);
+            lyricPointer=lyricPointers_.erase(e.pointerId)>0;
             dragged=pointerDragged_.erase(e.pointerId)>0;
             pointerStartY_.erase(e.pointerId);pointerStartPage_.erase(e.pointerId);}
         if(dragged)return true;
+        if(lyricPointer){{std::lock_guard lock(mu_);playerLyricOffset_=0;}paint();return true;}
         if(!opened){
             if(hud&&l.mini.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);open_=true;panelToggled_=std::chrono::steady_clock::now();}
@@ -2955,9 +2983,6 @@ private:
             }
             pl::input::hideKeyboard();
             if(useBridge_)addJob(Action::QueueRefresh);
-        }else if(l.tabLyrics.contains(e.x,e.y)){
-            {std::lock_guard lock(mu_);rightTab_=2;typing_=false;}
-            pl::input::hideKeyboard();
         }else if(l.prev.contains(e.x,e.y))addJob(Action::Previous);
         else if(l.play.contains(e.x,e.y))addJob(Action::PlayPause);
         else if(l.next.contains(e.x,e.y))addJob(Action::Next);
@@ -3193,7 +3218,8 @@ private:
         std::string activePlaylist;
         std::vector<Lyric> timedLyrics;
         float lyricAge=100.f;
-        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage,settingsScroll,repeatMode,bindingAction;
+        int current,page,elapsed,total,volume,libraryMode,rightTab,settingsPage,settingsScroll,
+            repeatMode,bindingAction,playerLyricOffset;
         bool open,showHud,playing,typing,settingsOpen,shuffle,bridgePlaylist,playlistQueue;
         std::array<int,12> keybinds{};
         float panelAge=1.f;
@@ -3201,7 +3227,8 @@ private:
             std::lock_guard lock(mu_);
             title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";coverImage=coverImageId_;
             tracks=results_;queueTracks=queueTracks_;playlistNames=playlistNames_;
-            activePlaylist=activePlaylist_;libraryMode=libraryMode_;rightTab=rightTab_;
+            activePlaylist=activePlaylist_;libraryMode=libraryMode_;rightTab=std::clamp(rightTab_,0,1);
+            playerLyricOffset=playerLyricOffset_;
             settingsPage=settingsPage_;settingsScroll=settingsScroll_;settingsOpen=settingsOpen_;
             timedLyrics=lyrics_;
             panelAge=std::chrono::duration<float>(std::chrono::steady_clock::now()-panelToggled_).count();
@@ -3227,12 +3254,12 @@ private:
         lm_cinematic::setPlaying(playing);
         std::vector<pl::modmenu::DrawCommand> out;
         out.reserve(110);
-        const float u=l.s;
         const bool moving=animation_ && playing;
         float panelProgress=std::clamp(panelAge/.24f,0.f,1.f);
         panelProgress=panelProgress*panelProgress*(3.f-2.f*panelProgress);
         const float panelFade=animation_?(open?panelProgress:1.f-panelProgress):1.f;
         const bool panelVisible=open||(animation_&&panelAge<.24f);
+        const float u=panelVisible?l.m:l.s;
         const bool streamingBridge=useBridge_.load();
         const bool compact=compactUi_.load();
         const float tick=std::chrono::duration<float>(std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -3241,10 +3268,12 @@ private:
             std::string worldLine;
             std::string worldReading;
             const std::vector<lm_timing::WordCue>* wordCues=nullptr;
+            int worldIndex=-1;
             int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
             for(size_t i=0;i<timedLyrics.size();++i){
                 const auto& item=timedLyrics[i];
                 if(item.ms<=elapsed){
+                    worldIndex=int(i);
                     worldLine=item.line;
                     wordCues=&item.words;
                     worldReading=romanizeLyrics_?
@@ -3254,6 +3283,26 @@ private:
                         (total>item.ms?total:item.ms+3500);
                     if(item.endMs>item.ms)cueEnd=std::min(cueEnd,item.endMs);
                 }
+            }
+            // During a real instrumental gap, replace the expired vocal line
+            // with a gentle musical interlude instead of leaving stale words.
+            int interludeStart=-1,interludeEnd=-1;
+            if(worldIndex>=0){
+                const auto& item=timedLyrics[size_t(worldIndex)];
+                interludeEnd=worldIndex+1<int(timedLyrics.size())?
+                    timedLyrics[size_t(worldIndex+1)].ms:(total>0?total:cueEnd);
+                if(!item.words.empty())interludeStart=std::max(item.ms,item.words.back().endMs);
+                else interludeStart=std::min(interludeEnd,item.ms+std::clamp(
+                    1100+int(lm_timing::utf8Length(item.line))*75,1500,5200));
+            }else if(!timedLyrics.empty()){
+                interludeStart=0;interludeEnd=timedLyrics.front().ms;
+            }
+            if(interludeStart>=0&&elapsed>=interludeStart+260&&interludeEnd-elapsed>420){
+                static constexpr std::array<std::string_view,4> interludes{
+                    "♪   ♫   ♪","♬   ·   ♩","♫   ♪   ♫","♩   ♬   ♪"};
+                worldLine=std::string(interludes[size_t(elapsed/1400)%interludes.size()]);
+                worldReading.clear();wordCues=nullptr;
+                cueStart=interludeStart;cueEnd=std::max(interludeStart+1,interludeEnd);
             }
             const int font=worldFont_.load();
             if(worldLine!=rasterLine_||font!=rasterFont_||
@@ -3272,7 +3321,7 @@ private:
                 if(std::any_of(worldLine.begin(),worldLine.end(),
                     [](unsigned char ch){return ch>=128;}))worldLine.clear();
             }
-            lm_world3d::publish((lyricsOn_ && wordCues)?worldLine:std::string{},
+            lm_world3d::publish(lyricsOn_?worldLine:std::string{},
                                  cueStart,cueEnd,elapsed,playing,
                                  wordCues?std::span<const lm_timing::WordCue>(*wordCues):
                                           std::span<const lm_timing::WordCue>{},
@@ -3546,7 +3595,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta4 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta5 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3586,19 +3635,54 @@ private:
         text(ix,l.left.y+56*u,animation_?marqueeTitle(title,titleChars,tick):title,
              14.5f*u,C_TEXT,static_cast<size_t>(titleChars*4));
         text(ix,l.left.y+76*u,artist,11.4f*u,C_DIM,43);
-        // Compact status, no potentially huge text block overlapping seek.
-        text(l.left.x+17*u,l.left.y+119*u,info,10.2f*u,C_DIM,
-             static_cast<size_t>(std::max(12.f,l.left.w/(7.7f*u))));
-        if(worldLyrics3D_)
-            text(l.left.x+17*u,l.left.y+134*u,lm_world3d::status(),9.1f*u,C_MINT,48);
+        text(l.left.x+17*u,l.left.y+101*u,info,8.9f*u,C_DIM,
+             static_cast<size_t>(std::max(12.f,l.left.w/(7.3f*u))));
 
-        // Player card no longer embeds a second lyrics box.
-        const float separation=std::min(l.seek.y-22*u,l.left.y+145*u);
-        if(separation>l.left.y+130*u) {
-            box({l.left.x+16*u,separation,l.left.w-32*u,1*u},0x33FFFFFFU,1.f);
-            icon("audio-lines",l.left.x+18*u,separation+12*u,13*u);
-            text(l.left.x+40*u,separation+23*u,
-                 playing?"LISTENING NOW":"READY TO LISTEN",10*u,C_DIM,34);
+        // Auto-following lyrics now live inside Now Playing. Drag this region
+        // vertically to inspect another line; tap it to return to the live line.
+        box(l.lyrics,0x4414161BU,8.f);
+        int activeLine=-1;
+        for(size_t i=0;i<timedLyrics.size();++i){
+            if(timedLyrics[i].ms>elapsed)break;
+            activeLine=int(i);
+        }
+        if(timedLyrics.empty()){
+            const std::string waiting=playing?"♪  Instrumental / waiting for lyrics  ♫":"No synchronized lyrics";
+            const float size=10.2f*u;
+            const float x=l.lyrics.x+(l.lyrics.w-float(lm_timing::utf8Length(waiting))*size*.53f)*.5f;
+            text(std::max(l.lyrics.x+4*u,x),l.lyrics.y+l.lyrics.h*.52f,waiting,size,C_DIM,55);
+        }else{
+            const int center=std::clamp(std::max(0,activeLine)+playerLyricOffset,0,
+                int(timedLyrics.size())-1);
+            const int visible=compact?3:5;
+            const float step=std::min(30*u,l.lyrics.h/float(visible));
+            const int first=center-visible/2;
+            const size_t maxChars=static_cast<size_t>(std::max(10.f,l.lyrics.w/(6.1f*u)));
+            auto centered=[&](float y,std::string value,float size,uint32_t color){
+                value=shorten(std::move(value),maxChars);
+                const float width=float(lm_timing::utf8Length(value))*size*.54f;
+                text(std::max(l.lyrics.x+4*u,l.lyrics.x+(l.lyrics.w-width)*.5f),
+                     y,std::move(value),size,color,maxChars);
+            };
+            for(int row=0;row<visible;++row){
+                const int index=first+row;if(index<0||index>=int(timedLyrics.size()))continue;
+                const auto& item=timedLyrics[size_t(index)];
+                const float y=l.lyrics.y+(row+.65f)*step;
+                const bool live=index==activeLine;
+                if(live)box({l.lyrics.x+4*u,y-step*.63f,l.lyrics.w-8*u,step*.88f},
+                            0x553F444DU,6.f);
+                if(live&&!item.words.empty()){
+                    const std::string full=shorten(item.line,maxChars);
+                    const float size=11.2f*u;
+                    const float width=float(lm_timing::utf8Length(full))*size*.54f;
+                    const float x=std::max(l.lyrics.x+4*u,l.lyrics.x+(l.lyrics.w-width)*.5f);
+                    text(x,y,full,size,0xFF777B84U,maxChars);
+                    const std::string revealed=lm_timing::revealedText(item.line,item.words,elapsed);
+                    if(!revealed.empty())text(x,y,revealed,size,C_TEXT,maxChars);
+                }else centered(y,item.line,live?11.2f*u:9.7f*u,live?C_TEXT:0xFF777B84U);
+                if(live&&romanizeLyrics_&&!item.romanized.empty()&&step>=25*u)
+                    centered(y+10*u,item.romanized,7.6f*u,C_DIM);
+            }
         }
         const float prog=total>0?std::clamp(float(elapsed)/total,0.f,1.f):0.f;
         const float lineY=l.seek.y+l.seek.h*.5f;
@@ -3632,12 +3716,12 @@ private:
              9.7f*u,C_DIM);
 
 
-        // Compact right-hand tabbed content: Search | Playlist / Up Next | Lyrics.
-        for(int tab=0;tab<3;tab++){
-            Rect r=tab==0?l.tabSearch:tab==1?l.tabQueue:l.tabLyrics;
+        // Lyrics moved into Now Playing; the content panel keeps two clear tabs.
+        for(int tab=0;tab<2;tab++){
+            Rect r=tab==0?l.tabSearch:l.tabQueue;
             const bool active=rightTab==tab;
             box(r,active?0xFF525760U:0xFF282B31U,8.f);
-            const std::string label=tab==0?"SEARCH":tab==1?"QUEUE":"LYRICS";
+            const std::string label=tab==0?"SEARCH":"QUEUE";
             const float alignX=r.x+(r.w-static_cast<float>(label.size())*5.8f*u)*.5f;
             text(alignX,r.y+18*u,label,10.4f*u,active?C_TEXT:C_DIM,14);
         }
@@ -3694,48 +3778,7 @@ private:
             }
             if(!isRadio)drawPage(songs.size(),isSaved?"SAVED":"RESULTS");
         };
-        if(rightTab==2){
-            icon("audio-lines",l.right.x+16*u,l.right.y+57*u,17*u);
-            text(l.right.x+44*u,l.right.y+71*u,"SYNCHRONIZED LYRICS",11.7f*u,C_TEXT,35);
-            box({l.right.x+13*u,l.right.y+85*u,l.right.w-26*u,1*u},0x35FFFFFFU,1.f);
-            const int count=static_cast<int>(timedLyrics.size());
-            int activeLine=-1;
-            for(int i=0;i<count;i++){
-                if(timedLyrics[static_cast<size_t>(i)].ms>elapsed)break;
-                activeLine=i;
-            }
-            if(count==0){
-                text(l.right.x+20*u,l.right.y+137*u,
-                     "No synchronized lyrics found for this track.",12.6f*u,C_DIM,69);
-                text(l.right.x+20*u,l.right.y+160*u,
-                     "Try another recording or import timed LRC in the app.",10.5f*u,C_DIM,72);
-            }else{
-                const float step=std::max(33*u,
-                    std::min(49*u,(l.right.h-111*u)/6.f));
-                const int start=std::max(0,activeLine-2);
-                const size_t lineLength=static_cast<size_t>(
-                    std::max(18.f,(l.right.w-42*u)/(7.2f*u)));
-                for(int i=0;i<7;i++){
-                    int j=start+i;
-                    if(j>=count)break;
-                    float y=l.right.y+110*u+i*step;
-                    if(y+9*u>l.right.y+l.right.h-26*u)break;
-                    bool currentLine=j==activeLine;
-                    if(currentLine){
-                        box({l.right.x+12*u,y-18*u,l.right.w-24*u,27*u},0xFF3A3E47U,7.f);
-                        box({l.right.x+12*u,y-18*u,2*u,27*u},0xFFEAEDF1U,1.f);
-                    }
-                    text(l.right.x+22*u,y,timedLyrics[static_cast<size_t>(j)].line,
-                         currentLine?12.6f*u:11*u,currentLine?C_TEXT:C_DIM,lineLength);
-                    if(romanizeLyrics_&&!timedLyrics[static_cast<size_t>(j)].romanized.empty())
-                        text(l.right.x+22*u,y+12*u,timedLyrics[static_cast<size_t>(j)].romanized,
-                             9.1f*u,C_DIM,lineLength);
-                }
-                text(l.right.x+16*u,l.right.y+l.right.h-12*u,
-                     "LRC "+std::to_string(std::max(0,activeLine+1))+
-                     " / "+std::to_string(count),10*u,C_DIM,36);
-            }
-        }else if(rightTab==0){
+        if(rightTab==0){
             box(l.searchBox,0xFF282B30U,8.f);
             text(l.searchBox.x+10*u,l.searchBox.y+22*u,
                  query.empty()?"Search title, song URL, or public playlist URL...":
