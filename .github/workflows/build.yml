@@ -61,7 +61,7 @@ jobs:
           [[ "$channel" == stable || "$channel" == beta ]] || { echo "Invalid release channel"; exit 1; }
           existing="$(git tag --points-at "$GITHUB_SHA" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+(-beta|-Beta[0-9]+)?$' | sort -V | tail -n 1 || true)"
           previous="$(git tag -l 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
-          if [[ "$channel" == stable && ( "$(cat VERSION)" == 1.6.0 || "$(cat VERSION)" == 1.7.0 ) ]]; then
+          if [[ "$channel" == stable && ( "$(cat VERSION)" == 1.6.0 || "$(cat VERSION)" == 1.7.0 || "$(cat VERSION)" == 1.7.1 ) ]]; then
             # Rebuild a requested stable tag and replace its published assets.
             version="$(cat VERSION)"
             already_released=true
@@ -503,6 +503,13 @@ jobs:
             gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$TAG" \
               -f sha="$GITHUB_SHA" -F force=true >/dev/null
             echo "Replaced release $TAG assets and updated its source tag."
+            if [[ "$TAG" == v1.7.1 ]]; then
+              accidental="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v1.7.2" --jq .object.sha 2>/dev/null || true)"
+              if [[ "$accidental" == a860048a7c7a789ad4a9209cc876f8e750ca5c29 ]]; then
+                gh release delete v1.7.2 --yes --cleanup-tag
+                echo "Removed the accidental v1.7.2 release created during this v1.7.1 rebuild."
+              fi
+            fi
             if [[ "$TAG" == v1.6.0 ]]; then
               accidental="$(gh release view v1.6.1 --json targetCommitish --jq .targetCommitish 2>/dev/null || true)"
               if [[ "$accidental" == ffb404879bb5196e4900d23fc2758efcd34941cc ]]; then
