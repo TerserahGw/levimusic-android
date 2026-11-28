@@ -76,6 +76,9 @@ public final class LyricsFinder {
     private static boolean hasTimedLyrics(String raw){
         return raw!=null&&raw.matches("(?s).*\\[\\d{1,3}:\\d{2}(?:[.\\:]\\d+)?\\].*");
     }
+    private static boolean hasWordTiming(String raw){
+        return raw!=null&&raw.matches("(?s).*<\\d{1,3}:\\d{2}(?:[.\\:]\\d+)?>.*");
+    }
     // Reject short, badly offset or empty responses before selecting a provider.
     static boolean usable(String raw,int duration){
         if(!hasTimedLyrics(raw)||raw.length()>500000)return false;
@@ -311,9 +314,10 @@ public final class LyricsFinder {
                     Future<Found> next=completed.poll(remaining,TimeUnit.NANOSECONDS);
                     if(next==null)break;
                     Found found=next.get();
-                    if(found.quality>best&&usable(found.lyrics,duration)){
-                        raw=found.lyrics;source=found.provider;best=found.quality;
-                        if(best>=84)break;
+                    int quality=found.quality+(hasWordTiming(found.lyrics)?100:0);
+                    if(quality>best&&usable(found.lyrics,duration)){
+                        raw=found.lyrics;source=found.provider;best=quality;
+                        if(best>=180)break;
                     }
                 }catch(Exception ignored){/* an unavailable source does not block the rest */}
             }

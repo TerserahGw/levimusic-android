@@ -1,5 +1,6 @@
 #include "../src/OfflineAudio.hpp"
 #include "../src/LyricText.hpp"
+#include "../src/WordTiming.hpp"
 #include <cassert>
 
 int main(){
@@ -12,4 +13,9 @@ int main(){
            =="You Miss Everything");
     assert(lm_lyric::normalize("YouMissEverything")=="You Miss Everything");
     assert(lm_lyric::normalize("夜に駆ける")=="夜に駆ける");
+    const std::vector<lm_timing::WordCue> words{{1000,1500,"You"},
+        {1500,2000,"Miss"},{2000,2400,"Everything"}};
+    const auto enhanced=lm_timing::enhancedLrcLine(900,"You Miss Everything",words);
+    assert(enhanced=="[00:00.90]<00:01.00>You <00:01.50>Miss <00:02.00>Everything<00:02.40>");
+    assert(lm_lyric::normalize(enhanced.substr(enhanced.find(']')+1))=="You Miss Everything");
 }

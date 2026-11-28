@@ -1,6 +1,8 @@
 #pragma once
 #include <algorithm>
 #include <cctype>
+#include <iomanip>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -69,5 +71,37 @@ inline std::string revealedText(std::string_view line,
 inline int sourceWordIndex(int displayIndex,int displayCount,int sourceCount){
     if(sourceCount<=0||displayCount<=0)return -1;
     return std::clamp(displayIndex*sourceCount/displayCount,0,sourceCount-1);
+}
+
+inline std::string enhancedLrcLine(int lineMs,std::string_view line,
+                                   const std::vector<WordCue>& words){
+    auto stamp=[](int ms,char open,char close){
+        ms=std::max(0,ms);const int hundredths=ms/10;
+        std::ostringstream out;
+        out<<open<<std::setfill('0')<<std::setw(2)<<hundredths/6000<<':'
+           <<std::setw(2)<<(hundredths/100)%60<<'.'<<std::setw(2)<<hundredths%100<<close;
+        return out.str();
+    };
+    std::string output=stamp(lineMs,'[',']');
+    if(words.empty()){output+=line;return output;}
+    const bool spaced=line.find_first_of(" \t")!=std::string_view::npos;
+    for(size_t i=0;i<words.size();++i){
+        std::string token=words[i].text;
+        const auto first=token.find_first_not_of(" \t\r\n");
+        if(first==std::string::npos)continue;
+        const auto last=token.find_last_not_of(" \t\r\n");
+        token=token.substr(first,last-first+1);
+        output+=stamp(words[i].startMs,'<','>');
+        output+=token;
+        if(spaced&&i+1<words.size()){
+            std::string next=words[i+1].text;
+            const auto at=next.find_first_not_of(" \t\r\n");
+            if(at!=std::string::npos&&std::string(",.!?;:)]}").find(next[at])==std::string::npos&&
+               token.back()!='\''&&token.back()!='-')output+=' ';
+        }
+    }
+    if(words.back().endMs>words.back().startMs)
+        output+=stamp(words.back().endMs,'<','>');
+    return output;
 }
 }

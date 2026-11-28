@@ -995,6 +995,10 @@ std::vector<Lyric> aurelisLyrics(JNIEnv* env,const std::string& server,
                             if(std::isfinite(until)&&until>at&&until<14400)
                                 lyric.endMs=static_cast<int>(std::round(until*1000));
                         }
+                        if(!timedWords.empty()&&timedWords.front().startMs<lyric.ms-500&&
+                           timedWords.back().endMs<60000){
+                            for(auto& word:timedWords){word.startMs+=lyric.ms;word.endMs+=lyric.ms;}
+                        }
                         if(!timedWords.empty()&&timedWords.front().startMs>=lyric.ms-500&&
                            (lyric.endMs<=0||timedWords.back().endMs<=lyric.endMs+500))
                             lyric.words=std::move(timedWords);
@@ -1029,14 +1033,13 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
             if (minutes < 0 || minutes > 240 || seconds < 0 || seconds >= 60) continue;
             const int lineMs=static_cast<int>(minutes*60000+seconds*1000);
             const std::string body=row.substr(end+1);
-            std::string plain;
             std::vector<lm_timing::WordCue> words;
             for(size_t at=0;at<body.size();){
-                if(body[at]!='<'){plain+=body[at++];continue;}
+                if(body[at]!='<'){++at;continue;}
                 const size_t close=body.find('>',at+1);
                 const size_t markColon=body.find(':',at+1);
                 if(close==std::string::npos||markColon==std::string::npos||markColon>close){
-                    plain+=body[at++];continue;
+                    ++at;continue;
                 }
                 int marker=-1;
                 try{
@@ -1044,17 +1047,25 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
                     const double ss=std::stod(body.substr(markColon+1,close-markColon-1));
                     if(mm>=0&&mm<=240&&ss>=0&&ss<60)marker=int(mm*60000+ss*1000);
                 }catch(...){marker=-1;}
-                if(marker<0){plain+=body[at++];continue;}
+                if(marker<0){++at;continue;}
+                if(marker<lineMs-500&&marker<60000)marker+=lineMs;
                 const size_t next=body.find('<',close+1);
                 std::string token=body.substr(close+1,(next==std::string::npos?body.size():next)-close-1);
                 if(!words.empty())words.back().endMs=std::max(words.back().startMs,marker);
                 if(!token.empty()){
-                    words.push_back({marker,marker+400,lm_lyric::normalize(token)});
-                    plain+=token;
+                    std::string word=token;
+                    const auto first=word.find_first_not_of(" \t\r\n");
+                    if(first!=word.npos){
+                        const auto last=word.find_last_not_of(" \t\r\n");
+                        word=word.substr(first,last-first+1);
+                    }else word.clear();
+                    if(!word.empty())words.push_back({marker,marker+400,std::move(word)});
                 }
                 at=next==std::string::npos?body.size():next;
             }
-            std::string line = lm_lyric::normalize(plain.empty()?body:plain);
+            // Normalize the marker-bearing body itself. This lets LyricText
+            // restore missing Latin spaces from marker boundaries.
+            std::string line = lm_lyric::normalize(body);
             if (line.empty()) continue;
             Lyric lyric;lyric.ms=lineMs;lyric.line=std::move(line);lyric.words=std::move(words);
             lines.push_back(std::move(lyric));
@@ -2379,7 +2390,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta6 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta7 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2581,7 +2592,16 @@ private:
 #if defined(LEVI_STANDALONE)
                 if(req.standalone)found=aurelisLyrics(scope.env,req.server,req.track,req.duration);
 #endif
-                if(found.empty())found=searchLyrics(scope.env,req.track,req.duration,req.key);
+                const auto wordCount=[](const std::vector<Lyric>& lyrics){
+                    size_t count=0;for(const auto& line:lyrics)count+=line.words.size();return count;
+                };
+                // A line-timed Aurelis result must not hide an available QRC,
+                // TTML, enhanced-LRC, or local word-timed result.
+                if(found.empty()||wordCount(found)==0){
+                    auto alternative=searchLyrics(scope.env,req.track,req.duration,req.key);
+                    if(found.empty()||wordCount(alternative)>wordCount(found))
+                        found=std::move(alternative);
+                }
             }
             auto shown=found;
             if(romanizeLyrics_){
@@ -3619,7 +3639,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta6 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta7 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3659,7 +3679,7 @@ private:
         text(ix,l.left.y+56*u,animation_?marqueeTitle(title,titleChars,tick):title,
              14.5f*u,C_TEXT,static_cast<size_t>(titleChars*4));
         text(ix,l.left.y+76*u,artist,11.4f*u,C_DIM,43);
-        text(l.left.x+17*u,l.left.y+101*u,info,8.9f*u,C_DIM,
+        text(l.left.x+17*u,l.left.y+114*u,info,8.9f*u,C_DIM,
              static_cast<size_t>(std::max(12.f,l.left.w/(7.3f*u))));
 
         // Auto-following lyrics now live inside Now Playing. Drag this region
@@ -4625,11 +4645,8 @@ private:
                             auto target=folder/(track.id+".lrc");
                             std::ofstream lrc(target,std::ios::trunc);
                             for(const auto& line:lyrics){
-                                int hundredths=std::max(0,line.ms)/10;
-                                lrc<<'['<<std::setfill('0')<<std::setw(2)<<hundredths/6000
-                                   <<':'<<std::setw(2)<<(hundredths/100)%60
-                                   <<'.'<<std::setw(2)<<hundredths%100<<']'
-                                   <<lm_lyric::normalize(line.line)<<'\n';
+                                lrc<<lm_timing::enhancedLrcLine(line.ms,
+                                    lm_lyric::normalize(line.line),line.words)<<'\n';
                             }
                         }
                         update("Saved to Offline",track.title,

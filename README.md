@@ -6,7 +6,7 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 **Current stable build:** v1.7.0 (27 November 2026)
-**Current beta build:** v1.7.1-Beta6 (28 November 2026)
+**Current beta build:** v1.7.1-Beta7 (28 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -41,15 +41,15 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta6-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta7-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-## Testing in v1.7.1-Beta6
+## Testing in v1.7.1-Beta7
 
-- Now Playing separates metadata from a lower, smaller five-line lyric view with two lines above and below the highlighted centre line.
-- 3D lyric transitions retain the outgoing cue until the incoming cue is visible, while long Unicode and Latin lines split into shorter world-space segments.
-- 3D lyrics always use the original script, without romanized panels, and Auto selects one of nine curated color themes per song.
-- Search, Queue, and Playlist now have independent tabs; saved playlists no longer share the Up Next screen.
-- LRCLIB plain lyrics are retained as a timed fallback when a genuine synchronized LRC is unavailable.
+- Restores authentic per-word timing for enhanced LRC, QRC, TTML, Bridge, Aurelis, and imported offline lyrics.
+- Word-timed sources take priority over ordinary line-timed fallbacks.
+- Offline saves retain enhanced per-word markers instead of flattening them to line timestamps.
+- Marker boundaries restore missing spaces between Latin words without altering CJK lyrics.
+- The Now Playing status line sits lower, clear of the cover artwork.
 
 ## New in v1.7.0 Stable
 
