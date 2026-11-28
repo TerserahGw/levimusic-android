@@ -358,6 +358,14 @@ int main(){
     assert(scene.previous.size()==5);
     assert(scene.previous.front().transitionWords[0]==0.f);
     assert(scene.previous.back().transitionWords[0]>0.f);
+    lyricTrailFollow=true;
+    const auto frozenExit=scene.previous.back().visualAnchor;
+    pose.position.x+=1.5f;pose.time=nowMs();scene.lastFrame=nowMs()-100;
+    renderHook(renderer.data(),screen.data(),nullptr);
+    assert(scene.previous.back().visualAnchor.x==frozenExit.x&&
+           scene.previous.back().visualAnchor.y==frozenExit.y&&
+           scene.previous.back().visualAnchor.z==frozenExit.z);
+    lyricTrailFollow=false;
     scene=Scene{};pose.time=nowMs();
     publish("ORIGINAL",0,4000,100,true,{}, {},0,"romanized reading");
     renderHook(renderer.data(),screen.data(),nullptr);

@@ -155,8 +155,10 @@ jobs:
           mkdir -p build/qrc-test
           javac -encoding UTF-8 -d build/qrc-test \
             companion/app/src/main/java/com/reaaurelis/levimusic/bridge/WordTimedQrc.java \
-            tests/QrcParserSmoke.java
+            companion/app/src/main/java/com/reaaurelis/levimusic/bridge/LyricTitle.java \
+            tests/QrcParserSmoke.java tests/LyricTitleSmoke.java
           java -cp build/qrc-test com.reaaurelis.levimusic.bridge.QrcParserSmoke
+          java -cp build/qrc-test com.reaaurelis.levimusic.bridge.LyricTitleSmoke
 
       - name: Verify offline audio and LRC spacing
         run: |

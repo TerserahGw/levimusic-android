@@ -49,9 +49,7 @@ public final class LyricsFinder {
         URLSafe(String address){String value="";try{value=new URL(address).getHost();}catch(Exception ignored){}host=value;}
     }
     private static String normalize(String s){
-        return (s==null?"":s.toLowerCase(Locale.ROOT))
-            .replaceAll("(?i)\\s*([\\[(](official|music video|visualizer|lyric video|audio|4k).*?[\\])])"," ")
-            .replaceAll("(?i)\\s+- topic$","").replaceAll("[^\\p{L}\\p{N}]+"," ").trim();
+        return LyricTitle.normalize(s);
     }
     private static int score(String wantTitle,String wantArtist,int durationMs,
                              String gotTitle,String gotArtist,long gotDurationMs){
@@ -288,26 +286,30 @@ public final class LyricsFinder {
     }
     public static JSONObject find(Context context,String title,String artist,int duration,String videoUrl,String language){
         String raw=LyricsStore.get(context,title,artist),source="local LRC";
-        if(raw.isEmpty()){
+        // A line-only local import remains a reliable fallback, but must not
+        // hide a real per-word source for the same recording.
+        if(!hasWordTiming(raw)){
+            final String lookupTitle=LyricTitle.clean(title,artist).isEmpty()?title:
+                LyricTitle.clean(title,artist);
             final class Found {
                 final String lyrics,provider;final int quality;
                 Found(String l,String p,int q){lyrics=l;provider=p;quality=q;}
             }
             ExecutorCompletionService<Found> completed=new ExecutorCompletionService<>(SOURCES);
             List<Future<Found>> tasks=new ArrayList<>();
-            tasks.add(completed.submit(()->new Found(lrcRed(title,artist,duration),"lrc.red",80)));
-            tasks.add(completed.submit(()->new Found(betterLyrics(title,artist,duration),"BetterLyrics TTML",75)));
-            tasks.add(completed.submit(()->new Found(lrclib(title,artist,duration),"LRCLIB",50)));
-            tasks.add(completed.submit(()->new Found(netease(title,artist,duration),"NetEase",45)));
-            tasks.add(completed.submit(()->new Found(kugou(title,artist,duration),"KuGou / BetterLyrics",40)));
-            tasks.add(completed.submit(()->new Found(qq(title,artist,duration),"QQ Music / BetterLyrics",84)));
+            tasks.add(completed.submit(()->new Found(lrcRed(lookupTitle,artist,duration),"lrc.red",80)));
+            tasks.add(completed.submit(()->new Found(betterLyrics(lookupTitle,artist,duration),"BetterLyrics TTML",75)));
+            tasks.add(completed.submit(()->new Found(lrclib(lookupTitle,artist,duration),"LRCLIB",50)));
+            tasks.add(completed.submit(()->new Found(netease(lookupTitle,artist,duration),"NetEase",45)));
+            tasks.add(completed.submit(()->new Found(kugou(lookupTitle,artist,duration),"KuGou / BetterLyrics",40)));
+            tasks.add(completed.submit(()->new Found(qq(lookupTitle,artist,duration),"QQ Music / BetterLyrics",84)));
             tasks.add(completed.submit(()->{
-                String[] result=liriqo(title,artist,duration);
+                String[] result=liriqo(lookupTitle,artist,duration);
                 return new Found(result[0],result[1],result[0].contains("<")?78:55);
             }));
             tasks.add(completed.submit(()->new Found(captions(videoUrl),"YouTube captions",20)));
             final long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(18);
-            int best=-1;
+            int best=raw.isEmpty()?-1:99;
             for(int i=0;i<tasks.size();i++){
                 long remaining=deadline-System.nanoTime();if(remaining<=0)break;
                 try{

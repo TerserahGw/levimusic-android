@@ -6,7 +6,7 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 **Current stable build:** v1.7.0 (27 November 2026)
-**Current beta build:** v1.7.1-Beta7 (28 November 2026)
+**Current beta build:** v1.7.1-Beta8 (28 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -41,15 +41,16 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta7-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta8-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-## Testing in v1.7.1-Beta7
+## Testing in v1.7.1-Beta8
 
-- Restores authentic per-word timing for enhanced LRC, QRC, TTML, Bridge, Aurelis, and imported offline lyrics.
-- Word-timed sources take priority over ordinary line-timed fallbacks.
-- Offline saves retain enhanced per-word markers instead of flattening them to line timestamps.
-- Marker boundaries restore missing spaces between Latin words without altering CJK lyrics.
-- The Now Playing status line sits lower, clear of the cover artwork.
+- Adds Minecraft Style and Smooth 3D lyric fonts; Minecraft Style is the new default.
+- Keeps original and romanized Now Playing lyrics consistently centered and improves Japanese particle readings.
+- Lets genuine QRC, TTML, and enhanced-LRC word timing replace a line-only local fallback.
+- Recognizes decorated upload titles such as `[4K] Lyrics Video` while matching the original song.
+- Fades outgoing 3D lyrics in place without the last-moment position snap.
+- Passes compact-HUD drag gestures through to LeviLauncher's Customize Controls editor.
 
 ## New in v1.7.0 Stable
 

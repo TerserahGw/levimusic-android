@@ -203,17 +203,18 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
        !measure||!faceCreate||!bitmapCreate||!getPixels||!recycle||
        !canvasCtor||!draw||!configField)return false;
     jobject config=env->GetStaticObjectField(configClass,configField);
-    jobject paint=env->NewObject(paintClass,paintCtor,3);
-    static constexpr const char* families[]={"sans-serif","serif","monospace","sans-serif-condensed"};
-    jstring family=toJava(env,families[std::clamp(font,0,3)]);
+    const bool minecraft=font==0;
+    // Minecraft Style deliberately removes sub-pixel smoothing and uses a
+    // square monospace silhouette. Smooth keeps the existing high-resolution
+    // Android fallback, which is still needed for every Unicode script.
+    jobject paint=env->NewObject(paintClass,paintCtor,minecraft?0:3);
+    jstring family=toJava(env,minecraft?"monospace":"sans-serif-condensed");
     jobject face=family?env->CallStaticObjectMethod(faceClass,faceCreate,family,0):nullptr;
     if(paint&&face){
-        env->CallVoidMethod(paint,setSize,72.f);
-        // Android may choose the same CJK fallback for several family names.
-        // Give every choice a visible weight, slant, or width of its own.
-        env->CallVoidMethod(paint,setScale,font==3?.82f:font==2?1.08f:1.f);
-        env->CallVoidMethod(paint,setSkew,font==1?-.12f:0.f);
-        env->CallVoidMethod(paint,setBold,font==2?JNI_TRUE:JNI_FALSE);
+        env->CallVoidMethod(paint,setSize,minecraft?66.f:72.f);
+        env->CallVoidMethod(paint,setScale,minecraft?.94f:.82f);
+        env->CallVoidMethod(paint,setSkew,0.f);
+        env->CallVoidMethod(paint,setBold,minecraft?JNI_TRUE:JNI_FALSE);
         env->CallVoidMethod(paint,setColor,jint(0xFFFFFFFFU));
         jobject old=env->CallObjectMethod(paint,setFace,face);
         if(old)env->DeleteLocalRef(old);
@@ -245,7 +246,7 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
                     for(size_t i=0;i<rgba.size();++i)alpha[i]=uint8_t(uint32_t(rgba[i])>>24);
                     const bool complex=std::any_of(part.begin(),part.end(),
                         [](unsigned char ch){return ch>=128;});
-                    const int sampleStep=complex?1:2;
+                    const int sampleStep=minecraft?(complex?3:4):(complex?1:2);
                     mesh=lm_world3d::rasterMesh(alpha,width,height,80,sampleStep);
                     mesh.scale*=2.f/3.f; // keep world size while increasing raster density
                     if(mesh.pixels.empty())ok=false;
@@ -1191,24 +1192,46 @@ std::string cleanLyricTitle(const std::string& original) {
         for(char& c:v)if(c>='A'&&c<='Z')c=static_cast<char>(c+32);
         return v;
     };
-    for(const auto& tag:{"official","music video","visualizer","lyrics","lyric video","audio","4k"}) {
-        std::string current=lower(out);
-        size_t where=current.find(tag);
-        if(where!=std::string::npos) {
-            auto open=current.rfind('(',where);
-            auto close=current.find(')',where);
-            if(open!=std::string::npos && close!=std::string::npos && open<where) {
-                out.erase(open,close-open+1);continue;
+    static constexpr std::array<std::string_view,13> tags{
+        "official","music video","visualizer","lyrics video","lyric video",
+        "official audio","audio","4k","hd","with lyrics","lirik","romaji","romanized"};
+    auto promotional=[&](std::string_view value){
+        const auto text=lower(std::string(value));
+        return std::any_of(tags.begin(),tags.end(),[&](auto tag){return text.find(tag)!=text.npos;});
+    };
+    // Remove complete bracket decorations first, even when several labels are
+    // combined, e.g. "[4K Official Lyrics Video]".
+    for(size_t open=0;(open=out.find_first_of("([",open))!=std::string::npos;){
+        const char closeChar=out[open]=='('?')':']';
+        const size_t close=out.find(closeChar,open+1);
+        if(close==std::string::npos)break;
+        if(promotional(std::string_view(out).substr(open+1,close-open-1)))out.erase(open,close-open+1);
+        else open=close+1;
+    }
+    // Strip unbracketed upload labels at the end. Repeating handles strings
+    // such as "[4K] Lyrics Video" after the bracket has been removed.
+    for(bool changed=true;changed;){
+        changed=false;const auto current=lower(out);
+        for(const auto tag:tags){
+            const size_t where=current.rfind(tag);
+            if(where==std::string::npos||where==0||where+tag.size()+24<current.size())continue;
+            const char before=current[where-1];
+            const bool boundary=std::isspace(static_cast<unsigned char>(before))||before=='/'||
+                before=='|'||before=='-'||before==':'||before=='+';
+            if(!boundary)continue;
+            bool promoTail=true;
+            for(size_t i=where+tag.size();i<current.size();++i){
+                const unsigned char ch=static_cast<unsigned char>(current[i]);
+                if(!std::isspace(ch)&&ch!='/'&&ch!='|'&&ch!='-'&&ch!='+'&&ch!=':'&&
+                   current.compare(i,10,"terjemahan")!=0){promoTail=false;break;}
+                if(current.compare(i,10,"terjemahan")==0)i+=9;
             }
-            open=current.rfind('[',where);
-            close=current.find(']',where);
-            if(open!=std::string::npos&&close!=std::string::npos&&open<where)
-                out.erase(open,close-open+1);
+            if(promoTail){out.erase(where);changed=true;break;}
         }
     }
-    auto start=out.find_first_not_of(" \t-");
+    auto start=out.find_first_not_of(" \t-/|:");
     if(start==std::string::npos)return {};
-    auto end=out.find_last_not_of(" \t-");
+    auto end=out.find_last_not_of(" \t-/|:");
     return out.substr(start,end-start+1);
 }
 
@@ -2083,6 +2106,32 @@ std::string clockText(int ms) {
     int n=std::max(0,ms/1000);
     return std::to_string(n/60)+":"+(n%60<10?"0":"")+std::to_string(n%60);
 }
+float lyricTextWidth(std::string_view value,float size){
+    float units=0.f;
+    for(size_t i=0;i<value.size();){
+        const unsigned char lead=static_cast<unsigned char>(value[i]);
+        uint32_t cp=lead;size_t bytes=1;
+        if((lead&0xE0)==0xC0&&i+1<value.size()){cp=((lead&0x1F)<<6)|(value[i+1]&0x3F);bytes=2;}
+        else if((lead&0xF0)==0xE0&&i+2<value.size()){
+            cp=((lead&0x0F)<<12)|((value[i+1]&0x3F)<<6)|(value[i+2]&0x3F);bytes=3;
+        }else if((lead&0xF8)==0xF0&&i+3<value.size()){
+            cp=((lead&7)<<18)|((value[i+1]&0x3F)<<12)|((value[i+2]&0x3F)<<6)|(value[i+3]&0x3F);bytes=4;
+        }
+        i+=bytes;
+        if(cp==' ')units+=.31f;
+        else if(cp<128){
+            const char ch=static_cast<char>(cp);
+            if(std::string("ilI.,'!|:;").find(ch)!=std::string::npos)units+=.29f;
+            else if(std::string("MW@#%&").find(ch)!=std::string::npos)units+=.78f;
+            else units+=.54f;
+        }else if((cp>=0x300&&cp<=0x36f)||(cp>=0xfe00&&cp<=0xfe0f)){
+            // Combining marks do not advance the text cursor.
+        }else if((cp>=0x3040&&cp<=0x30ff)||(cp>=0x3400&&cp<=0x9fff)||
+                 (cp>=0xac00&&cp<=0xd7af)||(cp>=0xff01&&cp<=0xff60))units+=.96f;
+        else units+=.68f;
+    }
+    return units*size;
+}
 std::string keyName(int code){
     if(code>=29&&code<=54)return std::string(1,char('A'+code-29));
     if(code>=131&&code<=142)return "F"+std::to_string(code-130);
@@ -2125,7 +2174,7 @@ constexpr std::array<SettingRow,31> quickSettings{{
     {"otherFontSize","Text size (%)",2,60,200,false},
     {"otherArcSpread","Line arc (degrees)",2,60,330,false},
     {"otherPlacement","Layout: arc / ring / scatter",2,0,2,false},
-    {"worldFont","Font: Sans / Serif / Mono / Condensed",3,0,3,false},
+    {"worldFont","3D font: Minecraft Style / Smooth",3,0,1,false},
     {"lyricPalette","3D color: Auto (0) / curated themes (1-9)",3,0,9,false},
     {"hudSize","Compact HUD size (%)",3,55,125,false},
     {"hudX","Compact HUD horizontal (%)",3,0,100,false},
@@ -2315,7 +2364,9 @@ class LeviMusic {
     int bindingAction_=-1;
     std::set<int> pressedKeys_;
     std::set<int> menuPointers_;
+    std::set<int> hudGesturePointers_;
     std::set<int> lyricPointers_;
+    std::map<int,float> pointerStartX_;
     std::map<int,float> pointerStartY_;
     std::map<int,int> pointerStartPage_;
     std::set<int> pointerDragged_;
@@ -2326,7 +2377,7 @@ class LeviMusic {
     std::atomic<bool> hudLyrics_{true};
     std::atomic<bool> animation_{true};
     std::atomic<bool> browserEnabled_{false},worldLyrics3D_{true},romanizeLyrics_{true};
-    std::atomic<int> worldFont_{3},worldTextScript_{0};
+    std::atomic<int> worldFont_{0},worldTextScript_{0};
     std::atomic<bool> lyricsRebuild_{false};
     std::map<std::string,std::string> savedSettings_;
     std::map<std::string,std::vector<Track>> localPlaylists_;
@@ -2369,6 +2420,11 @@ public:
             if(savedSettings_.find("hudLyricPosition")==savedSettings_.end())
                 savedSettings_["hudLyricPosition"]=
                     savedSettings_["lyricBelow"]=="true"||savedSettings_["lyricBelow"]=="1"?"2":"0";
+            // Beta7 exposed four Android typefaces. Beta8 replaces that
+            // experiment with two intentional styles and defaults old values
+            // outside the new range to Minecraft Style.
+            if(savedSettings_.find("worldFont")==savedSettings_.end()||
+               savedSettings_["worldFont"]!="1")savedSettings_["worldFont"]="0";
 #if defined(LEVI_STANDALONE) && !defined(LEVI_UNIFIED)
             // These experiments are intentionally Standard-only. Ignore stale
             // values left by an older Standalone installation.
@@ -2390,13 +2446,14 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta7 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta8 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
         {
             std::lock_guard lock(mu_);
             shutdown_=false;open_=false;settingsOpen_=false;typing_=false;menuPointers_.clear();
+            hudGesturePointers_.clear();
         }
         restoringSettings_=true;
         bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic - Aurelis Online")
@@ -2407,7 +2464,7 @@ public:
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
-            .config("worldFont","3D Font (0 Sans / 1 Serif Italic / 2 Mono Bold / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","3"),"0","3")
+            .config("worldFont","3D Font (0 Minecraft Style / 1 Smooth)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","0"),"0","1")
             .config("lyricPalette","3D Colors (0 Auto / 1 Pearl / 2 Pastel / 3 Rainbow / 4 Neon / 5 Aurora / 6 Sunset / 7 Ocean / 8 Sakura / 9 Gold)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","0"),"0","9")
             .config("lyricDistance","First Person Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
             .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","0"),"0","30")
@@ -2478,7 +2535,8 @@ public:
         lm_cinematic::shutdown();
         lm_immersive::request(false);
         {std::lock_guard lock(mu_);shutdown_=true;typing_=false;jobs_.clear();
-            menuPointers_.clear();pressedKeys_.clear();bindingAction_=-1;++lyricSerial_;}
+            menuPointers_.clear();hudGesturePointers_.clear();pressedKeys_.clear();
+            bindingAction_=-1;++lyricSerial_;}
         cv_.notify_all();lyricCv_.notify_all();
         if(drawWorker_.joinable())drawWorker_.join();
         if(worker_.joinable())worker_.join();
@@ -2685,7 +2743,7 @@ private:
         } else if(k=="worldTextScript") {
             try{worldTextScript_=std::clamp(std::stoi(std::string(v)),0,1);}catch(...){}
         } else if(k=="worldFont") {
-            try{worldFont_=std::clamp(std::stoi(std::string(v)),0,3);}catch(...){}
+            try{worldFont_=std::clamp(std::stoi(std::string(v)),0,1);}catch(...){}
         } else if(k=="lyricPalette") {
             try{lm_world3d::lyricPalette=std::clamp(std::stoi(std::string(v)),0,9);}catch(...){}
         } else if(k=="lyricDistance") {
@@ -2869,7 +2927,16 @@ private:
         // UI are consumed. A joystick pointer that predates opening the menu
         // must still reach Minecraft on UP/CANCEL so movement cannot stick.
         if(e.action==0||e.action==5){
-            const bool capture=opened||(hud&&l.mini.contains(e.x,e.y))||
+            // A closed compact HUD is a gesture target, not an eagerly
+            // captured button. Passing DOWN/MOVE through lets LeviLauncher's
+            // Customize Controls overlay own a drag; a short release still
+            // opens the music menu during normal play.
+            if(!opened&&hud&&l.mini.contains(e.x,e.y)){
+                std::lock_guard lock(mu_);hudGesturePointers_.insert(e.pointerId);
+                pointerStartX_[e.pointerId]=e.x;pointerStartY_[e.pointerId]=e.y;
+                pointerDragged_.erase(e.pointerId);return false;
+            }
+            const bool capture=opened||
                 (hiddenHudTarget&&hiddenLyricTarget.contains(e.x,e.y));
             if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);
                 pointerStartY_[e.pointerId]=e.y;
@@ -2879,6 +2946,36 @@ private:
                     playerLyrics?playerLyricOffset_:page_;
                 pointerDragged_.erase(e.pointerId);}
             return capture;
+        }
+        bool hudGesture=false;
+        {std::lock_guard lock(mu_);hudGesture=hudGesturePointers_.contains(e.pointerId);}
+        if(hudGesture){
+            if(e.action==2){
+                std::lock_guard lock(mu_);
+                const float sx=pointerStartX_.contains(e.pointerId)?pointerStartX_[e.pointerId]:e.x;
+                const float sy=pointerStartY_.contains(e.pointerId)?pointerStartY_[e.pointerId]:e.y;
+                if(std::hypot(e.x-sx,e.y-sy)>7.f*l.s)pointerDragged_.insert(e.pointerId);
+                return false;
+            }
+            if(e.action==3){
+                std::lock_guard lock(mu_);hudGesturePointers_.erase(e.pointerId);
+                pointerStartX_.erase(e.pointerId);pointerStartY_.erase(e.pointerId);
+                pointerDragged_.erase(e.pointerId);return false;
+            }
+            if(e.action==1||e.action==6){
+                bool moved=false;
+                {std::lock_guard lock(mu_);hudGesturePointers_.erase(e.pointerId);
+                    moved=pointerDragged_.erase(e.pointerId)>0;
+                    pointerStartX_.erase(e.pointerId);pointerStartY_.erase(e.pointerId);}
+                if(moved)return false;
+                if(hud&&l.mini.contains(e.x,e.y)){
+                    {std::lock_guard lock(mu_);open_=true;
+                        panelToggled_=std::chrono::steady_clock::now();}
+                    paint();return true;
+                }
+                return false;
+            }
+            return false;
         }
         bool captured=false;
         {std::lock_guard lock(mu_);captured=menuPointers_.contains(e.pointerId);}
@@ -3639,7 +3736,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta7 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta8 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3705,7 +3802,7 @@ private:
             const size_t maxChars=static_cast<size_t>(std::max(10.f,l.lyrics.w/(5.45f*u)));
             auto centered=[&](float y,std::string value,float size,uint32_t color){
                 value=shorten(std::move(value),maxChars);
-                const float width=float(lm_timing::utf8Length(value))*size*.54f;
+                const float width=lyricTextWidth(value,size);
                 text(std::max(l.lyrics.x+4*u,l.lyrics.x+(l.lyrics.w-width)*.5f),
                      y,std::move(value),size,color,maxChars);
             };
@@ -3719,7 +3816,7 @@ private:
                 if(live&&!item.words.empty()){
                     const std::string full=shorten(item.line,maxChars);
                     const float size=9.7f*u;
-                    const float width=float(lm_timing::utf8Length(full))*size*.54f;
+                    const float width=lyricTextWidth(full,size);
                     const float x=std::max(l.lyrics.x+4*u,l.lyrics.x+(l.lyrics.w-width)*.5f);
                     text(x,y,full,size,0xFF777B84U,maxChars);
                     const std::string revealed=lm_timing::revealedText(item.line,item.words,elapsed);

@@ -121,6 +121,14 @@ public final class LyricsRomanizer {
                 for(Token token:tokens){
                     String kana=token.getReading();
                     if(kana==null||kana.equals("*"))kana=token.getSurface();
+                    // Dictionary readings are phonetic for words, but the
+                    // three common written particles need their spoken lyric
+                    // pronunciation for natural Hepburn romanization.
+                    if("助詞".equals(token.getPartOfSpeechLevel1())){
+                        if("は".equals(token.getSurface()))kana="ワ";
+                        else if("へ".equals(token.getSurface()))kana="エ";
+                        else if("を".equals(token.getSurface()))kana="オ";
+                    }
                     kanaLine.append(kana).append(' ');
                 }
                 reading=japaneseReading(kanaLine.toString());

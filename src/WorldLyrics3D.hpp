@@ -807,7 +807,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.visualLift+=(targetLift-panel.visualLift)*liftDt;
         }else{panel.visualAnchor=panel.anchor;panel.visualLift=0.f;}
     }};
-    follow(scene.panels);follow(scene.previous);
+    follow(scene.panels);
+    // Outgoing lyrics fade exactly where the viewer last saw them. Applying
+    // the new cue's follow target to an outgoing panel made it snap toward the
+    // player immediately before disappearing.
     for(auto& panel:scene.panels)if(!panel.appeared&&
         (panel.sourceWord<0||position>=float(scene.words[static_cast<size_t>(panel.sourceWord)].startMs))&&
         shouldReveal(now,panel.born,beats&&scene.words.empty(),freshPulse)){
@@ -928,7 +931,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     };
     if(fading){
         for(const auto& panel:scene.previous)if(panel.appeared)
-            draw(panel,panel.transitionAlpha,.1f,true);
+            draw(panel,panel.transitionAlpha,0.f,true);
     }
     for(auto& panel:scene.panels)if(panel.appeared){
         const float appear=std::max(.03f,smoothstep(float(now-panel.appeared)/350.f));
