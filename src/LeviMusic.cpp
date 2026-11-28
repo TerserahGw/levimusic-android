@@ -226,6 +226,15 @@ bool rasterizeWorldText(JNIEnv* env,std::string_view line,int font,
         if(!ok)break;
         const bool complex=std::any_of(part.begin(),part.end(),
             [](unsigned char ch){return ch>=128;});
+        // Latin glyphs use the blocky 5x7 world font itself. Android's
+        // monospace Typeface is antialiased and never looks like Minecraft.
+        if(minecraft&&!complex){
+            lm_world3d::GlyphMesh mesh;
+            mesh.pixels=lm_world3d::glyphs(part);
+            mesh.width=float(part.size()*6);
+            mesh.scale=.011f;
+            if(!mesh.pixels.empty()){result.push_back(std::move(mesh));continue;}
+        }
         if(minecraft){
             env->CallVoidMethod(paint,setSize,complex?66.f:72.f);
             env->CallVoidMethod(paint,setScale,complex?.94f:1.f);
@@ -3451,7 +3460,8 @@ private:
             }else if(!timedLyrics.empty()){
                 interludeStart=0;interludeEnd=timedLyrics.front().ms;
             }
-            if(interludeStart>=0&&elapsed>=interludeStart+260&&interludeEnd-elapsed>420){
+            if(interludeStart>=0&&interludeEnd-interludeStart>900&&
+               elapsed>=interludeStart&&elapsed<interludeEnd){
                 static constexpr std::array<std::string_view,4> interludes{
                     "♪   ♫   ♪","♬   ·   ♩","♫   ♪   ♫","♩   ♬   ♪"};
                 worldLine=std::string(interludes[size_t(std::max(0,interludeStart)/1400)%interludes.size()]);

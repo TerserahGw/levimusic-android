@@ -393,9 +393,11 @@ inline std::vector<std::string> splitUnicodeLyric(std::string_view text){
         if(at==text.size())break;
         const size_t end=text.find(' ',at);
         const size_t limit=end==text.npos?text.size():end;
+        const bool nonLatin=std::any_of(text.begin()+at,text.begin()+limit,
+            [](unsigned char c){return c>=128;});
         while(at<limit&&parts.size()<32){
             const size_t begin=at;
-            for(size_t count=0;count<6&&at<limit;++count){
+            for(size_t count=0;count<(nonLatin?3U:6U)&&at<limit;++count){
                 ++at;
                 while(at<limit&&(static_cast<unsigned char>(text[at])&0xC0)==0x80)++at;
             }
@@ -415,7 +417,9 @@ inline std::vector<std::string> unicodeParts(std::string_view text,
             size_t previous=0;
             for(const size_t end:ends){
                 if(end<=previous||end>text.size())return splitUnicodeLyric(text);
-                parts.emplace_back(text.substr(previous,end-previous));
+                const auto token=text.substr(previous,end-previous);
+                const auto small=splitUnicodeLyric(token);
+                parts.insert(parts.end(),small.begin(),small.end());
                 previous=end;
             }
             return parts;
@@ -718,9 +722,14 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             if(!scene.words.empty())
                 panel.sourceWord=lm_timing::sourceWordIndex(panel.wordBase,
                     scene.displayWords,int(scene.words.size()));
-            if(scene.displayWords==1&&scene.words.size()>1&&parts.size()>1)
-                panel.sourceWord=std::min(int(scene.words.size())-1,
+            if(scene.displayWords==1&&scene.words.size()>1&&parts.size()>1){
+                const auto ends=lm_timing::alignedTokenEnds(display,scene.words);
+                if(ends.size()==scene.words.size()&&partAt!=display.npos)
+                    panel.sourceWord=int(std::lower_bound(ends.begin(),ends.end(),
+                        partAt+parts[i].size())-ends.begin());
+                else panel.sourceWord=std::min(int(scene.words.size())-1,
                     int(i*scene.words.size()/parts.size()));
+            }
             const bool raster=meshes&&i<meshes->size()&&!(*meshes)[i].pixels.empty();
             panel.pixelScale=raster?(*meshes)[i].scale:.011f;
             panel.width=(raster?(*meshes)[i].width:

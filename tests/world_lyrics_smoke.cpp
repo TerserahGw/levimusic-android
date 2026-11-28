@@ -179,10 +179,12 @@ int main(){
     lyricVerticalRangeTenths=8;
     assert(splitLyric("One long lyric line that should appear across different parts").size()>=4);
     const auto scriptParts=splitUnicodeLyric("夜に駆ける 한국어 مرحبا Привет");
-    assert(scriptParts.size()==4);
-    for(const auto& part:scriptParts)assert(lm_timing::utf8Length(part)<=6);
+    assert(scriptParts.size()>=7);
+    for(const auto& part:scriptParts)assert(lm_timing::utf8Length(part)<=3);
     auto wrapped=splitUnicodeLyric("あいうえおかきくけこさしすせそ");
-    assert(wrapped.size()==3&&wrapped[0]+wrapped[1]+wrapped[2]=="あいうえおかきくけこさしすせそ");
+    assert(wrapped.size()==5);
+    std::string rejoined;for(const auto& part:wrapped)rejoined+=part;
+    assert(rejoined=="あいうえおかきくけこさしすせそ");
     assert(unicodeParts("夜に駆ける",japanese).size()==4);
     std::array<uint8_t,49> mask{};mask[24]=255;
     auto crisp=rasterMesh(mask,7,7,4,1);
