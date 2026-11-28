@@ -65,7 +65,7 @@ struct Pose{float pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t time=0;Vec3 p
 inline Pose pose;
 inline std::atomic<int64_t> lastPlayerTick{0};
 inline std::atomic<uintptr_t> lastPlayerWorld{0};
-inline std::string currentLine;
+inline std::string currentLine,currentReading;
 struct Pixel{float x,y;uint8_t word=0,coverage=255;};
 struct GlyphMesh{std::vector<Pixel> pixels,outline;float width=0,scale=.011f;};
 inline std::shared_ptr<const std::vector<GlyphMesh>> currentMeshes;
@@ -262,16 +262,19 @@ inline GlyphMesh rasterMesh(std::span<const uint8_t> alpha,int width,int height,
 }
 inline void publish(std::string_view value,int start=0,int end=0,int position=0,
                     bool playing=false,std::span<const lm_timing::WordCue> words={},
-                    std::span<const GlyphMesh> meshes={},uint32_t style=0){
+                    std::span<const GlyphMesh> meshes={},uint32_t style=0,
+                    std::string_view reading={}){
     const int previousStart=cueStartMs.load();
     cueStartMs=std::max(0,start);cueEndMs=std::max(start+1,end);
     cuePositionMs=std::max(0,position);cuePlaying=playing;
     cueSampleAt=nowMs();
     std::lock_guard lock(lyricsMutex);
     auto bounded=value.substr(0,512);
-    if(currentLine==bounded&&previousStart==std::max(0,start)&&
+    auto boundedReading=reading.substr(0,512);
+    if(currentLine==bounded&&currentReading==boundedReading&&previousStart==std::max(0,start)&&
        currentWords.size()==words.size()&&currentStyle==style)return;
     currentLine=bounded;
+    currentReading=boundedReading;
     currentWords.assign(words.begin(),words.end());
     currentMeshes=meshes.empty()?nullptr:
         std::make_shared<const std::vector<GlyphMesh>>(meshes.begin(),meshes.end());
@@ -321,6 +324,7 @@ struct Panel{
     int wordCount=1;
     int wordBase=0;
     int sourceWord=-1;
+    bool reading=false;
     float visibleAlpha=0.f,transitionAlpha=0.f;
     size_t letters=0;
     float width=0;
@@ -570,10 +574,10 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     Pose view;
     {std::unique_lock lock(poseMutex,std::try_to_lock);if(!lock)return;view=pose;}
     if(!view.world||!view.time||now-view.time>1500)return;
-    std::string text;std::vector<lm_timing::WordCue> words;
+    std::string text,reading;std::vector<lm_timing::WordCue> words;
     std::shared_ptr<const std::vector<GlyphMesh>> meshes;uint64_t serial;
     {std::unique_lock lock(lyricsMutex,std::try_to_lock);if(!lock)return;
-     text=currentLine;words=currentWords;meshes=currentMeshes;serial=lyricSerial;}
+     text=currentLine;reading=currentReading;words=currentWords;meshes=currentMeshes;serial=lyricSerial;}
     if(text.empty())renderStage=2;
     auto* rp=read<void*>(renderer,profile->rendererPlayer);
     auto* tess=read<void*>(ctx,profile->tessellator);
@@ -699,6 +703,29 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             panel.born=scene.words.empty()?now+int64_t(i)*spacing:now;
             scene.panels.push_back(std::move(panel));
         }
+        // Original script stays primary; romanization is a smaller subtitle.
+        if(!reading.empty()&&!scene.panels.empty()){
+            const auto readings=splitLyric(latinDisplay(reading));
+            const size_t primaryCount=scene.panels.size();
+            for(size_t i=0;i<readings.size();++i){
+                const size_t parent=std::min(primaryCount-1,
+                    i*primaryCount/std::max<size_t>(1,readings.size()));
+                const Panel basePanel=scene.panels[parent];
+                Panel panel;
+                panel.reading=true;panel.partIndex=basePanel.partIndex;
+                panel.partCount=basePanel.partCount;panel.cueStart=start;panel.cueEnd=end;
+                panel.fontPercent=std::max(42,fontPercent*62/100);
+                panel.letters=lm_timing::utf8Length(readings[i]);panel.wordCount=1;
+                panel.sourceWord=basePanel.sourceWord;
+                panel.pixelScale=.011f;panel.width=float(panel.letters)*6.f*panel.pixelScale*
+                    float(panel.fontPercent)*.01f;
+                panel.anchor=basePanel.anchor+Vec3{0,-.30f-float(i%2)*.06f,0};
+                panel.visualAnchor=panel.anchor;panel.spawnPlayer=view.position;
+                panel.facing=basePanel.facing;panel.right=basePanel.right;
+                panel.pixels=glyphs(readings[i]);panel.born=basePanel.born;
+                scene.panels.push_back(std::move(panel));
+            }
+        }
         scene.origin=view.position;
         scene.lastPlayer=view.position;
         if(reset)scene.filteredPlayer=view.position;
@@ -800,6 +827,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
     const float activeFade=cueFade(position,start,end);
     if(activeFade<=0.f)for(auto& panel:scene.panels)panel.visibleAlpha=0.f;
     auto timedAlpha=[&](const Panel& panel,uint8_t localWord){
+        if(panel.reading)return 1.f;
         return timedWordAlpha(panel,scene.words,scene.displayWords,position,newestWord,localWord);
     };
     auto exitAlpha=[](const Panel& panel,uint8_t word){
@@ -815,7 +843,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             for(const auto& pixel:panel.pixels)if(timedAlpha(panel,pixel.word)>0.f)++visible;
             for(const auto& pixel:panel.outline)if(timedAlpha(panel,pixel.word)>0.f)++visible;
             count+=visible;
-            if(visible)currentPart=panel.partIndex;
+            if(visible&&!panel.reading)currentPart=panel.partIndex;
         }
     if(fading)for(const auto& panel:scene.previous)if(panel.appeared&&
         panel.transitionAlpha*transitionFade(now,scene.previousFadeStart,
@@ -857,11 +885,12 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
             for(const auto& p:pixels){
                 const float reveal=leaving?exitAlpha(panel,p.word):timedAlpha(panel,p.word);
                 if(reveal<=0.f)continue;
-                const auto tint=lyricTint(panel.partIndex,p.word);
+                const auto tint=panel.reading?std::array<float,3>{.84f,.90f,.94f}:
+                    lyricTint(panel.partIndex,p.word);
                 const float wordAlpha=leaving?transitionFade(now,scene.previousFadeStart,
                     panel.partIndex*scene.previousStagger+int(p.word)*65,1):1.f;
                 tessColor(tess,outline?0.f:tint[0],outline?0.f:tint[1],outline?0.f:tint[2],
-                          alpha*wordAlpha*reveal*float(p.coverage)/255.f);
+                          alpha*(panel.reading?.72f:1.f)*wordAlpha*reveal*float(p.coverage)/255.f);
                 quad(origin+right*(p.x*scale)+up*(p.y*scale));
             }
         }

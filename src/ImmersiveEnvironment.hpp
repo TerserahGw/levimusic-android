@@ -51,13 +51,18 @@ inline void* playerRegion(void* player){
     void* dimension=nullptr;
     std::memcpy(&dimension,static_cast<uint8_t*>(player)+0x1E0,sizeof(dimension));
     if(!plausible(reinterpret_cast<uintptr_t>(dimension)))return nullptr;
+    // 1.26.66.1: Dimension owns its live BlockSource at +0xD0. Reading the
+    // field directly avoids the fragile virtual slot that Beta3 depended on.
+    void* source=nullptr;
+    std::memcpy(&source,static_cast<uint8_t*>(dimension)+0xD0,sizeof(source));
+    if(plausible(reinterpret_cast<uintptr_t>(source)))return source;
     auto** vtable=*reinterpret_cast<void***>(dimension);
     if(!plausible(reinterpret_cast<uintptr_t>(vtable)))return nullptr;
-    // Verified from the supplied 1.26.66.1 binary: Actor+0x1E0 is its
-    // Dimension and virtual slot +0x70 returns that dimension's BlockSource.
+    // Compatibility fallback for a layout-compatible hotfix.
     auto fn=reinterpret_cast<GetBlockSourceFn>(vtable[0x70/sizeof(void*)]);
     if(!plausible(reinterpret_cast<uintptr_t>(reinterpret_cast<void*>(fn)),1))return nullptr;
-    return fn(dimension);
+    source=fn(dimension);
+    return plausible(reinterpret_cast<uintptr_t>(source))?source:nullptr;
 }
 inline void sampleEnclosure(void* source,const BlockPos& head,int64_t now){
     constexpr int roofOffsets[13][2]={{0,0},{1,0},{-1,0},{0,1},{0,-1},
@@ -125,7 +130,7 @@ inline void observePlayer(void* player,float x,float y,float z){
     probePlayerX=head.x;probePlayerY=head.y;probePlayerZ=head.z;
     probePlayerSample.store(now,std::memory_order_release);
     int64_t previous=lastSample.load(std::memory_order_relaxed);
-    if(now-previous<450||!lastSample.compare_exchange_strong(
+    if(now-previous<300||!lastSample.compare_exchange_strong(
        previous,now,std::memory_order_relaxed))return;
     if(!player||!supported||!isInWater||!isSolid){publish(Environment::Open);return;}
     if(isInWater(player)){
@@ -137,7 +142,7 @@ inline void observePlayer(void* player,float x,float y,float z){
     if(plausible(reinterpret_cast<uintptr_t>(source))){
         lastWorldProbe=now;
         if(loggedProbeState.exchange(1)!=1)__android_log_print(ANDROID_LOG_INFO,
-            "LeviMusicImmersive","live BlockSource acquired from Actor dimension");
+            "LeviMusicImmersive","live BlockSource acquired from Dimension+0xD0");
         sampleEnclosure(source,head,now);
     }else{
         loggedProbeState=0;

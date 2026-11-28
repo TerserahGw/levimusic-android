@@ -46,7 +46,22 @@ inline int64_t nowMs(){return std::chrono::duration_cast<std::chrono::millisecon
 inline void noteActivity(){lastActivity=nowMs();enteredAt=0;}
 inline void setPlaying(bool value){playing=value;}
 inline void observePlayer(void* player,float x,float y,float z,float pitch,float yaw,uintptr_t world){
-    std::lock_guard lock(poseMutex);pose={x,y,z,pitch,yaw,reinterpret_cast<uintptr_t>(player),world,nowMs()};
+    const int64_t now=nowMs();
+    bool moved=false;
+    {
+        std::lock_guard lock(poseMutex);
+        const bool same=pose.player==reinterpret_cast<uintptr_t>(player)&&pose.world==world&&pose.sampled;
+        if(same){
+            const float dx=x-pose.x,dy=y-pose.y,dz=z-pose.z;
+            const float yawDelta=std::remainder(yaw-pose.yaw,360.f);
+            moved=dx*dx+dy*dy+dz*dz>.0025f||std::abs(pitch-pose.pitch)>.45f||std::abs(yawDelta)>.45f;
+        }else moved=true;
+        pose={x,y,z,pitch,yaw,reinterpret_cast<uintptr_t>(player),world,now};
+    }
+    // Player pose is the authoritative AFK signal. LeviLauncher can emit
+    // synthetic MOVE/key-up callbacks while no person is touching the game;
+    // those callbacks used to postpone cinematic mode forever.
+    if(moved){lastActivity=now;enteredAt=0;}
 }
 inline bool matches(const uint8_t* at,std::string_view pattern){
     auto hex=[](char c)->int{

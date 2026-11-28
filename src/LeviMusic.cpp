@@ -1029,12 +1029,48 @@ std::vector<Lyric> parseLrc(const std::string& raw) {
             const int minutes = std::stoi(row.substr(1, colon - 1));
             const double seconds = std::stod(row.substr(colon + 1, end - colon - 1));
             if (minutes < 0 || minutes > 240 || seconds < 0 || seconds >= 60) continue;
-            std::string line = lm_lyric::normalize(row.substr(end + 1));
+            const int lineMs=static_cast<int>(minutes*60000+seconds*1000);
+            const std::string body=row.substr(end+1);
+            std::string plain;
+            std::vector<lm_timing::WordCue> words;
+            for(size_t at=0;at<body.size();){
+                if(body[at]!='<'){plain+=body[at++];continue;}
+                const size_t close=body.find('>',at+1);
+                const size_t markColon=body.find(':',at+1);
+                if(close==std::string::npos||markColon==std::string::npos||markColon>close){
+                    plain+=body[at++];continue;
+                }
+                int marker=-1;
+                try{
+                    const int mm=std::stoi(body.substr(at+1,markColon-at-1));
+                    const double ss=std::stod(body.substr(markColon+1,close-markColon-1));
+                    if(mm>=0&&mm<=240&&ss>=0&&ss<60)marker=int(mm*60000+ss*1000);
+                }catch(...){marker=-1;}
+                if(marker<0){plain+=body[at++];continue;}
+                const size_t next=body.find('<',close+1);
+                std::string token=body.substr(close+1,(next==std::string::npos?body.size():next)-close-1);
+                if(!words.empty())words.back().endMs=std::max(words.back().startMs,marker);
+                if(!token.empty()){
+                    words.push_back({marker,marker+400,lm_lyric::normalize(token)});
+                    plain+=token;
+                }
+                at=next==std::string::npos?body.size():next;
+            }
+            std::string line = lm_lyric::normalize(plain.empty()?body:plain);
             if (line.empty()) continue;
-            lines.push_back({static_cast<int>(minutes * 60000 + seconds * 1000), line});
+            Lyric lyric;lyric.ms=lineMs;lyric.line=std::move(line);lyric.words=std::move(words);
+            lines.push_back(std::move(lyric));
         } catch (...) { /* skip invalid timestamps */ }
     }
     std::sort(lines.begin(), lines.end(), [](const Lyric& a, const Lyric& b) { return a.ms < b.ms; });
+    for(size_t i=0;i<lines.size();++i){
+        const int next=i+1<lines.size()?lines[i+1].ms:lines[i].ms+4000;
+        lines[i].endMs=std::max(lines[i].ms+1,next);
+        if(!lines[i].words.empty()){
+            auto& last=lines[i].words.back();
+            if(last.endMs<=last.startMs+1)last.endMs=std::max(last.startMs+80,next);
+        }
+    }
     return lines;
 }
 
@@ -2310,7 +2346,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta3 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta4 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2320,7 +2356,7 @@ public:
         }
         restoringSettings_=true;
         bool ok=pl::modmenu::ModuleBuilder(MODULE,"LeviMusic - Aurelis Online")
-            .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(true)
+            .modId(self_.getId()).defaultEnabled(true).hideInHudEditor(false)
             .description("Native music HUD. Bridge mode controls Spotify or YouTube Music via companion Android app.")
             .config("volume","Volume",pl::modmenu::ConfigType::SliderInt,remembered("volume","75"),"0","100")
             .config("bridgeKey","Bridge Key (copy from companion app)",pl::modmenu::ConfigType::Text,"")
@@ -2406,7 +2442,9 @@ public:
         if(lyricWorker_.joinable())lyricWorker_.join();
         lm_world3d::shutdown();
         {std::lock_guard paintLock(paintMu_);
-            pl::modmenu::submitDrawCommands(MODULE,std::span<const pl::modmenu::DrawCommand>{});}
+            pl::modmenu::submitDrawCommands(MODULE,std::span<const pl::modmenu::DrawCommand>{});
+            pl::modmenu::submitHudEditorElements(MODULE,
+                std::span<const pl::modmenu::HudEditorElement>{});}
         pl::modmenu::unregisterModule(MODULE);
         return true;
     }
@@ -2547,6 +2585,21 @@ private:
         lyricCv_.notify_one();
     }
     void setConfig(std::string_view k,std::string_view v){
+        // LeviLauncher HUD Editor reports dragged coordinates as decimal
+        // surface pixels, while the regular sliders store 0..100 percent.
+        if((k=="hudX"||k=="hudY")&&v.find('.')!=std::string_view::npos){
+            try{
+                const auto surface=pl::modmenu::getHudSurfaceSize();
+                UI current=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
+                const float available=k=="hudX"?surface.width-current.mini.w:
+                    surface.height-current.mini.h;
+                const int percent=available>1.f?std::clamp(int(std::lround(
+                    std::stof(std::string(v))*100.f/available)),0,100):0;
+                persistSetting(k,std::to_string(percent));
+                if(k=="hudX")hudX_=percent;else hudY_=percent;
+                paint();return;
+            }catch(...){return;}
+        }
         persistSetting(k,v);
         if(k=="romanizeLyrics"){
             romanizeLyrics_=v=="true"||v=="1";
@@ -2748,7 +2801,7 @@ private:
     }
     bool touch(const pl::input::TouchEvent& e){
         if(!enabled_)return false;
-        lm_cinematic::noteActivity();
+        if(e.action==0||e.action==5)lm_cinematic::noteActivity();
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
         reserveHudLyricSpace(l,hudLyrics_,hudLyricPosition_);
         if(!l.ok())return false;
@@ -3020,7 +3073,7 @@ private:
     }
     bool input(const pl::input::TextInputEvent& e){
         if(!enabled_)return false;
-        lm_cinematic::noteActivity();
+        if(!e.text.empty())lm_cinematic::noteActivity();
         bool editing=false,submit=false;std::string query;
         {
             std::lock_guard lock(mu_);
@@ -3046,7 +3099,7 @@ private:
     }
     bool key(const pl::input::KeyEvent& e){
         if(!enabled_)return false;
-        lm_cinematic::noteActivity();
+        if(e.isKeyDown)lm_cinematic::noteActivity();
         int bind=-1;
         {
             std::lock_guard lock(mu_);
@@ -3124,6 +3177,16 @@ private:
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
         reserveHudLyricSpace(l,hudLyrics_,hudLyricPosition_);
         if(!l.ok())return;
+        pl::modmenu::HudEditorElement hudElement;
+        hudElement.elementId="compact-player";hudElement.displayName="LeviMusic HUD";
+        hudElement.positionKeyX="hudX";hudElement.positionKeyY="hudY";
+        hudElement.snapGroup="levimusic";hudElement.x=l.mini.x;hudElement.y=l.mini.y;
+        hudElement.width=l.mini.w;hudElement.height=l.mini.h;
+        hudElement.gridSize=8.f*l.s;hudElement.snapThreshold=12.f*l.s;
+        hudElement.gridGap=6.f*l.s;hudElement.snapFlags=pl::modmenu::HudSnapGrid|
+            pl::modmenu::HudSnapElements|pl::modmenu::HudSnapScreenCenter;
+        pl::modmenu::submitHudEditorElements(MODULE,
+            std::span<const pl::modmenu::HudEditorElement>(&hudElement,1));
         std::string title,artist,info,query,lyric,coverImage;
         std::vector<Track> tracks,queueTracks;
         std::vector<std::string> playlistNames;
@@ -3176,25 +3239,20 @@ private:
         // Client-only native 3D scene: independent from Behavior Packs or servers.
         if(worldLyrics3D_){
             std::string worldLine;
-            bool worldHasReading=false;
-            const Lyric* worldItem=nullptr;
+            std::string worldReading;
             const std::vector<lm_timing::WordCue>* wordCues=nullptr;
             int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
             for(size_t i=0;i<timedLyrics.size();++i){
                 const auto& item=timedLyrics[i];
                 if(item.ms<=elapsed){
                     worldLine=item.line;
-                    worldItem=&item;
                     wordCues=&item.words;
-                    worldHasReading=false;
+                    worldReading=romanizeLyrics_?
+                        (item.romanizedWorld.empty()?item.romanized:item.romanizedWorld):std::string{};
                     cueStart=item.ms;
                     cueEnd=i+1<timedLyrics.size()?timedLyrics[i+1].ms:
                         (total>item.ms?total:item.ms+3500);
                     if(item.endMs>item.ms)cueEnd=std::min(cueEnd,item.endMs);
-                    if(worldTextScript_==1&&romanizeLyrics_&&!item.romanized.empty()){
-                        worldLine=item.romanizedWorld.empty()?item.romanized:item.romanizedWorld;
-                        worldHasReading=true;
-                    }
                 }
             }
             const int font=worldFont_.load();
@@ -3211,10 +3269,7 @@ private:
                 }
             }
             if(!rasterValid_){
-                if(!worldHasReading&&worldItem&&romanizeLyrics_&&
-                   !worldItem->romanizedWorld.empty())
-                    worldLine=worldItem->romanizedWorld;
-                else if(std::any_of(worldLine.begin(),worldLine.end(),
+                if(std::any_of(worldLine.begin(),worldLine.end(),
                     [](unsigned char ch){return ch>=128;}))worldLine.clear();
             }
             lm_world3d::publish((lyricsOn_ && wordCues)?worldLine:std::string{},
@@ -3223,7 +3278,8 @@ private:
                                           std::span<const lm_timing::WordCue>{},
                                  rasterValid_?std::span<const lm_world3d::GlyphMesh>(rasterMeshes_):
                                               std::span<const lm_world3d::GlyphMesh>{},
-                                 uint32_t(font)*2U+uint32_t(worldTextScript_.load()));
+                                 uint32_t(font)*2U,
+                                 worldReading);
         }
         else if(lm_world3d::installed)
             lm_world3d::publish("");
@@ -3490,7 +3546,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta3 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta4 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3636,7 +3692,7 @@ private:
                     icon(playing?"audio-lines":"play",row.x+row.w-27*u,row.y+5*u,17*u);
                 }
             }
-            drawPage(songs.size(),isRadio?"UP NEXT":isSaved?"SAVED":"RESULTS");
+            if(!isRadio)drawPage(songs.size(),isSaved?"SAVED":"RESULTS");
         };
         if(rightTab==2){
             icon("audio-lines",l.right.x+16*u,l.right.y+57*u,17*u);
@@ -3711,8 +3767,12 @@ private:
                          11.8f*u,C_DIM,60);
                 }else{
                     drawSongs(queueTracks,true,false,false);
+                    const size_t shown=std::min<size_t>(queueTracks.size(),queueTracks.empty()?0:
+                        size_t(compact?page+1:(page+1)*5));
                     text(l.right.x+15*u,l.right.y+l.right.h-15*u,
-                         "Tap a track to play or X to remove it.",10*u,C_DIM,60);
+                         "UP NEXT "+std::to_string(shown)+" / "+
+                         std::to_string(queueTracks.size())+
+                         "  •  Tap to play  •  X removes",10*u,C_DIM,67);
                 }
             }else if(libraryMode==1){
                 box(l.savedInput,0xFF282B30U,8.f);

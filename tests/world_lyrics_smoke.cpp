@@ -67,9 +67,10 @@ int main(){
     lm_cinematic::originalCameraTransform=fixtureCameraTransform;
     lm_cinematic::originalSetup=fixtureSetup;
     lm_cinematic::enabled=true;lm_cinematic::supported=true;
-    lm_cinematic::idleDelay=10;lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
-    lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
+    lm_cinematic::idleDelay=10;
     lm_cinematic::observePlayer(cinematicComponentFixture,0,64,0,0,0,1);
+    lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
+    lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
     const lm_cinematic::Position originalCameraPosition{cinematicComponentFixture[4],
         cinematicComponentFixture[5],cinematicComponentFixture[6]};
     lm_cinematic::setupHook(nullptr,nullptr,0.f);
@@ -88,8 +89,10 @@ int main(){
     // Dimension, synchronously while its callback is still valid.
     alignas(8) std::array<char,0x300> actorFixture{},sourceFixture{};
     std::array<void*,15> dimensionVtable{};
-    struct FakeDimension {void** vtable;} dimensionFixture{dimensionVtable.data()};
+    struct FakeDimension {void** vtable;std::array<char,0xC8> padding{};void* source{};}
+        dimensionFixture{dimensionVtable.data()};
     dimensionVtable[14]=reinterpret_cast<void*>(&fixtureBlockSource);
+    dimensionFixture.source=sourceFixture.data();
     auto* dimensionPointer=&dimensionFixture;
     std::memcpy(actorFixture.data()+0x1E0,&dimensionPointer,sizeof(dimensionPointer));
     regionFixture=sourceFixture.data();
@@ -355,6 +358,14 @@ int main(){
     assert(scene.previous.size()==5);
     assert(scene.previous.front().transitionWords[0]==0.f);
     assert(scene.previous.back().transitionWords[0]>0.f);
+    scene=Scene{};pose.time=nowMs();
+    publish("ORIGINAL",0,4000,100,true,{}, {},0,"romanized reading");
+    renderHook(renderer.data(),screen.data(),nullptr);
+    bool foundReading=false;
+    for(const auto& panel:scene.panels)if(panel.reading){
+        foundReading=true;assert(panel.fontPercent<lyricFontPercent.load());
+    }
+    assert(foundReading);
     return 0;
 }
 
