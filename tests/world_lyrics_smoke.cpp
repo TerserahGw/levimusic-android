@@ -6,10 +6,18 @@ float maxChroma=0.f;
 float shader[4]{.2f,.3f,.4f,.5f};
 int environmentFixture=0;
 void* regionFixture=nullptr;
-float* cinematicMatrixFixture=nullptr;
+float cinematicComponentFixture[7]{0,0,0,1,0,65.62f,0};
 void original(void*,void*,void*){++originals;}
-void* fixtureRegion(void*){return regionFixture;}
-float* fixtureMatrixTop(void*){return cinematicMatrixFixture;}
+void* fixtureBlockSource(void*){return regionFixture;}
+void fixtureCameraTransform(float* output,const float*){
+    std::fill(output,output+16,0.f);
+    output[0]=output[5]=output[10]=output[15]=1.f;
+}
+void fixtureSetup(void*,void*,float){
+    float output[16]{};
+    lm_cinematic::cameraTransformHook(output,cinematicComponentFixture);
+    lm_cinematic::cameraTransformHook(output,cinematicComponentFixture);
+}
 bool fixtureWater(void*){return environmentFixture==2;}
 bool fixtureSolid(void*,const lm_immersive::BlockPos& position){
     return environmentFixture==1&&(position.y>=67||std::abs(position.x)>=2||std::abs(position.z)>=2);
@@ -53,54 +61,45 @@ int main(){
     for(size_t i=0;i<20;++i)note[16+i]=uint8_t(hex(id[i*2])*16+hex(id[i*2+1]));
     assert(matchesBuildId(note,id));
     note[17]^=1;assert(!matchesBuildId(note,id));
-    // The cinematic path transforms Bedrock's final live camera matrix.
-    float cameraMatrix[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,64,0,1};
-    assert(lm_cinematic::saneMatrix(cameraMatrix));
-    lm_cinematic::applyOrbit(cameraMatrix,.4f,6.f,2.f,-.1f);
-    assert(lm_cinematic::saneMatrix(cameraMatrix));
-    assert(cameraMatrix[13]<64.f&&cameraMatrix[14]<-1.f);
-    // The real override happens inside MatrixTopDirty while SetupCamera is
-    // still consuming the matrix, never after SetupCamera has returned.
-    float liveMatrix[16]{1,0,0,0,0,1,0,0,0,0,1,0,0,64,0,1};
-    cinematicMatrixFixture=liveMatrix;
-    lm_cinematic::originalMatrixTopDirty=fixtureMatrixTop;
+    // SetupCamera calls the verified quaternion builder twice. The hook feeds
+    // both calls the cinematic pose, then restores the live component.
+    lm_cinematic::originalCameraTransform=fixtureCameraTransform;
+    lm_cinematic::originalSetup=fixtureSetup;
     lm_cinematic::enabled=true;lm_cinematic::supported=true;
     lm_cinematic::idleDelay=10;lm_cinematic::lastActivity=lm_cinematic::nowMs()-11000;
-    lm_cinematic::observePlayer(cameraMatrix,0,64,0,0,0,1);
-    lm_cinematic::setupDepth=1;lm_cinematic::appliedThisSetup=false;
-    assert(lm_cinematic::matrixTopDirtyHook(cameraMatrix)==liveMatrix);
-    assert(lm_cinematic::appliedThisSetup&&lm_cinematic::cameraApplyCalls==1);
-    const float once=liveMatrix[14];
-    lm_cinematic::matrixTopDirtyHook(cameraMatrix);
-    assert(liveMatrix[14]==once&&lm_cinematic::cameraApplyCalls==1);
-    lm_cinematic::setupDepth=0;lm_cinematic::shutdown();
+    lm_cinematic::enteredAt=lm_cinematic::nowMs()-2000;
+    lm_cinematic::observePlayer(cinematicComponentFixture,0,64,0,0,0,1);
+    const lm_cinematic::Position originalCameraPosition{cinematicComponentFixture[4],
+        cinematicComponentFixture[5],cinematicComponentFixture[6]};
+    lm_cinematic::setupHook(nullptr,nullptr,0.f);
+    assert(lm_cinematic::cameraApplyCalls==1&&lm_cinematic::builderApplyCalls==2);
+    assert(cinematicComponentFixture[4]==originalCameraPosition.x&&
+           cinematicComponentFixture[5]==originalCameraPosition.y&&
+           cinematicComponentFixture[6]==originalCameraPosition.z);
+    lm_cinematic::shutdown();
 
-    // A fake ClientInstance exposes the audited getRegion path used by the
-    // game-thread enclosure sampler.
+    // The enclosure probe resolves the live BlockSource from the actor's
+    // Dimension, synchronously while its callback is still valid.
     alignas(8) std::array<char,0x300> actorFixture{},sourceFixture{};
-    std::array<void*,31> clientVtable{};
-    struct FakeClient {void** vtable;} clientFixture{clientVtable.data()};
-    clientVtable[30]=reinterpret_cast<void*>(&fixtureRegion);
+    std::array<void*,15> dimensionVtable{};
+    struct FakeDimension {void** vtable;} dimensionFixture{dimensionVtable.data()};
+    dimensionVtable[14]=reinterpret_cast<void*>(&fixtureBlockSource);
+    auto* dimensionPointer=&dimensionFixture;
+    std::memcpy(actorFixture.data()+0x1E0,&dimensionPointer,sizeof(dimensionPointer));
     regionFixture=sourceFixture.data();
     lm_immersive::supported=true;lm_immersive::isInWater=fixtureWater;
     lm_immersive::isSolid=fixtureSolid;
     lm_immersive::request(true);
-    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     environmentFixture=1;
-    lm_immersive::sampleClient(&clientFixture);
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::lastWorldProbe.load()>0);
     assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     environmentFixture=2;lm_immersive::lastSample=0;
     lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Underwater);
     environmentFixture=0;lm_immersive::lastSample=0;
-    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
-    lm_immersive::lastWorldProbe=0;
-    lm_immersive::sampleClient(&clientFixture);
-    assert(lm_immersive::current()==lm_immersive::Environment::Cave);
     lm_immersive::lastCaveEvidence=lm_immersive::nowMs()-7000;
-    lm_immersive::lastWorldProbe=0;
-    lm_immersive::sampleClient(&clientFixture);
+    lm_immersive::observePlayer(actorFixture.data(),0,64,0);
     assert(lm_immersive::current()==lm_immersive::Environment::Open);
     lm_immersive::request(false);
     // The actual detour submits local world glyphs once, restores game color,

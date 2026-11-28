@@ -61,7 +61,7 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
         ByteBuffer output=replaceOutputBuffer(bytes);
         if(delay.length==0){while(input.remaining()>=2)output.putShort(input.getShort());output.flip();return;}
         int mode=environment;
-        float target=mode==1?.62f:mode==2?.36f:0f;
+        float target=mode==1?.78f:mode==2?.36f:0f;
         int ringFrames=delay.length/channels;
         int samples=bytes/2;
         for(int i=0;i<samples;i++){
@@ -87,12 +87,12 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
                     if(opposite>=channels)opposite=ch;
                     float cross=delayed(d2,opposite);
                     float far=delayed(d5,opposite);
-                    float reflections=early*.25f+middle*.18f+late*.13f+
-                                      tail*.10f+cross*.07f+far*.04f;
+                    float reflections=early*.32f+middle*.23f+late*.17f+
+                                      tail*.12f+cross*.09f+far*.06f;
                     // Keep enough dry headroom and a damped tail. The previous
                     // coefficients repeatedly clipped PCM, making caves raspy.
-                    out=dry*(1f-.18f*wet)+reflections*.58f*wet;
-                    float feedback=dry*.86f+(late*.16f+tail*.12f+far*.07f)*wet;
+                    out=dry*(1f-.22f*wet)+reflections*.72f*wet;
+                    float feedback=dry*.82f+(late*.18f+tail*.14f+far*.08f)*wet;
                     delay[writeFrame*channels+ch]=Math.max(-.98f,Math.min(.98f,feedback));
                 }
             }else{

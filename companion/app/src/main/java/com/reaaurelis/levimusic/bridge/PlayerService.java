@@ -136,7 +136,7 @@ public final class PlayerService extends MediaSessionService {
             immersiveReverb.setReverbDelay(42);
             immersiveReverb.setDiffusion((short)800);
             immersiveReverb.setDensity((short)850);
-            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.28f));
+            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.40f));
         }
         immersiveReverb.setEnabled(true);
     }

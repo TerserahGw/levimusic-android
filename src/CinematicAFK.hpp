@@ -1,7 +1,8 @@
 #pragma once
 
-// Experimental Minecraft 1.26.66.1-only cinematic camera. This hooks the
-// audited final SetupCamera matrix path instead of guessing component fields.
+// Minecraft 1.26.66.1-only cinematic camera. The supplied game binary shows
+// SetupCamera building its live rotation twice through CameraTransformFn, then
+// copying that result and the component position into the final renderer state.
 #include <pl/memory/Hook.hpp>
 #include <algorithm>
 #include <android/log.h>
@@ -15,21 +16,28 @@
 
 namespace lm_cinematic {
 using SetupCameraFn=void(*)(void*,void*,float);
-using MatrixTopDirtyFn=float*(*)(void*);
+using CameraTransformFn=void(*)(float*,const float*);
 struct Pose {float x=0,y=0,z=0,pitch=0,yaw=0;uintptr_t player=0,world=0;int64_t sampled=0;};
 struct Shot {float yaw=0,distance=0,vertical=0,pitch=0;};
+struct Quaternion {float x=0,y=0,z=0,w=1;};
+struct Position {float x=0,y=0,z=0;};
+
 inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{false};
 inline std::atomic<int> idleDelay{15};
 inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0},cameraHookAt{0},lastDiagnostic{0};
-inline std::atomic<uint64_t> cameraHookCalls{0},matrixHookCalls{0},cameraApplyCalls{0},cameraRejectCalls{0};
+inline std::atomic<uint64_t> setupHookCalls{0},builderHookCalls{0},builderApplyCalls{0},cameraApplyCalls{0},cameraRejectCalls{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;inline Pose pose{};
 inline SetupCameraFn originalSetup=nullptr;
-inline MatrixTopDirtyFn originalMatrixTopDirty=nullptr;
-inline void* setupTarget=nullptr;inline void* matrixTarget=nullptr;
+inline CameraTransformFn originalCameraTransform=nullptr;
+inline void* setupTarget=nullptr;inline void* transformTarget=nullptr;
 inline uintptr_t imageBase=0;inline bool exactBuild=false;
 inline thread_local int setupDepth=0;
-inline thread_local bool appliedThisSetup=false;
+inline thread_local bool frameDecisionMade=false,frameActive=false;
+inline thread_local int builderCallsThisSetup=0;
+inline thread_local float* patchedPosition=nullptr;
+inline thread_local Position savedPosition{},cinematicPosition{};
+inline thread_local Quaternion cinematicOrientation{};
 
 inline int64_t nowMs(){return std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count();}
@@ -56,14 +64,31 @@ inline bool plausible(const void* value,size_t alignment=alignof(void*)){
     const auto raw=reinterpret_cast<uintptr_t>(value);
     return raw>0x10000&&raw<0x0001000000000000ULL&&raw%alignment==0;
 }
-inline bool saneMatrix(const float* matrix){
-    if(!plausible(matrix,alignof(float)))return false;
-    constexpr int used[]{0,1,2,4,5,6,8,9,10,12,13,14};
-    for(int i:used)if(!std::isfinite(matrix[i])||std::abs(matrix[i])>1.e7f)return false;
-    const float basis=std::abs(matrix[0])+std::abs(matrix[1])+std::abs(matrix[2])+
-        std::abs(matrix[4])+std::abs(matrix[5])+std::abs(matrix[6])+
-        std::abs(matrix[8])+std::abs(matrix[9])+std::abs(matrix[10]);
-    return basis>.05f;
+inline bool sanePosition(const Position& p){
+    return std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z)&&
+           std::abs(p.x)<1.e7f&&std::abs(p.y)<1.e7f&&std::abs(p.z)<1.e7f;
+}
+inline bool saneQuaternion(const Quaternion& q){
+    const float n=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
+    return std::isfinite(n)&&n>.35f&&n<1.65f;
+}
+inline Quaternion normalized(Quaternion q){
+    const float n=std::sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w);
+    if(!std::isfinite(n)||n<.001f)return {};
+    q.x/=n;q.y/=n;q.z/=n;q.w/=n;return q;
+}
+inline Quaternion blended(Quaternion from,Quaternion to,float amount){
+    from=normalized(from);to=normalized(to);
+    if(from.x*to.x+from.y*to.y+from.z*to.z+from.w*to.w<0.f)
+        to={-to.x,-to.y,-to.z,-to.w};
+    amount=std::clamp(amount,0.f,1.f);
+    return normalized({from.x+(to.x-from.x)*amount,from.y+(to.y-from.y)*amount,
+        from.z+(to.z-from.z)*amount,from.w+(to.w-from.w)*amount});
+}
+inline Quaternion lookQuaternion(float yaw,float pitch){
+    const float cy=std::cos(yaw*.5f),sy=std::sin(yaw*.5f);
+    const float cp=std::cos(pitch*.5f),sp=std::sin(pitch*.5f);
+    return normalized({cy*sp,-sy*cp,sy*sp,cy*cp});
 }
 inline Shot shotAt(int64_t elapsed,float strength){
     const float s=std::max(0.f,float(elapsed)*.001f);
@@ -71,13 +96,6 @@ inline Shot shotAt(int64_t elapsed,float strength){
         (5.8f+std::sin(s*.113f)*1.15f+std::sin(s*.031f)*.55f)*strength,
         (1.75f+std::sin(s*.087f)*.72f+std::sin(s*.029f)*.38f)*strength,
         (-.105f+std::sin(s*.087f)*.065f)*strength};
-}
-inline void applyOrbit(float* m,float yaw,float distance,float vertical,float pitch){
-    const float sy=std::sin(yaw),cy=std::cos(yaw);
-    for(int row=0;row<3;++row){const int i=row*4;const float x=m[i],z=m[i+2];m[i]=cy*x+sy*z;m[i+2]=cy*z-sy*x;}
-    const float sp=std::sin(pitch),cp=std::cos(pitch);
-    for(int row=0;row<3;++row){const int i=row*4;const float y=m[i+1],z=m[i+2];m[i+1]=cp*y-sp*z;m[i+2]=sp*y+cp*z;}
-    const float tx=m[12],ty=m[13],tz=m[14];m[12]=cy*tx+sy*tz;m[13]=ty-vertical;m[14]=cy*tz-sy*tx-distance;
 }
 inline bool shouldRun(Pose& out,float& strength){
     if(!enabled||!supported)return false;
@@ -89,54 +107,95 @@ inline bool shouldRun(Pose& out,float& strength){
     int64_t entered=enteredAt.load();if(!entered){entered=now;enteredAt=entered;}
     strength=std::clamp(float(now-entered)/1500.f,0.f,1.f);blend=strength;return true;
 }
-inline float* matrixTopDirtyHook(void* stack){
-    float* matrix=originalMatrixTopDirty?originalMatrixTopDirty(stack):nullptr;
-    matrixHookCalls.fetch_add(1,std::memory_order_relaxed);
-    if(setupDepth<=0||appliedThisSetup)return matrix;
-    Pose current;float strength=0;if(!shouldRun(current,strength))return matrix;
-    if(!saneMatrix(matrix)){cameraRejectCalls.fetch_add(1);return matrix;}
-    float backup[16];std::memcpy(backup,matrix,sizeof(backup));const auto shot=shotAt(nowMs()-enteredAt.load(),strength);
-    applyOrbit(matrix,shot.yaw,shot.distance,shot.vertical,shot.pitch);
-    if(!saneMatrix(matrix)){
-        std::memcpy(matrix,backup,sizeof(backup));cameraRejectCalls.fetch_add(1);return matrix;
+inline bool prepareFrame(const float* componentRotation){
+    if(!plausible(componentRotation,alignof(float)))return false;
+    Pose current;float strength=0;if(!shouldRun(current,strength))return false;
+    Quaternion original{componentRotation[0],componentRotation[1],
+        componentRotation[2],componentRotation[3]};
+    Position originalPosition{componentRotation[4],componentRotation[5],componentRotation[6]};
+    if(!saneQuaternion(original)||!sanePosition(originalPosition))return false;
+    const auto shot=shotAt(nowMs()-enteredAt.load(),strength);
+    constexpr float deg=.01745329251994329577f;
+    const float orbit=current.yaw*deg+shot.yaw;
+    cinematicPosition={current.x+std::sin(orbit)*shot.distance,
+        current.y+1.62f+shot.vertical,current.z-std::cos(orbit)*shot.distance};
+    const float dx=current.x-cinematicPosition.x;
+    const float dy=current.y+1.2f-cinematicPosition.y;
+    const float dz=current.z-cinematicPosition.z;
+    const float horizontal=std::sqrt(dx*dx+dz*dz);
+    if(!sanePosition(cinematicPosition)||horizontal<.05f)return false;
+    const float yaw=std::atan2(-dx,dz);
+    const float pitch=-std::atan2(dy,horizontal)+shot.pitch;
+    const float eased=strength*strength*(3.f-2.f*strength);
+    cinematicOrientation=blended(original,lookQuaternion(yaw,pitch),eased);
+    if(!saneQuaternion(cinematicOrientation))return false;
+    patchedPosition=const_cast<float*>(componentRotation+4);
+    savedPosition=originalPosition;
+    patchedPosition[0]=cinematicPosition.x;
+    patchedPosition[1]=cinematicPosition.y;
+    patchedPosition[2]=cinematicPosition.z;
+    return true;
+}
+inline void cameraTransformHook(float* output,const float* componentRotation){
+    if(originalCameraTransform)originalCameraTransform(output,componentRotation);
+    builderHookCalls.fetch_add(1,std::memory_order_relaxed);
+    if(setupDepth<=0)return;
+    ++builderCallsThisSetup;
+    if(!frameDecisionMade){
+        frameDecisionMade=true;frameActive=prepareFrame(componentRotation);
+        if(!frameActive&&blend.load()>.001f)cameraRejectCalls.fetch_add(1,std::memory_order_relaxed);
     }
-    appliedThisSetup=true;
-    cameraAppliedAt=nowMs();
-    if(cameraApplyCalls.fetch_add(1)==0)__android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "orbit injected while SetupCamera consumes MatrixTopDirty");
-    return matrix;
+    if(!frameActive||!originalCameraTransform)return;
+    originalCameraTransform(output,reinterpret_cast<const float*>(&cinematicOrientation));
+    if(patchedPosition){
+        patchedPosition[0]=cinematicPosition.x;
+        patchedPosition[1]=cinematicPosition.y;
+        patchedPosition[2]=cinematicPosition.z;
+    }
+    builderApplyCalls.fetch_add(1,std::memory_order_relaxed);
 }
 inline void setupHook(void* owner,void* stack,float partial){
-    cameraHookAt=nowMs();cameraHookCalls.fetch_add(1,std::memory_order_relaxed);
+    cameraHookAt=nowMs();setupHookCalls.fetch_add(1,std::memory_order_relaxed);
     const bool outer=setupDepth==0;
-    if(outer)appliedThisSetup=false;
-    ++setupDepth;
-    if(originalSetup)originalSetup(owner,stack,partial);
-    --setupDepth;
+    if(outer){frameDecisionMade=false;frameActive=false;builderCallsThisSetup=0;patchedPosition=nullptr;}
+    ++setupDepth;if(originalSetup)originalSetup(owner,stack,partial);--setupDepth;
+    if(!outer)return;
+    if(patchedPosition){
+        patchedPosition[0]=savedPosition.x;
+        patchedPosition[1]=savedPosition.y;
+        patchedPosition[2]=savedPosition.z;
+    }
+    if(frameActive&&builderCallsThisSetup>0){
+        cameraAppliedAt=nowMs();
+        if(cameraApplyCalls.fetch_add(1,std::memory_order_relaxed)==0)
+            __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
+                "native camera component orbit reached final SetupCamera state");
+    }
+    patchedPosition=nullptr;
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=hooked.load();return;}
-    constexpr uintptr_t setupRva=0xB7CFDC8,topRva=0x11A1A218;
-    constexpr std::string_view setupSignature="FF 03 04 D1 EE 3B 00 FD ED 33 08 6D EB 2B 09 6D E9 23 0A 6D FD 7B 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9 FD C3 02 91 59 D0 3B D5 F3 03 00 AA E0 03 01 AA 28 17 40 F9 F7 03 01 AA";
-    constexpr std::string_view matrixSignature=
-        "0A ?? 42 A9 E8 03 00 AA 0B 04 40 F9 29 01 0A 8B";
+    constexpr uintptr_t setupRva=0xB7CFDC8,transformRva=0x9C75AA8;
+    constexpr std::string_view setupSignature="FF 03 04 D1 EE 3B 00 FD ED 33 08 6D EB 2B 09 6D E9 23 0A 6D FD 7B 0B A9 FA 67 0C A9 F8 5F 0D A9 F6 57 0E A9 F4 4F 0F A9";
+    constexpr std::string_view transformSignature=
+        "28 00 80 52 E0 03 22 1E E1 03 22 1E 02 01 22 1E E3 03 22 1E 49 00 80 52";
     auto* setupEntry=reinterpret_cast<uint8_t*>(base+setupRva);
-    auto* matrixEntry=reinterpret_cast<uint8_t*>(base+topRva);
-    if(!matches(setupEntry,setupSignature)||!matches(matrixEntry,matrixSignature)){
+    auto* transformEntry=reinterpret_cast<uint8_t*>(base+transformRva);
+    if(!matches(setupEntry,setupSignature)||!matches(transformEntry,transformSignature)){
         __android_log_print(ANDROID_LOG_WARN,"LeviMusicCinematic",
-            "1.26.66.1 SetupCamera/MatrixTopDirty signature mismatch");return;
+            "supplied 1.26.66.1 camera transform signature mismatch");return;
     }
-    setupTarget=setupEntry;matrixTarget=matrixEntry;
-    if(pl::memory::hook(matrixTarget,reinterpret_cast<void*>(&matrixTopDirtyHook),
-       reinterpret_cast<void**>(&originalMatrixTopDirty))!=0||!originalMatrixTopDirty)return;
+    setupTarget=setupEntry;transformTarget=transformEntry;
+    if(pl::memory::hook(transformTarget,reinterpret_cast<void*>(&cameraTransformHook),
+       reinterpret_cast<void**>(&originalCameraTransform))!=0||!originalCameraTransform)return;
     if(pl::memory::hook(setupTarget,reinterpret_cast<void*>(&setupHook),
        reinterpret_cast<void**>(&originalSetup))!=0||!originalSetup){
-        pl::memory::unhook(matrixTarget,reinterpret_cast<void*>(&matrixTopDirtyHook));
-        originalMatrixTopDirty=nullptr;return;
+        pl::memory::unhook(transformTarget,reinterpret_cast<void*>(&cameraTransformHook));
+        originalCameraTransform=nullptr;return;
     }
     hooked=true;supported=true;noteActivity();
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "SetupCamera + in-flight MatrixTopDirty hooks ready");
+        "binary-verified SetupCamera + camera transform hooks ready");
 }
 inline void discover(uintptr_t base,bool exact26661){imageBase=base;exactBuild=exact26661;if(enabled&&!hooked)prepare(imageBase,exactBuild);}
 inline void request(bool value,int delay=15){
@@ -147,32 +206,30 @@ inline void request(bool value,int delay=15){
 inline bool active(){return enabled&&supported&&blend.load()>.01f&&nowMs()-cameraAppliedAt.load()<350;}
 inline void diagnose(){
     if(!enabled)return;
-    const int64_t now=nowMs();int64_t previous=lastDiagnostic.load();
+    const int64_t now=nowMs();
+    int64_t previous=lastDiagnostic.load();
     if(now-previous<5000||!lastDiagnostic.compare_exchange_strong(previous,now))return;
     Pose current;{std::lock_guard lock(poseMutex);current=pose;}const auto hookAt=cameraHookAt.load(),appliedAt=cameraAppliedAt.load();
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "state supported=%d poseAge=%lld idleAge=%lld setupCalls=%llu matrixCalls=%llu hookAge=%lld applyCalls=%llu rejects=%llu applyAge=%lld blend=%.2f",
+        "state supported=%d poseAge=%lld idleAge=%lld setup=%llu builders=%llu builderApply=%llu apply=%llu reject=%llu hookAge=%lld applyAge=%lld blend=%.2f",
         int(supported.load()),static_cast<long long>(current.sampled?now-current.sampled:-1),static_cast<long long>(now-lastActivity.load()),
-        static_cast<unsigned long long>(cameraHookCalls.load()),
-        static_cast<unsigned long long>(matrixHookCalls.load()),static_cast<long long>(hookAt?now-hookAt:-1),
-        static_cast<unsigned long long>(cameraApplyCalls.load()),static_cast<unsigned long long>(cameraRejectCalls.load()),
+        static_cast<unsigned long long>(setupHookCalls.load()),static_cast<unsigned long long>(builderHookCalls.load()),
+        static_cast<unsigned long long>(builderApplyCalls.load()),static_cast<unsigned long long>(cameraApplyCalls.load()),
+        static_cast<unsigned long long>(cameraRejectCalls.load()),static_cast<long long>(hookAt?now-hookAt:-1),
         static_cast<long long>(appliedAt?now-appliedAt:-1),double(blend.load()));
 }
 inline bool effectiveCamera(float& x,float& y,float& z){
     if(!active())return false;
-    Pose current;{std::lock_guard lock(poseMutex);current=pose;}
+    Pose current;
+    {std::lock_guard lock(poseMutex);current=pose;}
     const auto shot=shotAt(nowMs()-enteredAt.load(),blend.load());constexpr float deg=.01745329251994329577f;
     const float yaw=current.yaw*deg+shot.yaw;x=current.x+std::sin(yaw)*shot.distance;
     y=current.y+1.62f+shot.vertical;z=current.z-std::cos(yaw)*shot.distance;return true;
 }
 inline const char* status(){if(!enabled)return "OFF";if(!supported)return "UNAVAILABLE";return active()?"ACTIVE":"WAITING";}
 inline void shutdown(){enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;cameraHookAt=0;
-    cameraHookCalls=0;matrixHookCalls=0;cameraApplyCalls=0;cameraRejectCalls=0;lastDiagnostic=0;}
-inline void unload(){
-    shutdown();
-    if(hooked&&setupTarget)pl::memory::unhook(setupTarget,reinterpret_cast<void*>(&setupHook));
-    if(hooked&&matrixTarget)pl::memory::unhook(matrixTarget,reinterpret_cast<void*>(&matrixTopDirtyHook));
-    hooked=false;supported=false;originalSetup=nullptr;originalMatrixTopDirty=nullptr;
-    setupTarget=nullptr;matrixTarget=nullptr;
-}
+    setupHookCalls=0;builderHookCalls=0;builderApplyCalls=0;cameraApplyCalls=0;cameraRejectCalls=0;lastDiagnostic=0;}
+inline void unload(){shutdown();if(hooked&&setupTarget)pl::memory::unhook(setupTarget,reinterpret_cast<void*>(&setupHook));
+    if(hooked&&transformTarget)pl::memory::unhook(transformTarget,reinterpret_cast<void*>(&cameraTransformHook));
+    hooked=false;supported=false;originalSetup=nullptr;originalCameraTransform=nullptr;setupTarget=nullptr;transformTarget=nullptr;}
 } // namespace lm_cinematic
