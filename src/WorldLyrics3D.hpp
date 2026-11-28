@@ -49,7 +49,13 @@ inline std::atomic<int> otherVerticalRangeTenths{4},otherFontPercent{140};
 inline std::atomic<int> otherArcSpread{220};
 inline std::atomic<int> firstPlacement{0},otherPlacement{2};
 inline std::atomic<bool> lyricTrailFollow{true},experimentalBeats{false};
-inline std::atomic<int> lyricPalette{2}; // 0 pearl, 1 pastel, 2 rainbow, 3 neon
+inline std::atomic<int> lyricPalette{0}; // 0 auto-per-song, 1..9 named palettes
+inline std::atomic<uint64_t> paletteSeed{1};
+inline void setPaletteSeed(std::string_view value){
+    uint64_t hash=1469598103934665603ULL;
+    for(unsigned char ch:value){hash^=ch;hash*=1099511628211ULL;}
+    paletteSeed=hash?hash:1;
+}
 inline std::atomic<float> beatStrength{0.f};
 inline std::atomic<int64_t> beatUpdated{0};
 inline std::atomic<uint64_t> beatPulseSerial{0};
@@ -353,11 +359,11 @@ inline std::vector<std::string> splitLyric(std::string_view text){
         size_t end=text.find(' ',at);
         if(end==text.npos)end=text.size();
         if(end==at)break;
-        const size_t room=part.empty()?10:(part.size()>=9?0:9-part.size());
+        const size_t room=part.empty()?8:(part.size()>=7?0:7-part.size());
         if(!part.empty() && (end-at>room || room==0)){
             result.push_back(std::move(part));part.clear();continue;
         }
-        const size_t taken=std::min<size_t>(end-at,10);
+        const size_t taken=std::min<size_t>(end-at,8);
         std::string word(text.substr(at,taken));
         if(!part.empty())part+=' ';
         part+=word;at+=taken;
@@ -373,7 +379,7 @@ inline std::vector<std::string> splitTimedLyric(std::string_view text){
         size_t end=text.find(' ',at);
         if(end==text.npos)end=text.size();
         while(at<end&&parts.size()<32){
-            const size_t length=std::min<size_t>(10,end-at);
+            const size_t length=std::min<size_t>(8,end-at);
             parts.emplace_back(text.substr(at,length));
             at+=length;
         }
@@ -389,7 +395,7 @@ inline std::vector<std::string> splitUnicodeLyric(std::string_view text){
         const size_t limit=end==text.npos?text.size():end;
         while(at<limit&&parts.size()<32){
             const size_t begin=at;
-            for(size_t count=0;count<10&&at<limit;++count){
+            for(size_t count=0;count<6&&at<limit;++count){
                 ++at;
                 while(at<limit&&(static_cast<unsigned char>(text[at])&0xC0)==0x80)++at;
             }
@@ -405,7 +411,7 @@ inline std::vector<std::string> unicodeParts(std::string_view text,
         std::vector<std::string> parts;
         for(const auto& word:words){
             joined+=word.text;
-            if(lm_timing::utf8Length(word.text)>10)return splitUnicodeLyric(text);
+            if(lm_timing::utf8Length(word.text)>6)return splitUnicodeLyric(text);
             parts.push_back(word.text);
         }
         if(joined==text)return parts;
@@ -435,7 +441,7 @@ inline float cueFade(float position,int start,int end){
     return 1.f-smoothstep((position-float(end))/650.f);
 }
 inline float transitionFade(int64_t now,int64_t start,int index,int stagger){
-    return 1.f-smoothstep(float(now-start-int64_t(index)*stagger)/620.f);
+    return 1.f-smoothstep(float(now-start-int64_t(index)*stagger)/760.f);
 }
 inline float riseForProgress(float progress){
     progress=std::clamp(progress,0.f,1.f);
@@ -451,7 +457,8 @@ inline bool shouldReveal(int64_t now,int64_t due,bool beats,bool freshPulse){
     return now>=due&&(!beats||freshPulse||now-due>=240);
 }
 inline std::array<float,3> lyricTint(int part,int word){
-    const int palette=lyricPalette.load();
+    int palette=lyricPalette.load();
+    if(palette==0)palette=1+int(paletteSeed.load()%9ULL);
     static constexpr std::array<std::array<float,3>,6> pastel{{
         {1.f,.83f,.89f},{.78f,.91f,1.f},{.85f,1.f,.86f},
         {1.f,.92f,.72f},{.90f,.83f,1.f},{.80f,1.f,.96f}}};
@@ -461,12 +468,32 @@ inline std::array<float,3> lyricTint(int part,int word){
     static constexpr std::array<std::array<float,3>,6> neon{{
         {.45f,1.f,.96f},{1.f,.56f,.87f},{.68f,.64f,1.f},
         {1.f,.91f,.42f},{.55f,1.f,.54f},{1.f,.55f,.57f}}};
+    static constexpr std::array<std::array<float,3>,6> aurora{{
+        {.40f,1.f,.78f},{.34f,.88f,1.f},{.58f,.66f,1.f},
+        {.70f,.50f,1.f},{.38f,1.f,.92f},{.72f,1.f,.66f}}};
+    static constexpr std::array<std::array<float,3>,6> sunset{{
+        {1.f,.42f,.38f},{1.f,.58f,.35f},{1.f,.77f,.43f},
+        {1.f,.50f,.66f},{.92f,.48f,1.f},{1.f,.68f,.55f}}};
+    static constexpr std::array<std::array<float,3>,6> ocean{{
+        {.48f,.93f,1.f},{.36f,.74f,1.f},{.45f,.60f,1.f},
+        {.40f,1.f,.93f},{.65f,.87f,1.f},{.54f,.72f,.98f}}};
+    static constexpr std::array<std::array<float,3>,6> sakura{{
+        {1.f,.72f,.84f},{1.f,.84f,.91f},{.91f,.72f,1.f},
+        {1.f,.62f,.76f},{.82f,.74f,1.f},{1.f,.90f,.94f}}};
+    static constexpr std::array<std::array<float,3>,6> gold{{
+        {1.f,.92f,.60f},{1.f,.78f,.30f},{1.f,.96f,.78f},
+        {.92f,.70f,.24f},{1.f,.86f,.48f},{.96f,.94f,.82f}}};
     const auto at=static_cast<size_t>((part*3+word)%6);
-    if(palette==1)return pastel[at];
-    if(palette==2)return rainbow[at];
-    if(palette==3)return neon[at];
+    if(palette==2)return pastel[at];
+    if(palette==3)return rainbow[at];
+    if(palette==4)return neon[at];
+    if(palette==5)return aurora[at];
+    if(palette==6)return sunset[at];
+    if(palette==7)return ocean[at];
+    if(palette==8)return sakura[at];
+    if(palette==9)return gold[at];
     if((part*3+word)%5!=2)return {1.f,1.f,1.f};
-    return pastel[at];
+    return pastel[at]; // Pearl with a restrained accent.
 }
 inline Vec3 lyricAnchor(Pose view,Vec3 cam,uint64_t seed,bool thirdPerson){
     constexpr float deg=.01745329251994f;
@@ -733,7 +760,11 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
         scene.serial=serial;scene.generation=gen;scene.world=view.world;
         scene.player=view.player;scene.renderer=reinterpret_cast<uintptr_t>(rp);
         if(!scene.previous.empty()){
-            scene.previousFadeStart=now+(text.empty()?0:80);
+            const int firstWordDelay=scene.words.empty()?0:
+                std::clamp(scene.words.front().startMs-start,0,700);
+            // Hold the outgoing cue until the incoming cue has visibly begun.
+            // This removes the one-frame/early-word blank that looked like a blink.
+            scene.previousFadeStart=now+(text.empty()?0:std::max(180,firstWordDelay+120));
             scene.previousStagger=std::clamp(850/int(scene.previous.size()),55,150);
             int64_t lastWord=0;
             for(auto& old:scene.previous){
@@ -741,7 +772,7 @@ inline void renderHook(void* renderer,void* ctx,void* arg){
                 lastWord=std::max(lastWord,int64_t(old.partIndex)*scene.previousStagger+
                     int64_t(old.wordCount-1)*65);
             }
-            scene.previousUntil=scene.previousFadeStart+lastWord+620;
+            scene.previousUntil=scene.previousFadeStart+lastWord+760;
         }
     }
     const float dt=std::clamp(float(now-scene.lastFrame),0.f,200.f);

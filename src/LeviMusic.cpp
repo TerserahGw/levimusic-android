@@ -1089,14 +1089,17 @@ std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, co
     jobject array = ctor && source ? env->NewObject(arrayClass, ctor, source) : nullptr;
     if (clearException(env, "lyrics parse")) array = nullptr;
     std::vector<Lyric> result;
+    std::string bestPlain;
     if (array && length && get) {
         jint count = env->CallIntMethod(array, length);
         if (clearException(env, "lyrics length")) count = 0;
-        int bestScore = -999999;
+        int bestSyncedScore = -999999;
+        int bestPlainScore = -999999;
         for (int i = 0; i < std::min(count, 20); i++) {
             jobject obj = env->CallObjectMethod(array, get, i);
             if (clearException(env, "lyrics entry") || !obj) continue;
             auto lrc = optString(env, obj, "syncedLyrics");
+            auto plainLyrics = optString(env, obj, "plainLyrics");
             if(optString(env,obj,"instrumental")=="true"){env->DeleteLocalRef(obj);continue;}
             const std::string actualTitle=optString(env,obj,"trackName");
             const std::string actualArtist=optString(env,obj,"artistName");
@@ -1128,16 +1131,41 @@ std::vector<Lyric> searchLyricsRaw(JNIEnv* env, const std::string& songTitle, co
             env->DeleteLocalRef(obj);
             if(!lrc.empty() && score>0){
                 auto candidate = parseLrc(lrc);
-                if(!candidate.empty() && score > bestScore) {
-                    bestScore=score;
+                if(!candidate.empty() && score > bestSyncedScore) {
+                    bestSyncedScore=score;
                     result=std::move(candidate);
                 }
+            }
+            if(!plainLyrics.empty()&&score>bestPlainScore){
+                bestPlainScore=score;
+                bestPlain=std::move(plainLyrics);
             }
         }
     }
     if (array) env->DeleteLocalRef(array);
     if (source) env->DeleteLocalRef(source);
     env->DeleteLocalRef(arrayClass);
+    if(!result.empty()||bestPlain.empty())return result;
+    // LRCLIB also carries valid plain lyrics for recordings without an LRC.
+    // Keep those songs usable by assigning conservative line timestamps; a
+    // real synced result always wins before this fallback is considered.
+    std::istringstream input(bestPlain);
+    std::vector<std::string> lines;
+    std::string line;
+    while(std::getline(input,line)&&lines.size()<400){
+        line=lm_lyric::normalize(line);
+        if(!line.empty()&&line.front()!='[')lines.push_back(std::move(line));
+    }
+    if(lines.empty())return {};
+    const int available=trackDurationMs>0?std::max(trackDurationMs-1200,1000):
+        static_cast<int>(lines.size())*3600;
+    const int step=std::clamp(available/std::max<int>(1,lines.size()),1800,6500);
+    result.reserve(lines.size());
+    for(size_t i=0;i<lines.size();++i){
+        Lyric item;item.ms=600+static_cast<int>(i)*step;
+        item.endMs=item.ms+step;item.line=std::move(lines[i]);
+        result.push_back(std::move(item));
+    }
     return result;
 }
 
@@ -2061,12 +2089,12 @@ struct Rect {
 struct UI {
     float w{},h{},s{},m{};
     Rect mini,outer,left,lyrics,right,close,settings,pair,library,addSong,searchBox,searchGo,repeat,shuffle,prev,play,next,stop,seek,pagePrev,pageNext;
-    Rect tabSearch,tabQueue,queueNow,queueSaved,savedInput,savedCreate;
+    Rect tabSearch,tabQueue,tabPlaylist,queueNow,queueSaved,savedInput,savedCreate;
     std::vector<Rect> rows;
     bool ok()const{return w>0&&h>0;}
 };
 struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
-constexpr std::array<SettingRow,32> quickSettings{{
+constexpr std::array<SettingRow,31> quickSettings{{
     {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
     {"lyricTrailFollow","Follow player and rise",0,0,1,true},
     {"romanizeLyrics","Romanized subtitles",0,0,1,true},
@@ -2087,8 +2115,7 @@ constexpr std::array<SettingRow,32> quickSettings{{
     {"otherArcSpread","Line arc (degrees)",2,60,330,false},
     {"otherPlacement","Layout: arc / ring / scatter",2,0,2,false},
     {"worldFont","Font: Sans / Serif / Mono / Condensed",3,0,3,false},
-    {"lyricPalette","Colors: Pearl / Pastel / Rainbow / Neon",3,0,3,false},
-    {"worldTextScript","Text: Original / Romanized",3,0,1,false},
+    {"lyricPalette","3D color: Auto (0) / curated themes (1-9)",3,0,9,false},
     {"hudSize","Compact HUD size (%)",3,55,125,false},
     {"hudX","Compact HUD horizontal (%)",3,0,100,false},
     {"hudY","Compact HUD vertical (%)",3,0,100,false},
@@ -2149,12 +2176,13 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
     p.left={contentX,contentY,playerW,contentH};
     p.right={contentX+playerW+gutter,contentY,
              contentW-playerW-gutter,contentH};
-    // Lyrics live inside Now Playing; the right side only switches Search/Queue.
+    // Lyrics live inside Now Playing; the former Lyrics tab is now Playlist.
     const float tabGap=4*m;
-    const float tabW=(p.right.w-20*m-tabGap)/2.f;
+    const float tabW=(p.right.w-20*m-tabGap*2.f)/3.f;
     const float tabY=p.right.y+6*m;
     p.tabSearch={p.right.x+10*m,tabY,tabW,27*m};
     p.tabQueue={p.tabSearch.x+tabW+tabGap,tabY,tabW,27*m};
+    p.tabPlaylist={p.tabQueue.x+tabW+tabGap,tabY,tabW,27*m};
     p.close={p.outer.x+p.outer.w-42*m,p.outer.y+10*m,30*m,30*m};
     p.settings={p.close.x-39*m,p.close.y,30*m,30*m};
     p.pair={p.settings.x-69*m,p.close.y,61*m,30*m};
@@ -2175,9 +2203,11 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
     p.repeat={mid-132*m,bottom+5*m,34*m,34*m};
     p.shuffle={mid+98*m,bottom+5*m,34*m,34*m};
     p.seek={p.left.x+18*m,bottom-41*m,p.left.w-36*m,15*m};
-    p.lyrics={p.left.x+14*m,p.left.y+112*m,p.left.w-28*m,
-              std::max(48*m,p.seek.y-(p.left.y+112*m)-18*m)};
-    const float rowStart=p.right.y+116*m;
+    // Keep metadata and lyrics in separate vertical zones. The lyric block is
+    // intentionally lower so the active line can sit in the visual centre.
+    p.lyrics={p.left.x+14*m,p.left.y+137*m,p.left.w-28*m,
+              std::max(75*m,p.seek.y-(p.left.y+137*m)-16*m)};
+    const float rowStart=p.right.y+124*m;
     const float rowBottom=p.right.y+p.right.h-40*m;
     const int rowCount=compact?7:5;
     const float rowStep=std::max(19*m,(rowBottom-rowStart)/float(rowCount));
@@ -2246,7 +2276,7 @@ class LeviMusic {
     std::vector<Track> playlistOrder_;
     bool standaloneQueueSelection_=false;
     bool standalonePlaylistQueue_=false;
-    int rightTab_=0; // 0 Search, 1 Playlist / Up Next, 2 Lyrics
+    int rightTab_=0; // 0 Search, 1 Up Next, 2 Playlist
     std::vector<std::string> playlistNames_;
     std::string activePlaylist_;
     std::string renameTarget_,pendingDelete_;
@@ -2349,7 +2379,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta5 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta6 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2366,9 +2396,8 @@ public:
             .config("lyricBelow","Show lyric bubble below HUD",pl::modmenu::ConfigType::Toggle,remembered("lyricBelow","false"))
             .config("floatingLyrics","Legacy 2D lyric scatter",pl::modmenu::ConfigType::Toggle,remembered("floatingLyrics","false"))
             .config("worldLyrics3D","3D Floating Lyrics (client-only)",pl::modmenu::ConfigType::Toggle,remembered("worldLyrics3D","true"))
-            .config("worldTextScript","3D Script (0 Original / 1 Romanized)",pl::modmenu::ConfigType::SliderInt,remembered("worldTextScript","0"),"0","1")
             .config("worldFont","3D Font (0 Sans / 1 Serif Italic / 2 Mono Bold / 3 Condensed)",pl::modmenu::ConfigType::SliderInt,remembered("worldFont","3"),"0","3")
-            .config("lyricPalette","3D Colors (0 Pearl / 1 Pastel / 2 Rainbow / 3 Neon)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","2"),"0","3")
+            .config("lyricPalette","3D Colors (0 Auto / 1 Pearl / 2 Pastel / 3 Rainbow / 4 Neon / 5 Aurora / 6 Sunset / 7 Ocean / 8 Sakura / 9 Gold)",pl::modmenu::ConfigType::SliderInt,remembered("lyricPalette","0"),"0","9")
             .config("lyricDistance","First Person Distance (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricDistance","22"),"12","60")
             .config("lyricHeight","First Person Height (0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricHeight","0"),"0","30")
             .config("lyricVerticalRange","First Person Vertical Scatter (+/- 0.1 blocks)",pl::modmenu::ConfigType::SliderInt,remembered("lyricVerticalRange","2"),"0","15")
@@ -2575,6 +2604,7 @@ private:
         }
     }
     void queueLyrics(const Track& track,int duration,const std::string& key,bool standalone=false){
+        lm_world3d::setPaletteSeed(track.title+"|"+track.artist+"|"+track.id);
         {
             std::lock_guard lock(mu_);
             playerLyricOffset_=0;
@@ -2637,7 +2667,7 @@ private:
         } else if(k=="worldFont") {
             try{worldFont_=std::clamp(std::stoi(std::string(v)),0,3);}catch(...){}
         } else if(k=="lyricPalette") {
-            try{lm_world3d::lyricPalette=std::clamp(std::stoi(std::string(v)),0,3);}catch(...){}
+            try{lm_world3d::lyricPalette=std::clamp(std::stoi(std::string(v)),0,9);}catch(...){}
         } else if(k=="lyricDistance") {
             try{lm_world3d::lyricDistanceTenths=std::clamp(std::stoi(std::string(v)),12,60);}catch(...){}
         } else if(k=="lyricHeight") {
@@ -2866,8 +2896,8 @@ private:
                         quickSettings.begin(),quickSettings.end(),[&](const SettingRow& row){
                             return row.page==settingsPage_;
                         }));
-                }else count=rightTab_==0?results_.size():rightTab_==1?
-                    (libraryMode_==3?queueTracks_.size():libraryMode_==1?playlistNames_.size():results_.size()):0;
+                }else count=rightTab_==0?results_.size():rightTab_==1?queueTracks_.size():
+                    (libraryMode_==1?playlistNames_.size():results_.size());
                 const int visible=settingsOpen_?7:int(l.rows.size());
                 const int limit=std::max(0,int(count)-visible);
                 const int next=std::clamp(origin+int(std::round(delta/std::max(18.f,34*l.s))),0,limit);
@@ -2983,6 +3013,12 @@ private:
             }
             pl::input::hideKeyboard();
             if(useBridge_)addJob(Action::QueueRefresh);
+        }else if(l.tabPlaylist.contains(e.x,e.y)){
+            {std::lock_guard lock(mu_);
+                rightTab_=2;libraryMode_=1;page_=0;selected_=-1;typing_=false;
+            }
+            pl::input::hideKeyboard();
+            addJob(Action::PlaylistList);
         }else if(l.prev.contains(e.x,e.y))addJob(Action::Previous);
         else if(l.play.contains(e.x,e.y))addJob(Action::PlayPause);
         else if(l.next.contains(e.x,e.y))addJob(Action::Next);
@@ -3006,18 +3042,10 @@ private:
                 {std::lock_guard lock(mu_);q=query_;typing_=false;page_=0;}
                 pl::input::hideKeyboard();
                 addJob(Action::Search,q);
-            }else if(tab==1 && l.queueNow.contains(e.x,e.y)){
-                {std::lock_guard lock(mu_);libraryMode_=3;page_=0;selected_=-1;typing_=false;}
-                pl::input::hideKeyboard();
-                if(useBridge_)addJob(Action::QueueRefresh);
-            }else if(tab==1 && l.queueSaved.contains(e.x,e.y)){
-                {std::lock_guard lock(mu_);libraryMode_=1;page_=0;selected_=-1;typing_=false;}
-                pl::input::hideKeyboard();
-                addJob(Action::PlaylistList);
-            }else if(tab==1 && mode==1 && l.savedInput.contains(e.x,e.y)){
+            }else if(tab==2 && mode==1 && l.savedInput.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);query_.clear();typing_=true;}
                 pl::input::showKeyboard();
-            }else if(tab==1 && mode==1 && l.savedCreate.contains(e.x,e.y)){
+            }else if(tab==2 && mode==1 && l.savedCreate.contains(e.x,e.y)){
                 std::string name;
                 {std::lock_guard lock(mu_);name=query_;typing_=false;}
                 pl::input::hideKeyboard();
@@ -3025,16 +3053,16 @@ private:
                 {std::lock_guard lock(mu_);old=renameTarget_;renameTarget_.clear();}
                 addJob(old.empty()?Action::PlaylistCreate:Action::PlaylistRename,
                     old.empty()?name:old+"\n"+name);
-            }else if(tab!=2 && l.pagePrev.contains(e.x,e.y)){
+            }else if(l.pagePrev.contains(e.x,e.y)){
                 if(!compactUi_){std::lock_guard lock(mu_);page_=std::max(0,page_-1);}
-            }else if(tab!=2 && l.pageNext.contains(e.x,e.y)){
+            }else if(l.pageNext.contains(e.x,e.y)){
                 if(!compactUi_){std::lock_guard lock(mu_);
                     const size_t count=tab==0?results_.size():
-                            mode==3?queueTracks_.size():
+                            tab==1?queueTracks_.size():
                             mode==1?playlistNames_.size():results_.size();
                     if(static_cast<size_t>((page_+1)*5)<count)++page_;
                 }
-            }else if(tab!=2){
+            }else{
                 int selected=-1;
                 std::string id,name;
                 bool plus=false,minus=false,playlistAdd=false,playlistRemove=false,offlineSave=false;
@@ -3044,7 +3072,7 @@ private:
                     for(size_t i=0;i<l.rows.size();i++){
                         int index=(compactUi_?page_:page_*5)+static_cast<int>(i);
                         const bool inRange=tab==0?index<static_cast<int>(results_.size()):
-                            mode==3?index<static_cast<int>(queueTracks_.size()):
+                            tab==1?index<static_cast<int>(queueTracks_.size()):
                             mode==1?index<static_cast<int>(playlistNames_.size()):
                                     index<static_cast<int>(results_.size());
                         if(!inRange || !l.rows[i].contains(e.x,e.y))continue;
@@ -3054,15 +3082,15 @@ private:
                             e.x>l.rows[i].x+l.rows[i].w-83*l.s;
                         const bool saveOffline=tab==0 && !plus && !playlistAdd &&
                             e.x>l.rows[i].x+l.rows[i].w-124*l.s;
-                        minus=tab==1 && mode==3 && index>0
+                        minus=tab==1 && index>0
                             && e.x>l.rows[i].x+l.rows[i].w-42*l.s;
-                        playlistRemove=tab==1 && mode==2 &&
+                        playlistRemove=tab==2 && mode==2 &&
                             e.x>l.rows[i].x+l.rows[i].w-42*l.s;
                         if(tab==0){id=results_[static_cast<size_t>(index)].id;
                             if(saveOffline)offlineSave=true;}
-                        else if(mode==3)id=queueTracks_[static_cast<size_t>(index)].id;
+                        else if(tab==1)id=queueTracks_[static_cast<size_t>(index)].id;
                         else if(mode==1)name=playlistNames_[static_cast<size_t>(index)];
-                        if(tab==1&&mode==1){
+                        if(tab==2&&mode==1){
                             deletePlaylist=e.x>l.rows[i].x+l.rows[i].w-35*l.s;
                             renamePlaylist=!deletePlaylist&&e.x>l.rows[i].x+l.rows[i].w-70*l.s;
                         }
@@ -3074,7 +3102,7 @@ private:
                     if(tab==0)addJob(plus?Action::QueueAdd:
                                       playlistAdd?Action::PlaylistAdd:
                                       offlineSave?Action::OfflineSave:Action::Select,id);
-                    else if(mode==3)addJob(minus?Action::QueueRemove:Action::QueuePlay,id);
+                    else if(tab==1)addJob(minus?Action::QueueRemove:Action::QueuePlay,id);
                     else if(mode==1){
                         if(renamePlaylist){
                             {std::lock_guard lock(mu_);renameTarget_=name;query_=name;typing_=true;}
@@ -3227,7 +3255,7 @@ private:
             std::lock_guard lock(mu_);
             title=title_;artist=artist_;info=info_;query=query_;lyric=lyricsOn_?lyric_:"";coverImage=coverImageId_;
             tracks=results_;queueTracks=queueTracks_;playlistNames=playlistNames_;
-            activePlaylist=activePlaylist_;libraryMode=libraryMode_;rightTab=std::clamp(rightTab_,0,1);
+            activePlaylist=activePlaylist_;libraryMode=libraryMode_;rightTab=std::clamp(rightTab_,0,2);
             playerLyricOffset=playerLyricOffset_;
             settingsPage=settingsPage_;settingsScroll=settingsScroll_;settingsOpen=settingsOpen_;
             timedLyrics=lyrics_;
@@ -3266,7 +3294,6 @@ private:
         // Client-only native 3D scene: independent from Behavior Packs or servers.
         if(worldLyrics3D_){
             std::string worldLine;
-            std::string worldReading;
             const std::vector<lm_timing::WordCue>* wordCues=nullptr;
             int worldIndex=-1;
             int cueStart=std::max(0,elapsed-500),cueEnd=elapsed+3000;
@@ -3276,8 +3303,6 @@ private:
                     worldIndex=int(i);
                     worldLine=item.line;
                     wordCues=&item.words;
-                    worldReading=romanizeLyrics_?
-                        (item.romanizedWorld.empty()?item.romanized:item.romanizedWorld):std::string{};
                     cueStart=item.ms;
                     cueEnd=i+1<timedLyrics.size()?timedLyrics[i+1].ms:
                         (total>item.ms?total:item.ms+3500);
@@ -3300,8 +3325,8 @@ private:
             if(interludeStart>=0&&elapsed>=interludeStart+260&&interludeEnd-elapsed>420){
                 static constexpr std::array<std::string_view,4> interludes{
                     "♪   ♫   ♪","♬   ·   ♩","♫   ♪   ♫","♩   ♬   ♪"};
-                worldLine=std::string(interludes[size_t(elapsed/1400)%interludes.size()]);
-                worldReading.clear();wordCues=nullptr;
+                worldLine=std::string(interludes[size_t(std::max(0,interludeStart)/1400)%interludes.size()]);
+                wordCues=nullptr;
                 cueStart=interludeStart;cueEnd=std::max(interludeStart+1,interludeEnd);
             }
             const int font=worldFont_.load();
@@ -3327,8 +3352,7 @@ private:
                                           std::span<const lm_timing::WordCue>{},
                                  rasterValid_?std::span<const lm_world3d::GlyphMesh>(rasterMeshes_):
                                               std::span<const lm_world3d::GlyphMesh>{},
-                                 uint32_t(font)*2U,
-                                 worldReading);
+                                 uint32_t(font)*2U);
         }
         else if(lm_world3d::installed)
             lm_world3d::publish("");
@@ -3595,7 +3619,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta5 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta6 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);
@@ -3654,10 +3678,11 @@ private:
         }else{
             const int center=std::clamp(std::max(0,activeLine)+playerLyricOffset,0,
                 int(timedLyrics.size())-1);
-            const int visible=compact?3:5;
-            const float step=std::min(30*u,l.lyrics.h/float(visible));
-            const int first=center-visible/2;
-            const size_t maxChars=static_cast<size_t>(std::max(10.f,l.lyrics.w/(6.1f*u)));
+            constexpr int visible=5;
+            const float step=std::min(25.5f*u,l.lyrics.h/float(visible));
+            const float blockTop=l.lyrics.y+std::max(0.f,(l.lyrics.h-step*visible)*.5f);
+            const int first=center-2;
+            const size_t maxChars=static_cast<size_t>(std::max(10.f,l.lyrics.w/(5.45f*u)));
             auto centered=[&](float y,std::string value,float size,uint32_t color){
                 value=shorten(std::move(value),maxChars);
                 const float width=float(lm_timing::utf8Length(value))*size*.54f;
@@ -3667,21 +3692,21 @@ private:
             for(int row=0;row<visible;++row){
                 const int index=first+row;if(index<0||index>=int(timedLyrics.size()))continue;
                 const auto& item=timedLyrics[size_t(index)];
-                const float y=l.lyrics.y+(row+.65f)*step;
+                const float y=blockTop+(row+.61f)*step;
                 const bool live=index==activeLine;
-                if(live)box({l.lyrics.x+4*u,y-step*.63f,l.lyrics.w-8*u,step*.88f},
+                if(live)box({l.lyrics.x+4*u,y-step*.58f,l.lyrics.w-8*u,step*.83f},
                             0x553F444DU,6.f);
                 if(live&&!item.words.empty()){
                     const std::string full=shorten(item.line,maxChars);
-                    const float size=11.2f*u;
+                    const float size=9.7f*u;
                     const float width=float(lm_timing::utf8Length(full))*size*.54f;
                     const float x=std::max(l.lyrics.x+4*u,l.lyrics.x+(l.lyrics.w-width)*.5f);
                     text(x,y,full,size,0xFF777B84U,maxChars);
                     const std::string revealed=lm_timing::revealedText(item.line,item.words,elapsed);
                     if(!revealed.empty())text(x,y,revealed,size,C_TEXT,maxChars);
-                }else centered(y,item.line,live?11.2f*u:9.7f*u,live?C_TEXT:0xFF777B84U);
-                if(live&&romanizeLyrics_&&!item.romanized.empty()&&step>=25*u)
-                    centered(y+10*u,item.romanized,7.6f*u,C_DIM);
+                }else centered(y,item.line,live?9.7f*u:8.35f*u,live?C_TEXT:0xFF777B84U);
+                if(live&&romanizeLyrics_&&!item.romanized.empty()&&step>=24*u)
+                    centered(y+8.2f*u,item.romanized,6.4f*u,C_DIM);
             }
         }
         const float prog=total>0?std::clamp(float(elapsed)/total,0.f,1.f):0.f;
@@ -3716,12 +3741,12 @@ private:
              9.7f*u,C_DIM);
 
 
-        // Lyrics moved into Now Playing; the content panel keeps two clear tabs.
-        for(int tab=0;tab<2;tab++){
-            Rect r=tab==0?l.tabSearch:l.tabQueue;
+        // Lyrics moved into Now Playing; Playlist now owns the third tab.
+        for(int tab=0;tab<3;tab++){
+            Rect r=tab==0?l.tabSearch:tab==1?l.tabQueue:l.tabPlaylist;
             const bool active=rightTab==tab;
             box(r,active?0xFF525760U:0xFF282B31U,8.f);
-            const std::string label=tab==0?"SEARCH":"QUEUE";
+            const std::string label=tab==0?"SEARCH":tab==1?"QUEUE":"PLAYLIST";
             const float alignX=r.x+(r.w-static_cast<float>(label.size())*5.8f*u)*.5f;
             text(alignX,r.y+18*u,label,10.4f*u,active?C_TEXT:C_DIM,14);
         }
@@ -3794,30 +3819,23 @@ private:
                      "Search for a song to start your radio.",12*u,C_DIM,57);
             }else drawSongs(tracks,false,true,false);
         }else if(rightTab==1){
-            box(l.queueNow,libraryMode==3?0xFF50555EU:0xFF2C3037U,7.f);
-            text(l.queueNow.x+11*u,l.queueNow.y+20*u,
-                 "UP NEXT",10.5f*u,libraryMode==3?C_TEXT:C_DIM,15);
-            box(l.queueSaved,(libraryMode==1||libraryMode==2)?0xFF50555EU:0xFF2C3037U,7.f);
-            text(l.queueSaved.x+10*u,l.queueSaved.y+20*u,
-                 "PLAYLISTS",10.5f*u,
-                 libraryMode!=3?C_TEXT:C_DIM,14);
-            if(libraryMode==3){
-                text(l.right.x+15*u,l.right.y+106*u,
-                     "RADIO • CURRENT TRACK + 3 RECOMMENDATIONS",10.6f*u,C_DIM,61);
-                if(queueTracks.empty()){
-                    text(l.right.x+18*u,l.right.y+164*u,
-                         "Select a song from Search to create Up Next.",
-                         11.8f*u,C_DIM,60);
-                }else{
-                    drawSongs(queueTracks,true,false,false);
-                    const size_t shown=std::min<size_t>(queueTracks.size(),queueTracks.empty()?0:
-                        size_t(compact?page+1:(page+1)*5));
-                    text(l.right.x+15*u,l.right.y+l.right.h-15*u,
-                         "UP NEXT "+std::to_string(shown)+" / "+
-                         std::to_string(queueTracks.size())+
-                         "  •  Tap to play  •  X removes",10*u,C_DIM,67);
-                }
-            }else if(libraryMode==1){
+            text(l.right.x+15*u,l.right.y+64*u,
+                 "UP NEXT • CURRENT TRACK + RECOMMENDATIONS",10.6f*u,C_DIM,61);
+            if(queueTracks.empty()){
+                text(l.right.x+18*u,l.right.y+164*u,
+                     "Select a song from Search to create Up Next.",
+                     11.8f*u,C_DIM,60);
+            }else{
+                drawSongs(queueTracks,true,false,false);
+                const size_t shown=std::min<size_t>(queueTracks.size(),queueTracks.empty()?0:
+                    size_t(compact?page+1:(page+1)*5));
+                text(l.right.x+15*u,l.right.y+l.right.h-15*u,
+                     "UP NEXT "+std::to_string(shown)+" / "+
+                     std::to_string(queueTracks.size())+
+                     "  •  Tap to play  •  X removes",10*u,C_DIM,67);
+            }
+        }else if(rightTab==2){
+            if(libraryMode==1){
                 box(l.savedInput,0xFF282B30U,8.f);
                 text(l.savedInput.x+9*u,l.savedInput.y+21*u,
                      typing?("_ "+query):(query.empty()?"Name or YouTube playlist URL...":query),
@@ -3835,7 +3853,7 @@ private:
                     text(row.x+row.w-27*u,row.y+std::min(19*u,row.h-3*u),"X",11*u,C_DIM,2);
                 }
                 drawPage(playlistNames.size(),"PLAYLISTS");
-            }else{
+            }else if(libraryMode==2){
                 text(l.right.x+16*u,l.right.y+103*u,
                      activePlaylist.empty()?"SAVED PLAYLIST":activePlaylist,
                      12.6f*u,C_TEXT,56);

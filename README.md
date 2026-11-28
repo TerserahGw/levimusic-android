@@ -6,7 +6,7 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 **Current stable build:** v1.7.0 (27 November 2026)
-**Current beta build:** v1.7.1-Beta5 (28 November 2026)
+**Current beta build:** v1.7.1-Beta6 (28 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -16,11 +16,11 @@ LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aure
 ## Features
 
 - **Unified playback engine:** Aurelis fallback works without pairing, while the Bridge is selected automatically when the companion is available.
-- **Search / Playlist / Lyrics tabs:** a touch-friendly in-game interface for landscape Android. Create playlists and add or remove their tracks directly in game.
+- **Search / Queue / Playlist tabs:** a touch-friendly in-game interface for landscape Android. Create playlists and add or remove their tracks directly in game.
 - **Editable Up Next:** starting a song creates a temporary related-track radio with up to three future suggestions when available. Remove, play, or add songs to the queue. Saved playlists retain their own order.
 - **Synchronized lyrics:** active-line highlights and word-by-word timing when a source provides authentic word timestamps. Smaller romanized readings appear beneath the original text.
 - **Multiple lyric sources:** QQ Music/QRC, LRCLIB, NetEase, KuGou, lrc.red, BetterLyrics, LiriQo, local lyrics, and supported caption fallbacks. Results vary by song and provider availability.
-- **3D floating lyrics:** client-only world-space lyric panels with Unicode font fallback, four font styles, four color palettes, segmented transitions, and configurable placement. No per-world addon is required; other players do not see your lyrics.
+- **3D floating lyrics:** client-only world-space lyric panels with Unicode font fallback, four font styles, nine curated color palettes plus per-song Auto selection, segmented transitions, and configurable placement. No per-world addon is required; other players do not see your lyrics.
 - **2D HUD lyrics:** synchronized words can be placed above or below the compact HUD and aligned left or right while 3D lyrics remain active.
 - **Settings:** a compact category sidebar keeps General, camera, style, experimental, and keybind options organized while the selected category scrolls independently.
 - **Expanded keybinds:** bind open-and-search, search focus, next, previous, play/pause, stop, repeat, shuffle, volume, lyrics, and HUD actions.
@@ -41,15 +41,15 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta5-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta6-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-## Testing in v1.7.1-Beta5
+## Testing in v1.7.1-Beta6
 
-- 3D text rasterization accepts Android font fallback for Japanese, Korean, Chinese, Arabic, emoji, symbols, and other Unicode scripts, with denser glyph meshes.
-- Instrumental gaps display animated musical-note interludes instead of leaving an expired vocal line in world space.
-- Lyrics moved from the right tab into Now Playing between track metadata and the duration bar.
-- The embedded lyric view follows and highlights the active line, supports word-timestamp progress, centered text, and vertical scrolling.
-- Compact UI now reduces the complete Music and Settings panels; disabling it restores the full-size layout.
+- Now Playing separates metadata from a lower, smaller five-line lyric view with two lines above and below the highlighted centre line.
+- 3D lyric transitions retain the outgoing cue until the incoming cue is visible, while long Unicode and Latin lines split into shorter world-space segments.
+- 3D lyrics always use the original script, without romanized panels, and Auto selects one of nine curated color themes per song.
+- Search, Queue, and Playlist now have independent tabs; saved playlists no longer share the Up Next screen.
+- LRCLIB plain lyrics are retained as a timed fallback when a genuine synchronized LRC is unavailable.
 
 ## New in v1.7.0 Stable
 

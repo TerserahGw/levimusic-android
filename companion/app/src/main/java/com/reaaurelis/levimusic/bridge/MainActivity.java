@@ -981,7 +981,7 @@ public final class MainActivity extends Activity {
         String token=BridgeService.getOrCreateToken(this);
         String info="Connect Minecraft to Aurelis Symphony.\n\n"
              +"1. Open this app once so the local Bridge is ready.\n"
-             +"2. Enable LeviMusic 1.7.1-Beta5 in LeviLauncher and enter a world.\n"
+             +"2. Enable LeviMusic 1.7.1-Beta6 in LeviLauncher and enter a world.\n"
              +"3. Wait up to four seconds: the mod switches to Bridge automatically.\n"
              +"4. If the app is unavailable, the same mod returns to Aurelis fallback.\n\n"
              +"PAIRING KEY:\n"+token+"\n\n"

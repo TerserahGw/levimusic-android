@@ -33,7 +33,7 @@ int main(){
            otherVerticalRangeTenths==4&&otherFontPercent==140);
     assert(lyricHeightTenths==0&&lyricVerticalRangeTenths==2);
     assert(lyricScatterFov==60&&firstPlacement==0&&
-           lyricTrailFollow&&lyricPalette==2);
+           lyricTrailFollow&&lyricPalette==0);
     otherDistanceTenths=38;otherHeightTenths=13;lyricTrailFollow=false;
     const std::vector<lm_timing::WordCue> sample{{21070,21307,"I"},
         {21307,21753,"wanna"},{21753,22304,"take"},{22304,22487,"you"}};
@@ -180,9 +180,9 @@ int main(){
     assert(splitLyric("One long lyric line that should appear across different parts").size()>=4);
     const auto scriptParts=splitUnicodeLyric("夜に駆ける 한국어 مرحبا Привет");
     assert(scriptParts.size()==4);
-    for(const auto& part:scriptParts)assert(lm_timing::utf8Length(part)<=10);
+    for(const auto& part:scriptParts)assert(lm_timing::utf8Length(part)<=6);
     auto wrapped=splitUnicodeLyric("あいうえおかきくけこさしすせそ");
-    assert(wrapped.size()==2&&wrapped[0]+wrapped[1]=="あいうえおかきくけこさしすせそ");
+    assert(wrapped.size()==3&&wrapped[0]+wrapped[1]+wrapped[2]=="あいうえおかきくけこさしすせそ");
     assert(unicodeParts("夜に駆ける",japanese).size()==4);
     std::array<uint8_t,49> mask{};mask[24]=255;
     auto crisp=rasterMesh(mask,7,7,4,1);
@@ -191,12 +191,12 @@ int main(){
         assert(edge.x!=crisp.pixels[0].x||edge.y!=crisp.pixels[0].y);
     assert(panelClearance({0,0,2},.6f,{0,0,0},{.08f,0,2},.6f)<1.f);
     assert(panelClearance({0,.8f,2},.6f,{0,0,0},{0,0,2},.6f)>1.f);
-    lyricPalette=2;
+    lyricPalette=3;
     assert(lyricTint(0,0)!=lyricTint(1,0));
-    lyricPalette=0;
-    for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=10);
+    lyricPalette=1;
+    for(const auto& part:splitLyric("One long lyric line that should appear across different parts"))assert(part.size()<=8);
     auto longWord=splitLyric("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
-    assert(longWord.size()==4&&longWord[0]+longWord[1]+longWord[2]+longWord[3]=="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
+    assert(longWord.size()==5&&longWord[0]+longWord[1]+longWord[2]+longWord[3]+longWord[4]=="abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN");
     auto firstPanel=layoutAnchor({0,0,0},{1,0,0},0,8,.9f);
     auto secondPanel=layoutAnchor({0,0,0},{1,0,0},1,8,.9f);
     auto fifthPanel=layoutAnchor({0,0,0},{1,0,0},4,8,.9f);
