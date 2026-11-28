@@ -126,17 +126,17 @@ public final class PlayerService extends MediaSessionService {
             immersiveReverb.setDensity((short)700);
             player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.16f));
         }else{
-            immersiveReverb.setRoomLevel((short)-850);
-            immersiveReverb.setRoomHFLevel((short)-1800);
-            immersiveReverb.setDecayTime(2200);
-            immersiveReverb.setDecayHFRatio((short)650);
-            immersiveReverb.setReflectionsLevel((short)-700);
-            immersiveReverb.setReflectionsDelay(28);
-            immersiveReverb.setReverbLevel((short)-450);
-            immersiveReverb.setReverbDelay(42);
-            immersiveReverb.setDiffusion((short)800);
-            immersiveReverb.setDensity((short)850);
-            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.40f));
+            immersiveReverb.setRoomLevel((short)-450);
+            immersiveReverb.setRoomHFLevel((short)-1450);
+            immersiveReverb.setDecayTime(2850);
+            immersiveReverb.setDecayHFRatio((short)720);
+            immersiveReverb.setReflectionsLevel((short)-260);
+            immersiveReverb.setReflectionsDelay(34);
+            immersiveReverb.setReverbLevel((short)-180);
+            immersiveReverb.setReverbDelay(56);
+            immersiveReverb.setDiffusion((short)900);
+            immersiveReverb.setDensity((short)920);
+            player.setAuxEffectInfo(new AuxEffectInfo(immersiveReverb.getId(),.62f));
         }
         immersiveReverb.setEnabled(true);
     }

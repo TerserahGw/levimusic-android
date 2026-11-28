@@ -25,7 +25,8 @@ struct Position {float x=0,y=0,z=0;};
 inline std::atomic<bool> enabled{false},supported{false},hooked{false},playing{false};
 inline std::atomic<int> idleDelay{15};
 inline std::atomic<int64_t> lastActivity{0},enteredAt{0},cameraAppliedAt{0},cameraHookAt{0},lastDiagnostic{0};
-inline std::atomic<uint64_t> setupHookCalls{0},builderHookCalls{0},builderApplyCalls{0},cameraApplyCalls{0},cameraRejectCalls{0};
+inline std::atomic<uint64_t> setupHookCalls{0},builderHookCalls{0},builderApplyCalls{0},
+    finalStateWrites{0},cameraApplyCalls{0},cameraRejectCalls{0};
 inline std::atomic<float> blend{0.f};
 inline std::mutex poseMutex;inline Pose pose{};
 inline SetupCameraFn originalSetup=nullptr;
@@ -37,7 +38,8 @@ inline thread_local bool frameDecisionMade=false,frameActive=false;
 inline thread_local int builderCallsThisSetup=0;
 inline thread_local float* patchedPosition=nullptr;
 inline thread_local Position savedPosition{},cinematicPosition{};
-inline thread_local Quaternion cinematicOrientation{};
+inline thread_local Quaternion savedOrientation{},cinematicOrientation{};
+inline thread_local bool componentHeld=false;
 
 inline int64_t nowMs(){return std::chrono::duration_cast<std::chrono::milliseconds>(
     std::chrono::steady_clock::now().time_since_epoch()).count();}
@@ -71,6 +73,22 @@ inline bool sanePosition(const Position& p){
 inline bool saneQuaternion(const Quaternion& q){
     const float n=q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w;
     return std::isfinite(n)&&n>.35f&&n<1.65f;
+}
+inline bool nearPosition(const Position& a,const Position& b,float epsilon=.18f){
+    return std::abs(a.x-b.x)<epsilon&&std::abs(a.y-b.y)<epsilon&&
+           std::abs(a.z-b.z)<epsilon;
+}
+inline bool nearQuaternion(const Quaternion& a,const Quaternion& b,float epsilon=.08f){
+    const float direct=std::abs(a.x-b.x)+std::abs(a.y-b.y)+
+        std::abs(a.z-b.z)+std::abs(a.w-b.w);
+    const float negated=std::abs(a.x+b.x)+std::abs(a.y+b.y)+
+        std::abs(a.z+b.z)+std::abs(a.w+b.w);
+    return std::min(direct,negated)<epsilon;
+}
+inline void writeComponent(float* component,const Quaternion& rotation,const Position& position){
+    component[0]=rotation.x;component[1]=rotation.y;
+    component[2]=rotation.z;component[3]=rotation.w;
+    component[4]=position.x;component[5]=position.y;component[6]=position.z;
 }
 inline Quaternion normalized(Quaternion q){
     const float n=std::sqrt(q.x*q.x+q.y*q.y+q.z*q.z+q.w*q.w);
@@ -114,6 +132,18 @@ inline bool prepareFrame(const float* componentRotation){
         componentRotation[2],componentRotation[3]};
     Position originalPosition{componentRotation[4],componentRotation[5],componentRotation[6]};
     if(!saneQuaternion(original)||!sanePosition(originalPosition))return false;
+    // SetupCamera is not the last consumer of this camera component. Beta2
+    // restored the component as soon as SetupCamera returned, so a later
+    // renderer read still saw the normal pose. Preserve the native pose only
+    // when the game has refreshed it, then keep our pose alive for the frame.
+    const bool stillOurs=componentHeld&&patchedPosition==componentRotation+4&&
+        nearPosition(originalPosition,cinematicPosition)&&
+        nearQuaternion(original,cinematicOrientation);
+    if(!stillOurs){
+        savedPosition=originalPosition;
+        savedOrientation=original;
+        componentHeld=true;
+    }
     const auto shot=shotAt(nowMs()-enteredAt.load(),strength);
     constexpr float deg=.01745329251994329577f;
     const float orbit=current.yaw*deg+shot.yaw;
@@ -127,51 +157,67 @@ inline bool prepareFrame(const float* componentRotation){
     const float yaw=std::atan2(-dx,dz);
     const float pitch=-std::atan2(dy,horizontal)+shot.pitch;
     const float eased=strength*strength*(3.f-2.f*strength);
-    cinematicOrientation=blended(original,lookQuaternion(yaw,pitch),eased);
+    cinematicOrientation=blended(savedOrientation,lookQuaternion(yaw,pitch),eased);
     if(!saneQuaternion(cinematicOrientation))return false;
     patchedPosition=const_cast<float*>(componentRotation+4);
-    savedPosition=originalPosition;
-    patchedPosition[0]=cinematicPosition.x;
-    patchedPosition[1]=cinematicPosition.y;
-    patchedPosition[2]=cinematicPosition.z;
+    writeComponent(patchedPosition-4,cinematicOrientation,cinematicPosition);
     return true;
 }
+inline void restoreComponent(const float* componentRotation){
+    if(!componentHeld)return;
+    auto* component=const_cast<float*>(componentRotation);
+    const Quaternion current{component[0],component[1],component[2],component[3]};
+    const Position currentPosition{component[4],component[5],component[6]};
+    if(component+4==patchedPosition&&nearPosition(currentPosition,cinematicPosition)&&
+       nearQuaternion(current,cinematicOrientation))
+        writeComponent(component,savedOrientation,savedPosition);
+    componentHeld=false;patchedPosition=nullptr;
+}
 inline void cameraTransformHook(float* output,const float* componentRotation){
-    if(originalCameraTransform)originalCameraTransform(output,componentRotation);
     builderHookCalls.fetch_add(1,std::memory_order_relaxed);
-    if(setupDepth<=0)return;
+    if(setupDepth<=0){
+        if(originalCameraTransform)originalCameraTransform(output,componentRotation);
+        return;
+    }
     ++builderCallsThisSetup;
     if(!frameDecisionMade){
         frameDecisionMade=true;frameActive=prepareFrame(componentRotation);
+        if(!frameActive)restoreComponent(componentRotation);
         if(!frameActive&&blend.load()>.001f)cameraRejectCalls.fetch_add(1,std::memory_order_relaxed);
     }
-    if(!frameActive||!originalCameraTransform)return;
-    originalCameraTransform(output,reinterpret_cast<const float*>(&cinematicOrientation));
-    if(patchedPosition){
-        patchedPosition[0]=cinematicPosition.x;
-        patchedPosition[1]=cinematicPosition.y;
-        patchedPosition[2]=cinematicPosition.z;
+    if(frameActive&&patchedPosition){
+        writeComponent(patchedPosition-4,cinematicOrientation,cinematicPosition);
+        if(originalCameraTransform)
+            originalCameraTransform(output,reinterpret_cast<const float*>(&cinematicOrientation));
+        builderApplyCalls.fetch_add(1,std::memory_order_relaxed);
+    }else if(originalCameraTransform){
+        originalCameraTransform(output,componentRotation);
     }
-    builderApplyCalls.fetch_add(1,std::memory_order_relaxed);
 }
 inline void setupHook(void* owner,void* stack,float partial){
     cameraHookAt=nowMs();setupHookCalls.fetch_add(1,std::memory_order_relaxed);
     const bool outer=setupDepth==0;
-    if(outer){frameDecisionMade=false;frameActive=false;builderCallsThisSetup=0;patchedPosition=nullptr;}
+    if(outer){frameDecisionMade=false;frameActive=false;builderCallsThisSetup=0;}
     ++setupDepth;if(originalSetup)originalSetup(owner,stack,partial);--setupDepth;
     if(!outer)return;
-    if(patchedPosition){
-        patchedPosition[0]=savedPosition.x;
-        patchedPosition[1]=savedPosition.y;
-        patchedPosition[2]=savedPosition.z;
-    }
     if(frameActive&&builderCallsThisSetup>0){
+        // Verified 1.26.66.1 final camera positions. Re-assert both copies
+        // after native SetupCamera so post-SetupCamera consumers cannot see a
+        // stale location even if another internal path rewrote one of them.
+        if(plausible(owner)){
+            auto* bytes=static_cast<uint8_t*>(owner);
+            auto* primary=reinterpret_cast<float*>(bytes+0x614);
+            auto* render=reinterpret_cast<float*>(bytes+0x620);
+            primary[0]=render[0]=cinematicPosition.x;
+            primary[1]=render[1]=cinematicPosition.y;
+            primary[2]=render[2]=cinematicPosition.z;
+            finalStateWrites.fetch_add(1,std::memory_order_relaxed);
+        }
         cameraAppliedAt=nowMs();
         if(cameraApplyCalls.fetch_add(1,std::memory_order_relaxed)==0)
             __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
                 "native camera component orbit reached final SetupCamera state");
     }
-    patchedPosition=nullptr;
 }
 inline void prepare(uintptr_t base,bool exact26661){
     if(hooked||!exact26661||!base){supported=hooked.load();return;}
@@ -211,10 +257,11 @@ inline void diagnose(){
     if(now-previous<5000||!lastDiagnostic.compare_exchange_strong(previous,now))return;
     Pose current;{std::lock_guard lock(poseMutex);current=pose;}const auto hookAt=cameraHookAt.load(),appliedAt=cameraAppliedAt.load();
     __android_log_print(ANDROID_LOG_INFO,"LeviMusicCinematic",
-        "state supported=%d poseAge=%lld idleAge=%lld setup=%llu builders=%llu builderApply=%llu apply=%llu reject=%llu hookAge=%lld applyAge=%lld blend=%.2f",
+        "state supported=%d poseAge=%lld idleAge=%lld setup=%llu builders=%llu builderApply=%llu finalWrite=%llu apply=%llu reject=%llu hookAge=%lld applyAge=%lld blend=%.2f",
         int(supported.load()),static_cast<long long>(current.sampled?now-current.sampled:-1),static_cast<long long>(now-lastActivity.load()),
         static_cast<unsigned long long>(setupHookCalls.load()),static_cast<unsigned long long>(builderHookCalls.load()),
-        static_cast<unsigned long long>(builderApplyCalls.load()),static_cast<unsigned long long>(cameraApplyCalls.load()),
+        static_cast<unsigned long long>(builderApplyCalls.load()),static_cast<unsigned long long>(finalStateWrites.load()),
+        static_cast<unsigned long long>(cameraApplyCalls.load()),
         static_cast<unsigned long long>(cameraRejectCalls.load()),static_cast<long long>(hookAt?now-hookAt:-1),
         static_cast<long long>(appliedAt?now-appliedAt:-1),double(blend.load()));
 }
@@ -228,7 +275,8 @@ inline bool effectiveCamera(float& x,float& y,float& z){
 }
 inline const char* status(){if(!enabled)return "OFF";if(!supported)return "UNAVAILABLE";return active()?"ACTIVE":"WAITING";}
 inline void shutdown(){enabled=false;playing=false;blend=0.f;enteredAt=0;cameraAppliedAt=0;cameraHookAt=0;
-    setupHookCalls=0;builderHookCalls=0;builderApplyCalls=0;cameraApplyCalls=0;cameraRejectCalls=0;lastDiagnostic=0;}
+    setupHookCalls=0;builderHookCalls=0;builderApplyCalls=0;finalStateWrites=0;
+    cameraApplyCalls=0;cameraRejectCalls=0;lastDiagnostic=0;}
 inline void unload(){shutdown();if(hooked&&setupTarget)pl::memory::unhook(setupTarget,reinterpret_cast<void*>(&setupHook));
     if(hooked&&transformTarget)pl::memory::unhook(transformTarget,reinterpret_cast<void*>(&cameraTransformHook));
     hooked=false;supported=false;originalSetup=nullptr;originalCameraTransform=nullptr;setupTarget=nullptr;transformTarget=nullptr;}

@@ -6,7 +6,7 @@
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
 **Current stable build:** v1.7.0 (27 November 2026)
-**Current beta build:** v1.7.1-Beta2 (28 November 2026)
+**Current beta build:** v1.7.1-Beta3 (28 November 2026)
 **Author:** Liliyana Rea de Aurelis · **Platform:** Android arm64-v8a · **Loader:** LeviLauncher
 
 LeviMusic 1.7 uses one unified LeviPack. Without pairing it uses the hosted Aurelis Symphony fallback; when the companion app is available it detects the Bridge and switches engines automatically.
@@ -41,13 +41,14 @@ This project is an unofficial community mod. It is not affiliated with Mojang, M
 
 ## Installation
 
-Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta2-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
+Install the stable `LeviMusic-1.7.0-arm64-v8a.levipack` or the test build `LeviMusic-1.7.1-Beta3-arm64-v8a.levipack`. The optional companion is named **LeviMusic - Aurelis Symphony**. Open it once to enable automatic Bridge pairing; if it is absent or unreachable, the same LeviPack keeps using Aurelis fallback.
 
-## Testing in v1.7.1-Beta2
+## Testing in v1.7.1-Beta3
 
-- Cinematic AFK now feeds an orbit pose into both binary-verified camera-transform calls inside `SetupCamera`, after confirming that the previous intermediate matrix was overwritten by Minecraft.
-- Automatic underwater detection uses the complete live actor-and-block query and releases the underwater state immediately after leaving water.
-- Automatic cave detection samples the current player's Dimension/BlockSource synchronously; cave reflections are stronger while retaining PCM headroom.
+- Cinematic AFK keeps the binary-verified camera component and both final renderer positions synchronized for the complete frame instead of restoring the component before later consumers read it.
+- Cave DSP uses a stronger damped multi-tap room tail and a more audible auxiliary reverb send.
+- Compact HUD can be disabled independently from 2D lyrics; double-tapping the lyric area opens Music without an accidental single-tap trigger.
+- Up/Lower and Left/Right lyric placement now keeps the requested side and aligns text to the matching HUD edge.
 
 ## New in v1.7.0 Stable
 

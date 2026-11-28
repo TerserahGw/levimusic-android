@@ -2032,12 +2032,13 @@ struct UI {
     bool ok()const{return w>0&&h>0;}
 };
 struct SettingRow {const char* key;const char* label;int page,low,high;bool toggle;};
-constexpr std::array<SettingRow,31> quickSettings{{
+constexpr std::array<SettingRow,32> quickSettings{{
     {"worldLyrics3D","3D Floating Lyrics",0,0,1,true},
     {"lyricTrailFollow","Follow player and rise",0,0,1,true},
     {"romanizeLyrics","Romanized subtitles",0,0,1,true},
+    {"hud","Show compact player HUD",0,0,1,true},
     {"hudLyrics","Show HUD lyrics",0,0,1,true},
-    {"hudLyricPosition","HUD lyric: UL / UR / DL / DR",0,0,3,false},
+    {"hudLyricPosition","HUD lyric: Up L / Up R / Lower L / Lower R",0,0,3,false},
     {"animation","Smooth animation",0,0,1,true},
     {"lyricDistance","Distance (0.1 block)",1,12,60,false},
     {"lyricHeight","Spawn height (0.1 block)",1,0,30,false},
@@ -2150,6 +2151,25 @@ UI measure(int hudScale=84,int hudX=3,int hudY=93,int panelTop=15,bool compact=f
     p.pageNext={p.right.x+p.right.w-62*u,p.right.y+p.right.h-36*u,37*u,29*u};
     return p;
 }
+inline void reserveHudLyricSpace(UI& layout,bool visible,int position){
+    if(!visible||!layout.ok())return;
+    const float u=layout.s;
+    // Keep enough room for the original and romanized lines. This preserves
+    // the requested side instead of silently flipping Lower to Up when the
+    // HUD was saved near the bottom edge (and vice versa).
+    if(position>=2)
+        layout.mini.y=std::min(layout.mini.y,layout.h-layout.mini.h-51*u);
+    else
+        layout.mini.y=std::max(layout.mini.y,42*u);
+}
+inline Rect hudLyricTouchArea(const UI& layout,int position){
+    const float u=layout.s;
+    return position>=2
+        ?Rect{layout.mini.x-4*u,layout.mini.y+layout.mini.h+2*u,
+              layout.mini.w+8*u,39*u}
+        :Rect{layout.mini.x-4*u,layout.mini.y-39*u,
+              layout.mini.w+8*u,39*u};
+}
 
 constexpr uint32_t C_BG=0xF5101114U;
 constexpr uint32_t C_PANEL=0xEF1C1E23U;
@@ -2240,6 +2260,7 @@ class LeviMusic {
     std::chrono::steady_clock::time_point bridgePositionStamp_{std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point playerPositionStamp_{std::chrono::steady_clock::now()};
     std::chrono::steady_clock::time_point panelToggled_{std::chrono::steady_clock::now()};
+    std::chrono::steady_clock::time_point lastHiddenHudTap_{};
     std::string playbackError_;
 
 public:
@@ -2289,7 +2310,7 @@ public:
                 readLocalPlaylists(self_.getConfigDir()/"playlists.dat.bak");
             std::filesystem::create_directories(self_.getConfigDir()/"music");
         }catch(...){}
-        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta2 unified beta loaded, vm=%p",(void*)vm_);
+        __android_log_print(ANDROID_LOG_INFO,TAG,"LeviMusic v1.7.1-Beta3 unified beta loaded, vm=%p",(void*)vm_);
         return vm_!=nullptr;
     }
     bool enable(){
@@ -2691,6 +2712,7 @@ private:
     }
     int quickValue(const SettingRow& row){
         const std::string_view k=row.key;
+        if(k=="hud"){std::lock_guard lock(mu_);return hud_;}
         if(k=="worldLyrics3D")return worldLyrics3D_;
         if(k=="lyricTrailFollow")return lm_world3d::lyricTrailFollow;
         if(k=="lyricBeats")return lm_world3d::experimentalBeats;
@@ -2728,16 +2750,20 @@ private:
         if(!enabled_)return false;
         lm_cinematic::noteActivity();
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
+        reserveHudLyricSpace(l,hudLyrics_,hudLyricPosition_);
         if(!l.ok())return false;
-        bool opened,hud,settingsOpen;int settingsPage;
+        bool opened,hud,settingsOpen,lyricsEnabled;int settingsPage;
         {std::lock_guard lock(mu_);opened=open_;hud=hud_;
-            settingsOpen=settingsOpen_;settingsPage=settingsPage_;}
+            settingsOpen=settingsOpen_;settingsPage=settingsPage_;lyricsEnabled=lyricsOn_;}
+        const Rect hiddenLyricTarget=hudLyricTouchArea(l,hudLyricPosition_);
+        const bool hiddenHudTarget=!hud&&lyricsEnabled&&hudLyrics_;
         // Android actions: DOWN=0, UP=1, MOVE=2, CANCEL=3,
         // POINTER_DOWN=5 and POINTER_UP=6. Only pointers that started on our
         // UI are consumed. A joystick pointer that predates opening the menu
         // must still reach Minecraft on UP/CANCEL so movement cannot stick.
         if(e.action==0||e.action==5){
-            const bool capture=opened||(hud&&l.mini.contains(e.x,e.y));
+            const bool capture=opened||(hud&&l.mini.contains(e.x,e.y))||
+                (hiddenHudTarget&&hiddenLyricTarget.contains(e.x,e.y));
             if(capture){std::lock_guard lock(mu_);menuPointers_.insert(e.pointerId);
                 pointerStartY_[e.pointerId]=e.y;
                 pointerStartPage_[e.pointerId]=settingsOpen_?settingsScroll_:page_;
@@ -2785,6 +2811,18 @@ private:
             if(hud&&l.mini.contains(e.x,e.y)){
                 {std::lock_guard lock(mu_);open_=true;panelToggled_=std::chrono::steady_clock::now();}
                 paint();return true;
+            }
+            if(hiddenHudTarget&&hiddenLyricTarget.contains(e.x,e.y)){
+                const auto now=std::chrono::steady_clock::now();
+                const float gap=std::chrono::duration<float>(now-lastHiddenHudTap_).count();
+                lastHiddenHudTap_=now;
+                // The invisible target needs a deliberate double tap so a
+                // single combat/mining touch near the lyrics never opens UI.
+                if(gap>=.08f&&gap<=.48f){
+                    {std::lock_guard lock(mu_);open_=true;panelToggled_=now;}
+                    lastHiddenHudTap_={};paint();
+                }
+                return true;
             }
             return false;
         }
@@ -3084,6 +3122,7 @@ private:
         std::lock_guard paintLock(paintMu_);
         if(!enabled_)return;
         UI l=measure(hudSize_,hudX_,hudY_,panelTop_,compactUi_);
+        reserveHudLyricSpace(l,hudLyrics_,hudLyricPosition_);
         if(!l.ok())return;
         std::string title,artist,info,query,lyric,coverImage;
         std::vector<Track> tracks,queueTracks;
@@ -3382,7 +3421,7 @@ private:
                         const int hudPosition=hudLyricPosition_.load();
                         const bool below=hudPosition>=2;
                         const bool alignRight=(hudPosition&1)!=0;
-                        float subtitleY=below?l.mini.y+l.mini.h+26*u:l.mini.y-16*u;
+                        float subtitleY=below?l.mini.y+l.mini.h+18*u:l.mini.y-10*u;
                         float subtitleX=l.mini.x+3*u;
                         if(floatingLyrics_ && !worldLyrics3D_){
                             // Client-only 2D fallback, per-line location (not 3D world text).
@@ -3393,8 +3432,6 @@ private:
                             subtitleX=std::clamp(l.w*(.18f+px*.47f),18*u,l.w*.67f);
                             subtitleY=std::clamp(l.h*(.32f+py*.40f),44*u,l.h-36*u);
                         }
-                        if(!(floatingLyrics_ && !worldLyrics3D_) && (subtitleY<25*u||subtitleY>l.h-12*u))
-                            subtitleY=below?l.mini.y-16*u:l.mini.y+l.mini.h+26*u;
                         if(subtitleY>23*u&&subtitleY<l.h-10*u){
                             const std::string visible=lm_timing::revealedText(item.line,item.words,elapsed);
                             if(visible.empty())return;
@@ -3407,7 +3444,8 @@ private:
                             const float lyricSize=((floatingLyrics_ && !worldLyrics3D_)?15.8f:14.4f)*u;
                             auto alignedX=[&](std::string_view value,float size){
                                 if(!alignRight||(floatingLyrics_&&!worldLyrics3D_))return subtitleX;
-                                const float width=float(lm_timing::utf8Length(value))*size*.56f;
+                                const std::string drawn=shorten(value,70);
+                                const float width=float(lm_timing::utf8Length(drawn))*size*.56f;
                                 return std::max(3*u,l.mini.x+l.mini.w-3*u-width);
                             };
                             if(!prior.empty()&&blend<1.f)
@@ -3452,7 +3490,7 @@ private:
         box({l.outer.x+14*u,l.outer.y+12*u,31*u,31*u},0xFF35363AU,9.f);
         icon("audio-lines",l.outer.x+20*u,l.outer.y+18*u,19*u);
         text(l.outer.x+57*u,l.outer.y+33*u,"LEVI MUSIC - AURELIS ONLINE",15*u,C_TEXT);
-        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta2 UNIFIED BETA",9.2f*u,C_DIM);
+        text(l.outer.x+57*u,l.outer.y+48*u,"v1.7.1-Beta3 UNIFIED BETA",9.2f*u,C_DIM);
 #if defined(LEVI_STANDALONE)
         if(!streamingBridge){
             box(l.pair,0xFF33363CU,9.f);

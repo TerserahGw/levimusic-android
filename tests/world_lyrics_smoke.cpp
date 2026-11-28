@@ -61,8 +61,9 @@ int main(){
     for(size_t i=0;i<20;++i)note[16+i]=uint8_t(hex(id[i*2])*16+hex(id[i*2+1]));
     assert(matchesBuildId(note,id));
     note[17]^=1;assert(!matchesBuildId(note,id));
-    // SetupCamera calls the verified quaternion builder twice. The hook feeds
-    // both calls the cinematic pose, then restores the live component.
+    // SetupCamera calls the verified quaternion builder twice. The hook keeps
+    // the cinematic pose alive for later frame consumers, then restores the
+    // native component after the smooth exit finishes.
     lm_cinematic::originalCameraTransform=fixtureCameraTransform;
     lm_cinematic::originalSetup=fixtureSetup;
     lm_cinematic::enabled=true;lm_cinematic::supported=true;
@@ -73,6 +74,11 @@ int main(){
         cinematicComponentFixture[5],cinematicComponentFixture[6]};
     lm_cinematic::setupHook(nullptr,nullptr,0.f);
     assert(lm_cinematic::cameraApplyCalls==1&&lm_cinematic::builderApplyCalls==2);
+    assert(cinematicComponentFixture[4]!=originalCameraPosition.x||
+           cinematicComponentFixture[5]!=originalCameraPosition.y||
+           cinematicComponentFixture[6]!=originalCameraPosition.z);
+    lm_cinematic::noteActivity();
+    for(int i=0;i<20;++i)lm_cinematic::setupHook(nullptr,nullptr,0.f);
     assert(cinematicComponentFixture[4]==originalCameraPosition.x&&
            cinematicComponentFixture[5]==originalCameraPosition.y&&
            cinematicComponentFixture[6]==originalCameraPosition.z);

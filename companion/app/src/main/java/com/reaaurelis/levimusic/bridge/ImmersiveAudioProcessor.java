@@ -61,7 +61,9 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
         ByteBuffer output=replaceOutputBuffer(bytes);
         if(delay.length==0){while(input.remaining()>=2)output.putShort(input.getShort());output.flip();return;}
         int mode=environment;
-        float target=mode==1?.78f:mode==2?.36f:0f;
+        // Cave must be unmistakably different from the dry mix. Keep the
+        // underwater amount lower because its low-pass is already prominent.
+        float target=mode==1?.94f:mode==2?.36f:0f;
         int ringFrames=delay.length/channels;
         int samples=bytes/2;
         for(int i=0;i<samples;i++){
@@ -70,11 +72,11 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
             wet+= (target-wet)*.00045f;
             float out;
             if(mode==2||wet>.001f){
-                int d1=Math.max(1,(int)(sampleRate*.043f));
-                int d2=Math.max(1,(int)(sampleRate*.089f));
-                int d3=Math.max(1,(int)(sampleRate*.149f));
-                int d4=Math.max(1,(int)(sampleRate*.263f));
-                int d5=Math.max(1,(int)(sampleRate*.417f));
+                int d1=Math.max(1,(int)(sampleRate*.037f));
+                int d2=Math.max(1,(int)(sampleRate*.083f));
+                int d3=Math.max(1,(int)(sampleRate*.157f));
+                int d4=Math.max(1,(int)(sampleRate*.281f));
+                int d5=Math.max(1,(int)(sampleRate*.443f));
                 float early=delayed(d1,ch),middle=delayed(d2,ch);
                 float late=delayed(d3,ch),tail=delayed(d4,ch);
                 if(mode==2){
@@ -87,12 +89,15 @@ final class ImmersiveAudioProcessor extends BaseAudioProcessor {
                     if(opposite>=channels)opposite=ch;
                     float cross=delayed(d2,opposite);
                     float far=delayed(d5,opposite);
-                    float reflections=early*.32f+middle*.23f+late*.17f+
-                                      tail*.12f+cross*.09f+far*.06f;
-                    // Keep enough dry headroom and a damped tail. The previous
-                    // coefficients repeatedly clipped PCM, making caves raspy.
-                    out=dry*(1f-.22f*wet)+reflections*.72f*wet;
-                    float feedback=dry*.82f+(late*.18f+tail*.14f+far*.08f)*wet;
+                    float reflections=early*.22f+middle*.34f+late*.29f+
+                                      tail*.22f+cross*.17f+far*.15f;
+                    // Damping the reflected signal before mixing creates a
+                    // broad room tail instead of the dry/raspy comb sound.
+                    lowPass[ch]+=(reflections-lowPass[ch])*.31f;
+                    float room=reflections*.62f+lowPass[ch]*.38f;
+                    out=dry*(1f-.34f*wet)+room*1.08f*wet;
+                    float feedback=dry*.70f+(middle*.18f+late*.22f+
+                                             tail*.17f+far*.11f)*wet;
                     delay[writeFrame*channels+ch]=Math.max(-.98f,Math.min(.98f,feedback));
                 }
             }else{
